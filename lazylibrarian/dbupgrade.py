@@ -127,8 +127,12 @@ from lazylibrarian.scheduling import restart_jobs, SchedulerCommand
 # 86 add language to magazine table
 # 87 add hc_token to users table
 # 88 add bookauthors table
+# 89 add audible ID to books
+# 90 add audible ID to authors
+# 91 add audible ID to series
 
-db_current_version = 88
+
+db_current_version = 91
 
 
 def upgrade_needed():
@@ -376,6 +380,8 @@ def check_db(upgradelog=None):
                 source = 'gr_id'
             elif info == 'HardCover':
                 source = 'hc_id'
+            elif info == 'Audible':
+                source = 'au_id'
             else:
                 source = ''
             if source:
@@ -793,7 +799,7 @@ def check_db(upgradelog=None):
             if len(no_bookid):
                 logger.warning(f"Found {len(no_bookid)} unknown bookids in reading lists")
             for item in no_bookid:
-                cmd = 'SELECT BookID from books WHERE ol_id=? OR gr_id=? OR lt_workid=? OR gb_id=?'
+                cmd = 'SELECT BookID from books WHERE ol_id=? OR gr_id=? OR lt_workid=? OR gb_id=? OR au_id=?'
                 res = db.match(cmd, (item, item, item, item))
                 if res:
                     logger.debug(f"Bookid {item} is now {res[0]}")
@@ -1284,7 +1290,7 @@ def update_schema(db, upgradelog):
 
     if not has_column(db, "books", "ol_id"):
         changes += 1
-        lazylibrarian.UPDATE_MSG = 'Adding ol_id and gb_id to books table'
+        lazylibrarian.UPDATE_MSG = 'Adding ol_id, gb_id to books table'
         upgradelog.write(f"{time.ctime()} v81: {lazylibrarian.UPDATE_MSG}\n")
         db.action('ALTER TABLE books ADD COLUMN ol_id TEXT')
         db.action('ALTER TABLE books ADD COLUMN gb_id TEXT')
@@ -1295,15 +1301,16 @@ def update_schema(db, upgradelog):
             lazylibrarian.UPDATE_MSG = f"Populating new fields in books table for {len(res)} books"
             logger.debug(lazylibrarian.UPDATE_MSG)
             for book in res:
-                if book['bookid'] and book['bookid'].startswith('OL') and book['bookid'].endswith('W'):
-                    db.action("UPDATE books SET ol_id=? WHERE bookid=?", (book['bookid'], book['bookid']))
-                elif book['bookid'] and book['bookid'].isnumeric():
-                    db.action("UPDATE books SET gr_id=? WHERE bookid=?", (book['bookid'], book['bookid']))
-                elif book['bookid']:
-                    if set(book['bookid']) <= allowed:
-                        db.action("UPDATE books SET gb_id=? WHERE bookid=?", (book['bookid'], book['bookid']))
+                bid = book['bookid']
+                if bid and bid.startswith('OL') and bid.endswith('W'):
+                    db.action("UPDATE books SET ol_id=? WHERE bookid=?", (bid, bid))
+                elif bid and bid.isnumeric():
+                    db.action("UPDATE books SET gr_id=? WHERE bookid=?", (bid, bid))
+                elif bid and set(bid) <= allowed:
+                    db.action("UPDATE books SET gb_id=? WHERE bookid=?", (bid, bid))
                 else:
-                    logger.warning(f"Unable to determine bookid type for {book['bookid']}")
+                    logger.warning(f"Unable to determine bookid type for {bid}")
+
             lazylibrarian.UPDATE_MSG = f"Processed {len(res)} books"
             logger.debug(lazylibrarian.UPDATE_MSG)
 
@@ -1449,6 +1456,24 @@ def update_schema(db, upgradelog):
                       (entry['AuthorID'], entry['BookID'], 1), suppress='UNIQUE')
         if CONFIG['CONTRIBUTING_AUTHORS']:
             threading.Thread(target=get_authors_from_book_files, name='MULTIAUTH_BOOKFILES').start()
+
+    if not has_column(db, "books", "au_id"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding Audible ID to books'
+        upgradelog.write(f"{time.ctime()} v89: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE books ADD COLUMN au_id TEXT')
+
+    if not has_column(db, "authors", "au_id"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding Audible ID to authors'
+        upgradelog.write(f"{time.ctime()} v90: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE authors ADD COLUMN au_id TEXT')
+
+    if not has_column(db, "series", "au_id"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding Audible ID to series'
+        upgradelog.write(f"{time.ctime()} v91: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE series ADD COLUMN au_id TEXT')
 
     if changes:
         upgradelog.write(f"{time.ctime()} Changed: {changes}\n")

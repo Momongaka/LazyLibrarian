@@ -36,6 +36,7 @@ from lazylibrarian.formatter import (plural, is_valid_isbn, get_list, unaccented
 from lazylibrarian.gb import GoogleBooks
 from lazylibrarian.gr import GoodReads
 from lazylibrarian.hc import HardCover
+from lazylibrarian.au import Audible
 from lazylibrarian.images import img_id
 from lazylibrarian.importer import (update_totals, add_author_name_to_db, search_for, collate_nopunctuation,
                                     title_translates)
@@ -93,6 +94,9 @@ def get_book_meta(fdir, reason="get_book_meta"):
                 elif CONFIG['BOOK_API'] == "OpenLibrary":
                     ol = OpenLibrary(bookid)
                     ol.find_book(bookid, None, None, reason)
+                elif CONFIG['BOOK_API'] == "Audible":
+                    au = Audible(bookid)
+                    au.find_book(bookid, None, None, reason)
                 existing_book = db.match(cmd, (bookid,))
             db.close()
             if existing_book:
@@ -236,6 +240,8 @@ def get_book_info(fname):
                             res['hc_id'] = txt
                         elif attrib[k] == 'GOOGLE':
                             res['gb_id'] = txt
+                        elif attrib[k] == 'AUDIBLE':
+                            res['au_id'] = txt
         n += 1
     if len(authors):
         res['creator'] = authors[0]
@@ -732,6 +738,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                         author = ""
                         gr_id = ""
                         gb_id = ""
+                        au_id = ""
                         ol_id = ""
                         hc_id = ""
                         publisher = ""
@@ -798,6 +805,9 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                             if 'gb_id' in res:
                                 gb_id = res['gb_id']
                                 ident = f"GB: {gb_id}"
+                            if 'au_id' in res:
+                                au_id = res['au_id']
+                                ident = f"AU: {au_id}"
                             if 'ol_id' in res:
                                 ol_id = res['ol_id']
                                 ident = f"OL: {ol_id}"
@@ -920,6 +930,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                     bookid = ol_id
                                 elif hc_id and CONFIG['BOOK_API'] == "HardCover":
                                     bookid = hc_id
+                                elif au_id and CONFIG['BOOK_API'] == "Audible":
+                                    bookid = au_id
                                 if bookid:
                                     match = db.match('SELECT AuthorID,Status FROM books where BookID=?',
                                                      (bookid,))
@@ -974,6 +986,9 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                         elif CONFIG['BOOK_API'] == "HardCover" and hc_id:
                                             finder = HardCover(hc_id)
                                             finder.find_book(hc_id, None, None, "Added by hc librarysync")
+                                        elif CONFIG['BOOK_API'] == "Audible" and au_id:
+                                            finder = Audible(au_id)
+                                            finder.find_book(au_id, None, None, "Added by aui librarysync")
 
                                     if bookid:
                                         # see if it's there now...
@@ -1049,6 +1064,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                             sources.append("GoodReads")
                                         if "GoogleBooks" not in sources and CONFIG['GB_API']:
                                             sources.append("GoogleBooks")
+                                        if "Audible" not in sources and CONFIG['AU_API']:
+                                            sources.append("Audible")
 
                                     searchresults = []
                                     for source in sources:
@@ -1099,6 +1116,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                                 src_id = GoodReads(bookid)
                                             elif source == 'HardCover':
                                                 src_id = HardCover(bookid)
+                                            elif source == 'Audible':
+                                                src_id = Audible(bookid)
                                             else:
                                                 src_id = GoogleBooks(bookid)
                                             src_id.find_book(bookid, reason=f"Librarysync {source} rescan {bookauthor}")

@@ -28,7 +28,6 @@ from lazylibrarian.formatter import plural, clean_name, format_author_name, \
     split_title
 from lazylibrarian.processcontrol import get_info_on_caller
 
-
 def set_all_book_authors():
     logger = logging.getLogger(__name__)
     db = database.DBConnection()
@@ -998,6 +997,68 @@ def google_book_dict(item):
     mydict['genre'] = genre_filter(mydict['genre'])
     return mydict
 
+def audible_book_dict(item):
+    """ Return all the book info we need from Audible JSON as a dictionary """
+    mydict = {}
+    for val, idx1, idx2, default in [
+        ('author', 'author', None, ''),
+        ('name', 'title', None, ''),
+        ('lang', 'language', None, 'Unknown'),
+        ('pub', 'publisher', None, ''),
+        ('sub', 'subtitle', None, ''),
+        ('date', 'publication_year', None, '0000'),
+        ('month', 'publication_month', None, '0'),
+        ('day', 'publication_day', None, '0'),
+        ('rate', 'average_rating', None, 0.0),
+        ('rate_count', 'ratings_count', None, 0),
+        ('pages', 'num_pages', None, 0),
+        ('desc', 'description', None, 'Not available'),
+        ('link', 'link', None, ''),
+        ('img', 'image_url', None, 'images/nocover.png'),
+        ('isbn13', 'isbn13', None, ''),
+        ('isbn10', 'isbn', None, ''),
+        ('workid', 'work/id', None, '')
+    ]:
+        try:
+            if idx2 is None:
+                mydict[val] = item.get(idx1, default)
+            else:
+                mydict[val] = item.get(idx1, {}).get(idx2, default)
+        except (KeyError, TypeError):
+            mydict[val] = default
+
+    # Handle series info from title or subtitle if Audible provides it
+    series = ""
+    series_num = ""
+    for field in [mydict['name'], mydict['sub']]:
+        if field:
+            # Example: "Discworld (24)" or "Discworld #24"
+            if '(' in field and ')' in field:
+                try:
+                    series, series_num = field.split('(')[1].rstrip(')').split(' ', 1)
+                    series = series.strip()
+                    series_num = series_num.strip('#')
+                except ValueError:
+                    series = ""
+                    series_num = ""
+            elif '#' in field:
+                try:
+                    series, series_num = field.rsplit('#', 1)
+                    series = series.strip()
+                    series_num = series_num.strip()
+                except ValueError:
+                    series = ""
+                    series_num = ""
+        if series and series_num:
+            break
+
+    mydict['series'] = series
+    mydict['seriesNum'] = series_num
+
+    # Optional: map Audible categories to your internal genre filter
+    mydict['genre'] = genre_filter(item.get('categories', []))
+
+    return mydict
 
 def ensure_series_in_db(seriesid, seriesname, bookid, reason):
     logger = logging.getLogger(__name__)

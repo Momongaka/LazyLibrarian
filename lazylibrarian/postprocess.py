@@ -48,6 +48,7 @@ from lazylibrarian.formatter import unaccented, plural, now, today, \
 from lazylibrarian.gb import GoogleBooks
 from lazylibrarian.gr import GoodReads
 from lazylibrarian.hc import HardCover
+from lazylibrarian.au import Audible
 from lazylibrarian.images import create_mag_cover
 from lazylibrarian.images import createthumbs
 from lazylibrarian.importer import add_author_to_db, add_author_name_to_db, update_totals, search_for, import_book
@@ -59,6 +60,7 @@ from lazylibrarian.ol import OpenLibrary
 from lazylibrarian.preprocessor import preprocess_ebook, preprocess_audio, preprocess_magazine
 from lazylibrarian.scheduling import schedule_job, SchedulerCommand
 from lazylibrarian.telemetry import TELEMETRY
+
 
 
 def update_downloads(provider):
@@ -222,7 +224,7 @@ def process_book_from_dir(source_dir=None, library='eBook', bookid=None):
         logger.debug(f"Not processing {source_dir}, found multiple {reject}")
         return False
 
-    if library not in ['eBook', 'Audio']:
+    if library not in ['eBook', 'AudioBook']:
         logger.error(f"book_from_dir not implemented for {library}")
         return False
 
@@ -245,6 +247,9 @@ def process_book_from_dir(source_dir=None, library='eBook', bookid=None):
             elif CONFIG['BOOK_API'] == "HardCover":
                 hc_id = HardCover(bookid)
                 hc_id.find_book(bookid, None, None, f"Added by book_from_dir {source_dir}")
+            elif CONFIG['BOOK_API'] == "Audible":
+                au_id = Audible(bookid)
+                au_id.find_book(bookid, None, None, f"Added by book_from_dir {source_dir}")
             # see if it's there now...
             book = db.match('SELECT * from books where BookID=?', (bookid,))
         db.close()
@@ -509,6 +514,14 @@ def process_alternate(source_dir=None, library='eBook'):
                         hc = HardCover(authorname)
                         try:
                             author_gr = hc.find_author_id()
+                        except Exception as e:
+                            author_gr = {}
+                            logger.warning(f"No author id for [{authorname}] {type(e).__name__}")
+                    elif CONFIG['BOOK_API'] in ['Audible']:
+                        logger.debug(f"Checking Audible for [{authorname}]")
+                        au = Audible(authorname)
+                        try:
+                            author_gr = au.find_author_id()
                         except Exception as e:
                             author_gr = {}
                             logger.warning(f"No author id for [{authorname}] {type(e).__name__}")
@@ -1267,6 +1280,7 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
                             gb_id = data['gb_id']
                             ol_id = data['ol_id']
                             hc_id = data['hc_id']
+                            au_id = data['au_id']
 
                             namevars = name_vars(book['BookID'])
                             if booktype == 'AudioBook' and get_directory('Audio'):
@@ -1280,8 +1294,17 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
                             dest_path = make_utf8bytes(dest_path)[0]
                             global_name = namevars['BookFile']
                             global_name = sanitize(global_name)
-                            data = {'AuthorName': authorname, 'BookName': bookname, 'BookID': book['BookID'],
-                                    'gr_id': gr_id, 'gb_id': gb_id, 'ol_id': ol_id, 'hc_id': hc_id}
+                            data = {
+                                'AuthorName': authorname,
+                                'BookName': bookname,
+                                'BookID': book['BookID'],
+                                'gr_id': gr_id,
+                                'gb_id': gb_id,
+                                'ol_id': ol_id,
+                                'hc_id': hc_id,
+                                'au_id': au_id  # Audible ID
+                            }
+
                         else:
                             data = db.match('SELECT * from magazines WHERE Title=?', (book['BookID'],))
                             if data:  # it's a magazine
@@ -2713,6 +2736,9 @@ def send_to_calibre(booktype, global_name, folder, data):
                 identifier = f"goodreads:{bookid}"
             elif data.get('gb_id') == bookid:
                 identifier = f"google:{bookid}"
+            elif data.get('au_id') == bookid:
+                identifier = f"audible:{bookid}"
+
         elif booktype == 'comic':
             if bookid.startswith('CV'):
                 identifier = f"ComicVine:{bookid[2:]}"
@@ -3490,6 +3516,8 @@ def create_opf(dest_path=None, data=None, global_name=None, overwrite=False):
             scheme = 'HardCover'
     elif bookid.startswith('OL'):
         scheme = 'OpenLibrary'
+    elif data.get('au_id') == bookid:
+        scheme = 'Audible'
     else:
         scheme = 'GoogleBooks'
 

@@ -630,6 +630,7 @@
                     ol_selected = ''
                     gr_selected = ''
                     hc_selected = ''
+                    au_selected = ''
                     if CONFIG['BOOK_API'] == "GoodReads":
                         gr_selected = 'selected="selected"'
                     elif CONFIG['BOOK_API'] == "GoogleBooks":
@@ -638,6 +639,8 @@
                         ol_selected = 'selected="selected"'
                     elif CONFIG['BOOK_API'] == "HardCover":
                         hc_selected = 'selected="selected"'
+                    elif CONFIG['BOOK_API'] == "Audible":
+                        au_selected = 'selected="selected"'
                     %>
                     <label for="book_api" class="control-label">Primary Information Source</label>
                     <select id="book_api" name="book_api" class="form-control">
@@ -653,6 +656,7 @@
                       %if CONFIG['HC_API']:
                         <option value = "HardCover" ${hc_selected}>HardCover</option>
                       %endif
+                      <option value="Audible" ${au_selected}>Audible</option>
                     </select>
                   </div>
                   <div class="checkbox">

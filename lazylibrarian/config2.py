@@ -257,6 +257,8 @@ class LLConfigHandler(ConfigDict):
             ok = self.get_bool('GR_SYNC')
         if ok and scheduler.run_name == 'HCSYNC':  # Special case, should maybe add option to object
             ok = self.get_bool('HC_SYNC')
+        if ok and scheduler.run_name == 'AUSYNC':  # Special case, should maybe add option to object
+            ok = self.get_bool('AU_SYNC')
         if ok and scheduler.run_name == 'TELEMETRYSEND':  # Special case for telemetry
             ok = self.config['TELEMETRY_ENABLE'].get_bool()
         if ok and scheduler.run_name == 'SEARCHALLRSS':  # Special case for RSS
