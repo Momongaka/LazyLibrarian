@@ -930,6 +930,7 @@ def search_for(searchterm, source=None):
     searchinglogger.debug(f"{source} {searchterm}")
     this_source = lazylibrarian.INFOSOURCES[source]
     api = this_source['api']
+    api.__init__()
     if CONFIG[this_source['enabled']]:
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,

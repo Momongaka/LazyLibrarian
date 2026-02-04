@@ -53,6 +53,9 @@ from lazylibrarian.formatter import (
 
 
 class DNB:
+    def __init__(self):
+        return
+
     __name__ = "Deutsche Nationalbibliothek"
     __id__ = "dnb"
 

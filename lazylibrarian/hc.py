@@ -294,6 +294,8 @@ class HardCover:
                     if res and res['hc_token']:
                         self.apikey = res['hc_token']
                         self.searchinglogger.debug("Using database token for admin")
+                    else:
+                        self.searchinglogger.debug("No admin HC token found")
             finally:
                 db.close()
         else:
@@ -595,12 +597,18 @@ query FindAuthor { authors_by_pk(id: [authorid])
                 elif r.status_code in [401, 403]:
                     # allow time for user to update
                     delay = 24 * 3600
+                    if r.status_code == 401:
+                        self.logger.error("Invalid or missing HardCover API key")
+                    else:
+                        self.logger.error(f"Invalid HardCover request: Status code {r.status_code}")
                 elif r.status_code == 500:
                     # time for hardcover to fix error
                     delay = 2 * 3600
+                    self.logger.error("HardCover internal server error")
                 else:
                     # unexpected error code, short delay
                     delay = 60
+                    self.logger.error(f"Unexpected HardCover error: Status code {r.status_code}")
                 # noinspection PyBroadException
                 try:
                     res = r.json()
