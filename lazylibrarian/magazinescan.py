@@ -849,7 +849,9 @@ def get_dateparts(title_or_issue, datetype=''):
         else:
             if not dateparts['day']:
                 dateparts['day'] = 1
-            if dateparts['style'] == 14:
+            if dateparts['style'] == 12:
+                issuenum = f"{dateparts['year']}{dateparts['issue']:04d}"
+            elif dateparts['style'] == 14:
                 issuenum = f"{dateparts['issue']:04d}"
             elif dateparts['style'] == 15:
                 issuenum = f"{dateparts['year']}"
