@@ -19,7 +19,7 @@ dependencies = [
     'bs4',
     'html5lib',
     'webencodings',
-    'requests[use_chardet_on_py3]',
+    "requests[socks,use-chardet-on-py3]",
     'urllib3',
     'pyOpenSSL',
     'cherrypy',
