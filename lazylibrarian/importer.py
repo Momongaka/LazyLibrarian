@@ -174,6 +174,7 @@ def add_author_name_to_db(author=None, refresh=False, addbooks=None, reason=None
             for api_source in api_sources:
                 logger.debug(f"Finding {api_source[0]} author ID for {author}")
                 book_api = api_source[1]
+                book_api = book_api()
                 author_info = book_api.find_author_id(authorname=author, title=title, refresh=True)
                 if author_info:
                     # only try to add if data matches found author data
@@ -308,10 +309,11 @@ def get_all_author_details(authorid='', authorname=None):
     merged_info = {}
     for src in sources:
         cl = src[1]
+        cl = cl()
         auth_id = ''
         if match:
             auth_id = match[src[2]]  # authorid for this source, eg hc_id
-        elif authorid and CONFIG['BOOK_API'] in str(src[1]):
+        elif authorid and CONFIG['BOOK_API'] in str(cl):
             # no match in db but we already have an authorid for default api
             auth_id = authorid
         if not auth_id and authorname and 'unknown' not in authorname and 'anonymous' not in authorname:
@@ -590,6 +592,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
                     if not current_id and api_source[3] and api_source[3] != 'authorid':
                         logger.debug(f"Finding {api_source[0]} author ID for {current_author['authorname']}")
                         book_api = api_source[2]
+                        book_api = book_api()
                         res = book_api.find_author_id(authorname=authorname, title='', refresh=True)
                         if res and res.get('authorid'):
                             current_id = res.get('authorid')
@@ -598,6 +601,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
                     if current_id:
                         logger.debug(f"Book query {api_source[0]} for {current_id}:{current_author['authorname']}")
                         book_api = api_source[2]
+                        book_api = book_api()
                         book_api.get_author_books(current_id, current_author['authorname'],
                                                   bookstatus=bookstatus,
                                                   audiostatus=audiostatus, entrystatus=entry_status,
@@ -913,6 +917,7 @@ def import_book(bookid, ebook=None, audio=None, wait=False, reason='importer.imp
         return
 
     api = lazylibrarian.INFOSOURCES[source]['api']
+    api = api()
     if not wait:
         threading.Thread(target=api.add_bookid_to_db, name=f"{lazylibrarian.INFOSOURCES[source]['src']}-IMPORT",
                          args=[bookid, ebook, audio, reason]).start()
@@ -929,7 +934,8 @@ def search_for(searchterm, source=None):
         source = CONFIG['BOOK_API']
     searchinglogger.debug(f"{source} {searchterm}")
     this_source = lazylibrarian.INFOSOURCES[source]
-    api = this_source['api']()
+    api = this_source['api']
+    api = api()  #api.__init__()
     if CONFIG[this_source['enabled']]:
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,

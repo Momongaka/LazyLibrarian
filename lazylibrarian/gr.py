@@ -410,6 +410,8 @@ class GoodReads:
 
     @staticmethod
     def role_is_author(role):
+        if not role:
+            role = 'none'
         role = role.lower()
         return any(match in role for match in ['none', 'author', 'writer', 'creator', 'pseudonym', 'pen name'])
 

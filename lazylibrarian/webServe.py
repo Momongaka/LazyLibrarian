@@ -3374,7 +3374,8 @@ class WebInterface:
             update_totals(author_id)
         else:
             this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
-            api = this_source['api']()
+            api = this_source['api']
+            api = api()
             t = threading.Thread(target=api.add_bookid_to_db,
                                  name=f"{this_source['src']}-BOOK",
                                  args=[bookid, ebook_status, audio_status, "Added by user"])
@@ -4388,7 +4389,8 @@ class WebInterface:
             args.pop(arg, None)
 
         this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
-        api = this_source['api']()
+        api = this_source['api']
+        api = api()
         ids = set(args.keys())
         if action in ['AddBook', 'AddAudio', 'AddBoth']:
             wantbook = "Wanted" if action in ['AddBook', 'AddBoth'] else 'Skipped'
