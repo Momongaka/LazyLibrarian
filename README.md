@@ -1,3 +1,5 @@
+[![Buy Me a Coffee](https://img.icons8.com/?size=24&id=gEtADbEGxPM2&format=png&color=000000) Buy Me a Coffee](https://buymeacoffee.com/philbormang)
+
 ## LazyLibrarian
 LazyLibrarian is a program to follow authors and grab metadata for all your digital reading needs.
 It uses a combination of [HardCover](https://hardcover.app) [OpenLibrary](https://openlibrary.org/) [Librarything](https://www.librarything.com/) [GoodReads](https://www.goodreads.com) and optionally [GoogleBooks](https://www.googleapis.com/books/v1/) as sources for author info and book info. License: GNU GPL v3
@@ -53,3 +55,5 @@ LinuxServer : https://hub.docker.com/r/linuxserver/lazylibrarian/
 The docker package includes ghostscript for magazine cover generation and calibredb (via optional variable)
 LinuxServer docker is multi-arch and works on X86_64, armhf and aarch64 (calibredb only available on X86_64)
 The dockers can be upgraded using the lazylibrarian internal upgrade mechanism
+
+[![Buy Me a Coffee](https://img.icons8.com/?size=24&id=gEtADbEGxPM2&format=png&color=000000) Buy Me a Coffee](https://buymeacoffee.com/philbormang)

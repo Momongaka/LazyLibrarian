@@ -276,7 +276,7 @@ def process_book_from_dir(source_dir=None, library="eBook", bookid=None):
         if not book:
             logger.warning(f"Bookid [{bookid}] not found in database, trying to add...")
             this_source = lazylibrarian.INFOSOURCES[CONFIG["BOOK_API"]]
-            api = this_source["api"]
+            api = this_source["api"]()
             _ = api.add_bookid_to_db(bookid, None, None, f"Added by book_from_dir {source_dir}")
             # see if it's there now...
             book = db.match("SELECT * from books where BookID=?", (bookid,))
