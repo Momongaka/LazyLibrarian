@@ -2819,8 +2819,13 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
 
         # Build the list of directories that will will use to process downloaded assets
         # At least one valid directory must be present or we will stop
+        startdir_file = None
         if startdir:
-            templist = [startdir]
+            if path_isfile(startdir):
+                startdir_file = startdir
+                templist = [os.path.dirname(startdir)]
+            else:
+                templist = [startdir]
         else:
             templist = get_list(CONFIG["DOWNLOAD_DIR"], ",")
             if len(templist) and get_directory("Download") != templist[0]:
@@ -2839,15 +2844,23 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
         # to a location outside of our configured directories (e.g., the download started before a config change)
         all_downloads = None
         if download_dirlist:
-            # Compile all downloads from all directories once
-            postprocesslogger.debug(
-                f"Compiling downloads from directories: {download_dirlist}"
-            )
-            all_downloads = _compile_all_downloads(download_dirlist, logger)
-            if not all_downloads:
-                postprocesslogger.warning(
-                    "No downloads found in any configured directory"
+            if startdir_file:
+                all_downloads = [
+                    (os.path.dirname(startdir_file), os.path.basename(startdir_file))
+                ]
+                postprocesslogger.debug(
+                    f"Using single file startdir: {startdir_file}"
                 )
+            else:
+                # Compile all downloads from all directories once
+                postprocesslogger.debug(
+                    f"Compiling downloads from directories: {download_dirlist}"
+                )
+                all_downloads = _compile_all_downloads(download_dirlist, logger)
+                if not all_downloads:
+                    postprocesslogger.warning(
+                        "No downloads found in any configured directory"
+                    )
         else:
             postprocesslogger.warning("No download directories are configured.")
 
