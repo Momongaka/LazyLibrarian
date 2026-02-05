@@ -2283,7 +2283,7 @@ class Api:
 
         authordata = db.select(f"SELECT AuthorName from authors WHERE {key}='' or {key} is null")
         api = this_source['api']
-        api.__init__()
+        api = api()
         for author in authordata:
             res = api.find_author_id(authorname=author['AuthorName'])
             if res.get('authorid'):
@@ -2302,7 +2302,7 @@ class Api:
         authorname = format_author_name(kwargs['name'], postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
         this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
         api = this_source['api']
-        api.__init__()
+        api = api()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
                                       name=f"API-{this_source['src']}RESULTS",
@@ -2319,7 +2319,7 @@ class Api:
 
         this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
         api = this_source['api']
-        api.__init__()
+        api = api()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
                                       name=f"API-{this_source['src']}RESULTS",

@@ -396,12 +396,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
     # noinspection PyBroadException
     try:
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
-        authorkeys = []
-        for item in lazylibrarian.INFOSOURCES.keys():
-            this_source = lazylibrarian.INFOSOURCES[item]
-            if this_source['author_key'] and this_source['author_key'] != 'authorid':
-                authorkeys.append(this_source['author_key'])
-
+        authorkeys = author_keys()
         new_author = True
         if authorid:
             cmd = "SELECT * from authors WHERE AuthorID=?"
@@ -740,11 +735,8 @@ def de_duplicate(authorid):
                       'BookImg', 'BookPages', 'BookLink', 'BookFile', 'BookDate', 'BookLang',
                       'BookAdded', 'WorkPage', 'Manual', 'SeriesDisplay', 'BookLibrary',
                       'AudioFile', 'AudioLibrary', 'WorkID', 'ScanResult', 'OriginalPubDate',
-                      'Requester', 'AudioRequester', 'LT_WorkID', 'Narrator']
-
-    for item in lazylibrarian.INFOSOURCES.keys():
-        this_source = lazylibrarian.INFOSOURCES[item]
-        booktable_keys.append(this_source['book_key'])
+                      'Requester', 'AudioRequester', 'LT_WorkID', 'Narrator', 'BookID']
+    booktable_keys.extend(book_keys())
 
     if author:
         authorname = author['AuthorName']
