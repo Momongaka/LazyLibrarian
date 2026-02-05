@@ -903,7 +903,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
                         if authorname in item['document']['author_names']:
                             bookid = item['document']['id']
                             break
-                except (IndexError, KeyError):
+                except (IndexError, KeyError, TypeError):
                     pass
 
             if bookid:
@@ -914,7 +914,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
                         if item['contributions'] and 'cachedImage' in item['contributions'][0]['author']:
                             url = item['contributions'][0]['author']['cachedImage']['url']
                             break
-                except (IndexError, KeyError):
+                except (IndexError, KeyError, TypeError):
                     pass
 
                 if url:
