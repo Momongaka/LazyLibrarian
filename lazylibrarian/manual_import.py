@@ -513,7 +513,7 @@ def process_alternate(source_dir=None, library="eBook"):
             if "title" not in metadata or "creator" not in metadata:
                 # if not got both, try to get metadata from the book file
                 extn = os.path.splitext(new_book)[1]
-                if extn.lower() in [".epub", ".mobi"]:
+                if extn.lower() in [".epub", ".mobi", ".azw", ".azw3"]:
                     try:
                         metadata = get_book_info(new_book)
                     except Exception as e:

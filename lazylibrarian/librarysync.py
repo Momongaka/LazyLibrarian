@@ -122,7 +122,7 @@ def get_book_meta(fdir, reason="get_book_meta"):
 
 
 def get_book_info(fname):
-    # only handles epub, mobi, azw3 and opf for now,
+    # only handles epub, mobi, azw, azw3 and opf for now,
     # for pdf see notes below
     logger = logging.getLogger(__name__)
     fname = make_unicode(fname)
@@ -132,7 +132,7 @@ def get_book_info(fname):
         return res
 
     res['type'] = extn[1:].lower()
-    if res['type'] in ["mobi", "azw3"]:
+    if res['type'] in ["mobi", "azw", "azw3"]:
         try:
             book = Mobi(fname)
             book.parse()
@@ -821,7 +821,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
 
                         # if it's an epub or a mobi we can try to read metadata from it
                         res = {}
-                        if extn.lower() in [".epub", ".mobi"]:
+                        if extn.lower() in [".epub", ".mobi", ".azw", ".azw3"]:
                             book_filename = os.path.join(rootdir, files)
                             try:
                                 res = get_book_info(book_filename)

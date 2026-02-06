@@ -61,7 +61,7 @@ def preprocess_ebook(bookfolder):
     if not sourcefile:
         for fname in listdir(bookfolder):
             filename, extn = splitext(fname)
-            if extn.lower() in ['.mobi', '.azw3']:
+            if extn.lower() in ['.mobi', ".azw", '.azw3']:
                 sourcefile = fname
                 break
 
@@ -77,7 +77,7 @@ def preprocess_ebook(bookfolder):
             logger.debug(f"No {ftype}")
             params = [ebook_convert, os.path.join(bookfolder, sourcefile),
                       os.path.join(bookfolder, basename + '.' + ftype)]
-            if ftype == 'mobi':
+            if ftype in ['mobi', 'azw', 'azw3']:
                 params.extend(['--output-profile', 'kindle'])
             postprocesslogger.debug(str(params))
             try:
