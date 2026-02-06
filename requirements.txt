@@ -46,7 +46,7 @@ idna==3.11
     # via requests
 irc==20.5.0
     # via lazylibrarian (pyproject.toml)
-iso639==0.1.4
+iso-639==0.4.5
     # via lazylibrarian (pyproject.toml)
 jaraco-collections==5.2.1
     # via

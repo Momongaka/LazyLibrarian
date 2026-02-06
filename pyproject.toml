@@ -39,7 +39,7 @@ dependencies = [
     'tzdata',
     'slskd_api',
     'lxml',
-    'iso639',
+    'iso-639',
     'xmltodict',
 ]
 
