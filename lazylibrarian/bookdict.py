@@ -347,14 +347,21 @@ def add_bookdict_to_db(book, reason, source):
     author = db.match('SELECT authorname from authors where authorid=?', (book['authorid'],))
     db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
               (book['authorid'], book['bookid'], ROLE['PRIMARY']), suppress='UNIQUE')
-
+    logger.debug(f"Add primary {book['authorid']}{author['authorname']}")
     if CONFIG.get_bool('CONTRIBUTING_AUTHORS') and book.get('contributors'):
         for entry in book['contributors']:
-            auth_id = lazylibrarian.importer.add_author_to_db(authorname=entry[1], refresh=False,
-                                                              authorid=entry[0], addbooks=False,
-                                                              reason=f"Contributor to {book['bookname']}")
+            if entry[0] and entry[0] != '0':
+                auth_id = lazylibrarian.importer.add_author_to_db(authorname=entry[1], refresh=False,
+                                                                  authorid=entry[0], addbooks=False,
+                                                                  reason=f"Contributor to {book['bookname']}")
+            else:
+                _, auth_id, _ = lazylibrarian.importer.add_author_name_to_db(author=entry[1], refresh=False,
+                                                                             addbooks=False,
+                                                                             reason=f"Contributor to {book['bookname']}",
+                                                                             title=book['bookname'])
             if auth_id:
                 # Add any others as contributing authors
+                logger.debug(f"Add secondary {auth_id}:{entry[1]}")
                 db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
                           (auth_id, book['bookid'], ROLE['CONTRIBUTING']), suppress='UNIQUE')
                 lazylibrarian.importer.update_totals(auth_id)
@@ -867,7 +874,7 @@ def add_series_entries(bookdict, get_series_members, get_bookdict_for_bookid):
                     if 'nocover' in cover_link or 'nophoto' in cover_link:
                         start = time.time()
                         cover_link, _ = get_book_cover(newbookdict['bookid'],
-                                                       ignore='hardcover')
+                                                       ignore=bookdict['source'].lower())
                         summary['cover_time'] += (time.time() - start)
                         summary['cover_count'] += 1
                     elif cover_link and cover_link.startswith('http'):

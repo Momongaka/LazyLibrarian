@@ -878,20 +878,38 @@ class DNB:
             self.logger.debug(f'BookID {bookid} not found at dnb')
             return False
 
+        authorname = bookdict.get('authorname')
+        if authorname:
+            auth_name, auth_id = lazylibrarian.importer.get_preferred_author(authorname)
+            db = database.DBConnection()
+            res = db.match('SELECT authorid from authors WHERE authorname=?', (auth_name,))
+            if res:
+                bookdict['authorid'] = res['authorid']
+            else:
+                authorname, authorid, _ = lazylibrarian.importer.add_author_name_to_db(author=auth_name,
+                                                                                       refresh=False,
+                                                                                       addbooks=False,
+                                                                                       reason=f'DNB add {bookid}:{bookdict['bookname']}',
+                                                                                       title=bookdict['bookname'])
+                if authorname:
+                    bookdict['authorname'] = authorname
+                    bookdict['authorid'] = authorid
+            db.close()
         # validate bookdict, reject if unwanted or incomplete
         bookdict, rejected = validate_bookdict(bookdict)
         if rejected:
             if reason.startswith("Series:") or 'bookname' not in bookdict or 'authorname' not in bookdict:
+                self.logger.error(f"Rejected {bookid}:{rejected}")
                 return False
             for reject in rejected:
                 if reject[0] == 'name':
+                    self.logger.error(f"Rejected {bookid}:{rejected}")
                     return False
         # show any non-fatal warnings
         warn_about_bookdict(bookdict)
-
         # Use the author ID we already have from the book data
         # This avoids an author search that can return the wrong author
-        authorid = bookdict['authorid']
+        authorid = bookdict.get('authorid')
 
         if authorid:
             # Add book to database using bookdict
@@ -951,7 +969,7 @@ class DNB:
                     if "All" not in valid_langs:  # don't care about languages, accept all
                         try:
                             # skip if no language in valid list -
-                            booklangs = book['booklang']
+                            booklangs = get_list(book['booklang'])
                             if not booklangs:
                                 booklangs = ['Unknown']
                             valid = False
@@ -1079,6 +1097,10 @@ class DNB:
             mydict['bookname'] = title.strip()
             mydict['booksub'] = subtitle.strip()
 
+        if isinstance(mydict['booklang'], list):
+            mydict['booklang'] = ','.join(mydict['booklang'])
+        if isinstance(mydict['bookgenre'], list):
+            mydict['bookgenre'] = ','.join(mydict['bookgenre'])
         mydict['contributors'] = []
         authornames = mydict['authorname']
         if len(authornames) > 1:
