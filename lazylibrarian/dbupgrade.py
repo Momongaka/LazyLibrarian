@@ -15,7 +15,6 @@ import datetime
 import logging
 import os
 import string
-import threading
 import time
 import traceback
 import uuid
@@ -29,7 +28,6 @@ from lazylibrarian.config2 import CONFIG
 from lazylibrarian.filesystem import DIRS, setperm, splitext, syspath
 from lazylibrarian.formatter import check_int, get_list, md5_utf8, plural
 from lazylibrarian.importer import update_totals
-from lazylibrarian.multiauth import get_authors_from_book_files
 from lazylibrarian.scheduling import SchedulerCommand, restart_jobs
 
 # database version history:
@@ -1500,8 +1498,6 @@ def update_schema(db, upgradelog):
             # Add what we currently have as primary author
             db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
                       (entry['AuthorID'], entry['BookID'], 1), suppress='UNIQUE')
-        if CONFIG['CONTRIBUTING_AUTHORS']:
-            threading.Thread(target=get_authors_from_book_files, name='MULTIAUTH_BOOKFILES').start()
 
     if not has_column(db, "books", "dnb_id"):
         changes += 1

@@ -664,7 +664,6 @@ class WebInterface:
                 cmd += " and AuthorID in (" + ", ".join(f"'{w}'" for w in myauthors) + ")"
 
             cmd += " order by AuthorName COLLATE NOCASE"
-
             serversidelogger.debug(f"get_index {cmd}")
 
             rowlist = db.select(cmd)
@@ -2266,14 +2265,6 @@ class WebInterface:
         if not lazylibrarian.STOPTHREADS:
             check_running_jobs()
 
-        if lazylibrarian.SCAN_BOOKS:
-            name = 'MULTIAUTH_BOOKFILES'
-            if name not in [n.name for n in list(threading.enumerate())]:
-                logger.debug("Started Contributing Authors background task")
-                threading.Thread(target=lazylibrarian.multiauth.get_authors_from_book_files, name=name).start()
-            else:
-                logger.debug(f'{name} already running')
-            lazylibrarian.SCAN_BOOKS = 0
         if adminmsg:
             return serve_template(templatename="response.html", prefix="",
                                   title="User Accounts", message=adminmsg, timer=0)

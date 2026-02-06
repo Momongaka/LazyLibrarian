@@ -42,14 +42,6 @@ class ImportPrefs:
                 cnt += 1
                 db.action('delete from authors where authorid=?', (item['authorid'], ))
             logger.debug(f"Disabled Contributing Authors: Removed {cnt} authors")
-            lazylibrarian.SCAN_BOOKS = 0
-        else:
-            # circular import issue, set a flag and run from webserver instead
-            logger.debug("Set webserver flag for scan_books")
-            lazylibrarian.SCAN_BOOKS = 1
-            # logger.debug(f"Started Contributing Authors background task")
-            # threading.Thread(target=lazylibrarian.multiauth.get_authors_from_book_files,
-            # name='MULTIAUTH_BOOKFILES').start()
 
     @classmethod
     def lang_changed(cls, languages: str, reason: OnChangeReason = OnChangeReason.SETTING):
