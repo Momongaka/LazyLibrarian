@@ -446,6 +446,22 @@ def log_header(online=True) -> str:
     except Exception:  # magic might fail for multiple reasons
         vers = 'not found'
     header += f"magic: {vers}\n"
+    try:
+        import lxml
+        vers = getattr(lxml, "__version__", None)
+        if not vers:
+            vers = "installed"
+    except Exception:
+        vers = "not found"
+    header += f"lxml: {vers}\n"
+    try:
+        import iso639
+        vers = getattr(iso639, "__version__", None)
+        if not vers:
+            vers = "installed"
+    except Exception:
+        vers = "not found"
+    header += f"iso639: {vers}\n"
 
     return header
 
