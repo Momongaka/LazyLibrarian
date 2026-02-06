@@ -889,7 +889,7 @@ class DNB:
                 authorname, authorid, _ = lazylibrarian.importer.add_author_name_to_db(author=auth_name,
                                                                                        refresh=False,
                                                                                        addbooks=False,
-                                                                                       reason=f'DNB add {bookid}:{bookdict['bookname']}',
+                                                                                       reason=f"DNB add {bookid}:{bookdict['bookname']}",
                                                                                        title=bookdict['bookname'])
                 if authorname:
                     bookdict['authorname'] = authorname

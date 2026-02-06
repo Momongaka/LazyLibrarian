@@ -366,7 +366,7 @@ def add_bookdict_to_db(book, reason, source):
                           (auth_id, book['bookid'], ROLE['CONTRIBUTING']), suppress='UNIQUE')
                 lazylibrarian.importer.update_totals(auth_id)
             else:
-                logger.debug(f"Unable to add contributor {entry[1]} for {book['bookname']}")
+                logger.debug(f"Unable to add contributor {entry[1]} for {book['bookname']}, no authorid")
 
     # Handle series data if present
     if CONFIG.get_bool('ADD_SERIES') and book.get('series'):

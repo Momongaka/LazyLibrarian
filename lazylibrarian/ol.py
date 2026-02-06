@@ -218,21 +218,24 @@ class OpenLibrary:
         else:
             authorbooks, in_cache = json_request(f"{self.OL_SEARCH}author={quote_plus(authorname)}",
                                                  use_cache=not refresh)
-
         if authorbooks and authorbooks["docs"]:
             for book in authorbooks['docs']:
                 if not book.get('author_name'):
                     continue
-                author_name = format_author_name(book.get('author_name')[0],
-                                                 postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
-                if fuzz.token_set_ratio(author_name, authorname) >= CONFIG.get_int('NAME_RATIO'):
-                    key = book.get('author_key')[0]
-                    if key:
-                        key = key.split('/')[-1]
-                    res = self.get_author_info(key, authorname)
-                    if res and res['authorname'] != authorname:
-                        res['aka'] = authorname
-                    return res
+                cnt = 0
+                while cnt < len(book['author_name']):
+                    print(cnt, book['author_name'])
+                    author_name = format_author_name(book['author_name'][cnt],
+                                                     postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
+                    if fuzz.token_set_ratio(author_name, authorname) >= CONFIG.get_int('NAME_RATIO'):
+                        key = book.get('author_key')[cnt]
+                        if key:
+                            key = key.split('/')[-1]
+                        res = self.get_author_info(key, authorname)
+                        if res and res['authorname'] != authorname:
+                            res['aka'] = authorname
+                        return res
+                    cnt += 1
 
         if title:  # no results using author/title, try author only
             authorbooks, in_cache = json_request(f"{self.OL_SEARCH}author={quote_plus(authorname)}",
@@ -243,16 +246,19 @@ class OpenLibrary:
             for book in authorbooks['docs']:
                 if not book.get('author_name'):
                     continue
-                author_name = format_author_name(book.get('author_name')[0],
-                                                 postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
-                if fuzz.token_set_ratio(author_name, authorname) >= CONFIG.get_int('NAME_RATIO'):
-                    key = book.get('author_key')[0]
-                    if key:
-                        key = key.split('/')[-1]
-                    res = self.get_author_info(key, authorname, refresh=refresh)
-                    if res and res['authorname'] != authorname:
-                        res['aka'] = authorname
-                    return res
+                cnt = 0
+                while cnt < len(book['author_name']):
+                    author_name = format_author_name(book['author_name'][cnt],
+                                                     postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
+                    if fuzz.token_set_ratio(author_name, authorname) >= CONFIG.get_int('NAME_RATIO'):
+                        key = book.get('author_key')[cnt]
+                        if key:
+                            key = key.split('/')[-1]
+                        res = self.get_author_info(key, authorname, refresh=refresh)
+                        if res and res['authorname'] != authorname:
+                            res['aka'] = authorname
+                        return res
+                    cnt += 1
         return {}
 
     def get_author_info(self, authorid=None, authorname=None, refresh=False):
