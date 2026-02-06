@@ -1,6 +1,5 @@
 import logging
 
-import lazylibrarian
 from lazylibrarian import ROLE, database
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.filesystem import path_isfile, splitext
@@ -63,13 +62,10 @@ def get_authors_from_book_files():
     selection = db.select("SELECT BookFile,BookID,BookName,AuthorID,Status from books")
 
     for entry in selection:
-        if lazylibrarian.STOPTHREADS:
-            logger.debug("Multiauth aborted by STOPTHREADS")
-            return newauthors
         if entry['Status'] in ['Open', 'Have']:
             fname = entry['BookFile']
             extn = splitext(fname)[1]
-            if extn.lower() in [".epub", ".mobi"]:
+            if extn.lower() in [".epub", ".mobi", ".azw", ".azw3"]:
                 if not path_isfile(fname):
                     logger.error(f'Unable to find {fname}')
                 else:
@@ -144,11 +140,11 @@ def rebuild_booktable():
               "BookFile TEXT, BookDate TEXT, BookLang TEXT, BookAdded TEXT, Status TEXT, WorkPage TEXT, Manual TEXT, "
               "SeriesDisplay TEXT, BookLibrary TEXT, AudioFile TEXT, AudioLibrary TEXT, AudioStatus TEXT, "
               "WorkID TEXT, ScanResult TEXT, OriginalPubDate TEXT, Requester TEXT, AudioRequester TEXT, "
-              "LT_WorkID TEXT, gr_id TEXT, Narrator TEXT, ol_id TEXT, gb_id TEXT, hc_id TEXT)")
+              "LT_WorkID TEXT, gr_id TEXT, Narrator TEXT, ol_id TEXT, gb_id TEXT, hc_id TEXT, dnb_id TEXT)")
     db.action("INSERT INTO books SELECT BookName,BookSub,BookDesc,BookGenre,BookIsbn,BookPub,BookRate,BookImg,"
               "BookPages,BookLink,BookID,BookFile,BookDate,BookLang,BookAdded,Status,WorkPage,Manual,SeriesDisplay,"
               "BookLibrary,AudioFile,AudioLibrary,AudioStatus,WorkID,ScanResult,OriginalPubDate,Requester,"
-              "AudioRequester,LT_WorkID,gr_id,Narrator,ol_id,gb_id,hc_id FROM temp")
+              "AudioRequester,LT_WorkID,gr_id,Narrator,ol_id,gb_id,hc_id,dnb_id FROM temp")
     db.action('DROP TABLE temp')
     db.action('PRAGMA foreign_keys = ON')
     db.action('vacuum')
