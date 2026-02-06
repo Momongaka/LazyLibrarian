@@ -651,6 +651,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
 
             for entry in results['data']['series_by_pk']['book_series']:
                 # use HC_EDITION_BY_PK to get language, authorid, authorname
+                # This will be needed if hardcover impose query depth limits
                 # editionid = entry['book']['default_physical_edition_id']
                 # searchcmd = self.HC_EDITION_BY_PK.replace('[editionid]', str(editionid))
                 # editions, in_cache = self.result_from_cache(searchcmd, refresh=refresh)
@@ -668,33 +669,37 @@ query FindAuthor { authors_by_pk(id: [authorid])
                 #    if edition['contributions']:
                 #        authorname = edition['contributions'][0]['author']['name']
                 #        authorlink = edition['contributions'][0]['author']['id']
-                authorname = entry['book']['contributions'][0]['author']['name']
-                authorlink = entry['book']['contributions'][0]['author']['id']
-                edition = entry['book']['default_physical_edition']
-                language = ''
-                if edition and 'language' in edition and edition.get('language'):
-                    language = edition['language']['language']
+                try:
+                    authorname = entry['book']['contributions'][0]['author']['name']
+                    authorlink = entry['book']['contributions'][0]['author']['id']
+                    edition = entry['book']['default_physical_edition']
+                    language = ''
+                    if edition and 'language' in edition and edition.get('language'):
+                        language = edition['language']['language']
 
-                book_id = entry['book_id']
-                position = entry['position']
-                if not position or str(position) == 'None':
-                    position = 0
-                book_title = entry['book']['title']
-                # pubyear = entry['book']['release_year']
-                pubdate = entry['book']['release_date']
-                compilation = entry['book']['compilation']
+                    book_id = entry['book_id']
+                    position = entry['position']
+                    if not position or str(position) == 'None':
+                        position = 0
+                    book_title = entry['book']['title']
+                    # pubyear = entry['book']['release_year']
+                    pubdate = entry['book']['release_date']
+                    compilation = entry['book']['compilation']
 
-                if not author_name:
-                    author_name = authorname
-                if not language:
-                    language = 'Unknown'
-                # pick the first entry for each position that is non compilation and in a language we want
-                if not compilation and position and (position not in resultdict or
-                                                     resultdict[position][1] != author_name):
-                    if 'All' in wantedlanguages or language in wantedlanguages:
-                        resultdict[position] = [book_title, authorname, authorlink, book_id, pubdate, language]
-                    else:
-                        self.logger.debug(f"Rejecting {position}:{book_title} as language {language}")
+                    if not author_name:
+                        author_name = authorname
+                    if not language:
+                        language = 'Unknown'
+                    # pick the first entry for each position that is non compilation and in a language we want
+                    if not compilation and position and (position not in resultdict or
+                                                         resultdict[position][1] != author_name):
+                        if 'All' in wantedlanguages or language in wantedlanguages:
+                            resultdict[position] = [book_title, authorname, authorlink, book_id, pubdate, language]
+                        else:
+                            self.logger.debug(f"Rejecting {position}:{book_title} as language {language}")
+                except (IndexError, KeyError, TypeError):
+                    self.logger.debug(f"Error in HC data: {entry}")
+
             for item in resultdict:
                 res = [item]
                 res.extend(resultdict[item])
@@ -731,7 +736,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
                 results, in_cache = self.result_from_cache(searchcmd, refresh=refresh)
                 api_hits += not in_cache
                 cache_hits += in_cache
-                with contextlib.suppress(IndexError, KeyError):
+                with contextlib.suppress(IndexError, KeyError, TypeError):
                     resultbooks = results['data']['books']
 
             if not searchcmd:  # not isbn search, could be author, title, both
@@ -750,11 +755,9 @@ query FindAuthor { authors_by_pk(id: [authorid])
                     bookresults, in_cache = self.result_from_cache(searchcmd, refresh=refresh)
                     api_hits += not in_cache
                     cache_hits += in_cache
-                    try:
+                    with contextlib.suppress(IndexError, KeyError, TypeError):
                         for item in bookresults['data']['search']['results']['hits']:
                             resultbooks.append(item['document'])
-                    except (IndexError, KeyError):
-                        pass
                     if not resultbooks:
                         searchauthorname = searchterm
 
@@ -764,11 +767,9 @@ query FindAuthor { authors_by_pk(id: [authorid])
                     authresults, in_cache = self.result_from_cache(searchcmd, refresh=refresh)
                     api_hits += not in_cache
                     cache_hits += in_cache
-                    try:
+                    with contextlib.suppress(IndexError, KeyError, TypeError):
                         for item in authresults['data']['search']['results']['hits']:
                             authids.append(item['document']['id'])
-                    except (IndexError, KeyError):
-                        pass
 
                 if authids:
                     for authid in authids:
@@ -871,7 +872,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
             authorid = None
             matches = []
             if results:
-                try:
+                with contextlib.suppress(IndexError, KeyError, TypeError):
                     for item in results['data']['search']['results']['hits']:
                         name = item['document']['name']
                         altnames = item['document']['alternate_names']
@@ -881,8 +882,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
                             matches.append([books_count, author_id, name, altnames])
                     matches = sorted(matches, reverse=True)
                     authorid = matches[0][1]
-                except (IndexError, KeyError):
-                    pass
+
             if authorid:
                 res = self.get_author_info(authorid)
                 if res:
@@ -898,14 +898,11 @@ query FindAuthor { authors_by_pk(id: [authorid])
             api_hits += not in_cache
             bookid = None
             if results:
-                try:
+                with contextlib.suppress(IndexError, KeyError, TypeError):
                     for item in results['data']['search']['results']['hits']:
                         if authorname in item['document']['author_names']:
                             bookid = item['document']['id']
                             break
-                except (IndexError, KeyError, TypeError):
-                    pass
-
             if bookid:
                 url = None
                 try:
@@ -1373,7 +1370,6 @@ query FindAuthor { authors_by_pk(id: [authorid])
             book_count = len(results['data']['user_books'])
             self.syncinglogger.debug(f"HardCover {status_name} contains {book_count}")
             return results['data']['user_books']
-
         return []
 
     def _process_hc_book(self, item, db, remapped, sync_dict, stats, readonly=False):
