@@ -915,8 +915,8 @@ class DNB:
             # Add book to database using bookdict
             bookdict['status'] = bookstatus
             bookdict['audiostatus'] = audiostatus
-            reason = f"[{thread_name()}] {reason}"
-            res = add_bookdict_to_db(bookdict, reason, bookdict['source'])
+            bookdict['reason'] = f"[{thread_name()}] {reason}"
+            res = add_bookdict_to_db(bookdict)
             lazylibrarian.importer.update_totals(authorid)
             return res
         return False
@@ -1100,13 +1100,18 @@ class DNB:
         if isinstance(mydict['booklang'], list):
             mydict['booklang'] = ','.join(mydict['booklang'])
         if isinstance(mydict['bookgenre'], list):
-            mydict['bookgenre'] = ','.join(mydict['bookgenre'])
+            if lazylibrarian.GRGENRES:
+                genre_limit = lazylibrarian.GRGENRES.get('genreLimit', 3)
+            else:
+                genre_limit = 3
+            mydict['bookgenre'] = ','.join(mydict['bookgenre'][:genre_limit])
+
         mydict['contributors'] = []
         authornames = mydict['authorname']
         if len(authornames) > 1:
             for authorname in authornames[1:]:
                 authorname, _ = lazylibrarian.importer.get_preferred_author(authorname)
-                mydict['contributors'].append(['0', " ".join(authorname.split())])
+                mydict['contributors'].append(["", " ".join(authorname.split())])
         mydict['authorname'], _ = lazylibrarian.importer.get_preferred_author(authornames[0])
 
         mydict['bookisbn'] = ''

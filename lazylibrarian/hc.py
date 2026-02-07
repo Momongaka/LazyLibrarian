@@ -1050,7 +1050,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
             if len(sorted_contributions) > 1:
                 sorted_contributions.pop(0)
                 for item in sorted_contributions:
-                    bookdict['contributors'].append([str(item['author'].get('id', '0')),
+                    bookdict['contributors'].append([str(item['author'].get('id', '')),
                                                      " ".join(item['author']['name'].split())])
 
         bookdict['bookname'] = book_data.get('title', '')
@@ -1296,8 +1296,8 @@ query FindAuthor { authors_by_pk(id: [authorid])
         # Add book to database using bookdict
         bookdict['status'] = bookstatus
         bookdict['audiostatus'] = audiostatus
-        reason = f"[{thread_name()}] {reason}"
-        res = add_bookdict_to_db(bookdict, reason, bookdict['source'])
+        bookdict['reason'] = f"[{thread_name()}] {reason}"
+        res = add_bookdict_to_db(bookdict)
         lazylibrarian.importer.update_totals(bookdict['authorid'])
         return res
 

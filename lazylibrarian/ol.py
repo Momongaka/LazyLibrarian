@@ -224,7 +224,6 @@ class OpenLibrary:
                     continue
                 cnt = 0
                 while cnt < len(book['author_name']):
-                    print(cnt, book['author_name'])
                     author_name = format_author_name(book['author_name'][cnt],
                                                      postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
                     if fuzz.token_set_ratio(author_name, authorname) >= CONFIG.get_int('NAME_RATIO'):
@@ -1446,7 +1445,7 @@ class OpenLibrary:
         # Add book to database using bookdict
         bookdict['status'] = bookstatus
         bookdict['audiostatus'] = audiostatus
-        reason = f"[{thread_name()}] {reason}"
-        res = add_bookdict_to_db(bookdict, reason, bookdict['source'])
+        bookdict['reason'] = f"[{thread_name()}] {reason}"
+        res = add_bookdict_to_db(bookdict)
         lazylibrarian.importer.update_totals(bookdict['authorid'])
         return res

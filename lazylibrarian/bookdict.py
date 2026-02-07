@@ -77,7 +77,8 @@
                         'highest_fuzz': ,
                         'contributors': , # comma separated list of contributing authors, not including primary
                         'series': , # comma separated tuples (name of series, series_id, position_in_series)
-                        'source': # name of provider, eg 'GoodReads' or 'HardCover'
+                        'source': , # name of provider, eg 'GoodReads' or 'HardCover'
+                        'reason': # reason for adding the book, for traceability
 }
 
 """
@@ -301,7 +302,7 @@ def warn_about_bookdict(bookdict):
             logger.warning(msg)
 
 
-def add_bookdict_to_db(book, reason, source):
+def add_bookdict_to_db(book):
     logger = logging.getLogger(__name__)
     db = database.DBConnection()
     locked = False
@@ -335,11 +336,11 @@ def add_bookdict_to_db(book, reason, source):
         "BookLang": book['booklang'],
         "Status": book['status'],
         "AudioStatus": book['audiostatus'],
-        "ScanResult": reason,
+        "ScanResult": book['reason'],
     }
     if not exists:
         new_value_dict["BookAdded"] = today()
-    this_key = id_key[source]
+    this_key = id_key[book['source']]
     new_value_dict[this_key] = book['bookid']
 
     db.upsert("books", new_value_dict, control_value_dict)
@@ -350,7 +351,7 @@ def add_bookdict_to_db(book, reason, source):
     logger.debug(f"Add primary {book['authorid']}{author['authorname']}")
     if CONFIG.get_bool('CONTRIBUTING_AUTHORS') and book.get('contributors'):
         for entry in book['contributors']:
-            if entry[0] and entry[0] != '0':
+            if entry[0]:
                 auth_id = lazylibrarian.importer.add_author_to_db(authorname=entry[1], refresh=False,
                                                                   authorid=entry[0], addbooks=False,
                                                                   reason=f"Contributor to {book['bookname']}")
@@ -373,7 +374,7 @@ def add_bookdict_to_db(book, reason, source):
         for item in book['series']:
             ser_name = item[0].strip()
             ser_id = str(item[1]).strip()
-            src = id_key[source][:2].upper()
+            src = id_key[book['source']][:2].upper()
             exists = db.match("SELECT * from series WHERE seriesid=?", (ser_id,))
             if not exists:
                 if src:
