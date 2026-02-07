@@ -319,6 +319,11 @@ def add_bookdict_to_db(book):
         db.close()
         return False
 
+    if book['bookimg'] and book['bookimg'].startswith('http'):
+        book['bookimg'] = cache_bookimg(book['bookimg'], book['bookid'], book['source'].lower())
+    if not book['bookimg']:  # no results or failed to cache it
+        book['bookimg'] = 'images/nocover.png'
+
     control_value_dict = {"BookID": book['bookid']}
     new_value_dict = {
         "AuthorID": book['authorid'],
