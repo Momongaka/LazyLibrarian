@@ -25,6 +25,11 @@
             <a href="toggle_my_a_feeds" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="All, or just mine"><i class="fa fa-users"></i></a>
           %endif
         %endif
+        %if lazylibrarian.PRIMARY_AUTHORS == True:
+            <a href="toggle_primary?page=audio" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-star"></i></a>
+        %else:
+            <a href="toggle_primary?page=audio" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-handshake"></i></a>
+        %endif
       </div>
       <div class="col-xs-2">
         %if len(languages) > 1:

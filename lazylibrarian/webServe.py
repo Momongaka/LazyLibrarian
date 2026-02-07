@@ -2728,14 +2728,18 @@ class WebInterface:
 
     @cherrypy.expose
     @require_auth()
-    def toggle_primary(self, authorid=None):
+    def toggle_primary(self, page=None, authorid=None):
         if lazylibrarian.PRIMARY_AUTHORS:  # show primary ones, or all
             lazylibrarian.PRIMARY_AUTHORS = False
         else:
             lazylibrarian.PRIMARY_AUTHORS = True
-        if not authorid:
-            raise cherrypy.HTTPRedirect("authors")
-        raise cherrypy.HTTPRedirect(f"author_page?authorid={authorid}")
+        if not page:
+            page = 'home'
+        if authorid:
+            redirect = f"{page}?authorid={authorid}"
+        else:
+            redirect = page
+        raise cherrypy.HTTPRedirect(redirect)
 
     @cherrypy.expose
     @require_auth()
@@ -3078,15 +3082,10 @@ class WebInterface:
                 serversidelogger.debug(f"User booklist length {len(mybooks)}")
                 cmd += " and books.bookID in (" + ", ".join(f"'{w}'" for w in mybooks) + ")"
 
-            if kwargs['source'] in ["Author"] and lazylibrarian.PRIMARY_AUTHORS:
-                # is the bookid in bookauthors with this author as primary
-                bookauthors = []
-                res = db.select(f"SELECT BookID from bookauthors WHERE authorid='{kwargs['AuthorID']}' "
-                                f"and role={ROLE['PRIMARY']}")
-                if res:
-                    for bk in res:
-                        bookauthors.append(bk['BookID'])
-                    cmd += " and books.BookID in (" + ", ".join(f"'{w}'" for w in bookauthors) + ")"
+            if kwargs['source'] in ["Author", "Books", "Audio"] and lazylibrarian.PRIMARY_AUTHORS:
+                # only show book for primary author
+                cmd += " and books.bookid in (SELECT bookid FROM bookauthors where bookauthors.authorid=authors.authorid "
+                cmd += f"and books.bookid=bookauthors.bookid and role={ROLE['PRIMARY']})"
 
             cmd += (" GROUP BY bookimg, authorname, bookname, bookrate, bookdate, books.status, books.bookid, "
                     "booklang, booksub, booklink, workpage, bookauthors.authorid, booklibrary, audiostatus, "

@@ -57,9 +57,9 @@
             %endif
         %endif
         %if lazylibrarian.PRIMARY_AUTHORS == True:
-            <a href="toggle_primary?authorid=${author['AuthorID']}" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-star"></i></a>
+            <a href="toggle_primary?page=author_page&authorid=${author['AuthorID']}" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-star"></i></a>
         %else:
-            <a href="toggle_primary?authorid=${author['AuthorID']}" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-handshake"></i></a>
+            <a href="toggle_primary?page=author_page&authorid=${author['AuthorID']}" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-handshake"></i></a>
         %endif
          <div class="form-group pull-right">
             %if len(types) > 1:
