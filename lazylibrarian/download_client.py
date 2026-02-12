@@ -425,7 +425,8 @@ def get_download_folder(source, downloadid):
         elif source == 'SABNZBD':
             source = 'SAB'
 
-        if CONFIG.get(f"{source}_REMOTE") and CONFIG.get(f"{source}_LOCAL") and dlfolder.startswith(CONFIG[f"{source}_REMOTE"]):
+        if (source in ['SAB', 'NZBGET', 'RTORRENT', 'UTORRENT', 'QBITTORRENT', 'TRANSMISSION', 'DELUGE', 'SYNOLOGY', 'SLSK'] and
+            CONFIG[f"{source}_REMOTE"] and CONFIG[f"{source}_LOCAL"] and dlfolder.startswith(CONFIG[f"{source}_REMOTE"])):
                 logger.debug(f"Replacing {CONFIG[f'{source}_REMOTE']} with {CONFIG[f'{source}_LOCAL']}")
                 dlfolder = dlfolder.replace(CONFIG[f"{source}_REMOTE"], CONFIG[f"{source}_LOCAL"])
 
