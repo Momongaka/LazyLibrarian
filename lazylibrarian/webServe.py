@@ -1669,9 +1669,9 @@ class WebInterface:
                "series.SeriesID=member.SeriesID and books.BookID=member.BookID and "
                "books.AuthorID=authors.AuthorID and ")
         if not ignored or ignored == 'False':
-            cmd += "(books.Status != 'Ignored' or AudioStatus != 'Ignored')"
+            cmd += "(books.Status != 'Ignored' and AudioStatus != 'Ignored')"
         else:
-            cmd += "(books.Status == 'Ignored' and AudioStatus == 'Ignored')"
+            cmd += "(books.Status == 'Ignored' or AudioStatus == 'Ignored')"
         cmd += " and series.SeriesID=? order by SeriesName"
         members = db.select(cmd, (seriesid,))
         # is it a multi-author series?
