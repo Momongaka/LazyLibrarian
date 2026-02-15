@@ -32,13 +32,6 @@ Bookstrap Styles
     padding-top: 10px;
 }
 
-.author-thumb {
-    width: 100px;
-    aspect-ratio: 1 / 1;
-    margin: auto;
-    object-fit: cover;
-    display: block;
-}
 .bookcover-sm {
     width: 100px;
     margin: auto auto;

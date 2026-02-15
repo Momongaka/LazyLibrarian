@@ -177,7 +177,7 @@
                             return '<input type="checkbox" id="I' + row[10] + '" name="' + row[10] + '" class="checkbox" />';} },
                      { targets: [1],
                          'render': function(data, type, row) {
-                            return '<a href="' + row[0] + '" target="_blank" rel="noreferrer"><img src="' + row[0] + '" alt="Cover" class="author-thumb"></a>';} },
+                            return '<a href="' + row[0] + '" target="_blank" rel="noreferrer"><img src="' + row[0] + '" alt="Cover" class="bookcover-sm"></a>';} },
                      { targets: [2], 'render': function(data, type, row) {
                      %if perm&lazylibrarian.perm_authorbooks:
                         btn = '<a href=\'author_page?authorid=' + row[10] + '\'">' + row[1] + '</a>'
