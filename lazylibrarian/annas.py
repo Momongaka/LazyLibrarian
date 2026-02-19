@@ -391,6 +391,8 @@ def annas_download(md5, folder, title, extn, domain_index=0):
     if response.status_code == 409:
         errmsg = (f"Error Status: {response.status_code} Over your daily limit.")
     else:
+        downloadlogger.debug(url)
+        downloadlogger.debug(str(params))
         errmsg = (f"Error Status: {response.status_code} Check your ANNAS key, "
                   f"and make sure you have a PAID subscription")
     logger.error(errmsg)

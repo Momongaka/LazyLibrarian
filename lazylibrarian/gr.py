@@ -979,7 +979,7 @@ class GoodReads:
                                 db.upsert("books", new_value_dict, control_value_dict)
                                 db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
                                           (authorid, bookid, ROLE['PRIMARY']), suppress='UNIQUE')
-
+                                self.logger.debug(f'Added {authorid} as primary')
                                 set_genres(get_list(bookgenre, ','), bookid)
 
                                 update_value_dict = {}
@@ -1056,6 +1056,7 @@ class GoodReads:
                                                 db.action('INSERT into bookauthors (AuthorID, BookID, Role) '
                                                           'VALUES (?, ?, ?)',
                                                           (auth_id, bookid, ROLE[role]), suppress='UNIQUE')
+                                                self.logger.debug(f'Added {authorid} as {role}')
                                                 lazylibrarian.importer.update_totals(auth_id)
                                             else:
                                                 self.logger.debug(f"Unable to add {auth_id}")
@@ -1517,6 +1518,7 @@ class GoodReads:
 
                 db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
                           (author_id, bookid, ROLE['PRIMARY']), suppress='UNIQUE')
+                self.logger.debug(f'Added {author_id} as primary')
                 lazylibrarian.importer.update_totals(author_id)
 
                 if CONFIG.get_bool('CONTRIBUTING_AUTHORS'):
@@ -1532,6 +1534,7 @@ class GoodReads:
                                 role = ROLE['CONTRIBUTING']
                             db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
                                       (auth_id, bookid, role), suppress='UNIQUE')
+                            self.logger.debug(f'Added {auth_id} as {role}')
                             lazylibrarian.importer.update_totals(auth_id)
                         else:
                             self.logger.debug(f"Unable to add {auth_id}")

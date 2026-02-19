@@ -76,6 +76,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
         else:
             searchmags = []
             for magazine in mags:
+                searchinglogger.debug(str(magazine))
                 searchmags_temp = db.select("SELECT Title,Regex,DateType,LastAcquired,IssueDate from magazines "
                                             "WHERE Title=? AND Status='Active'", (magazine['bookid'],))
                 for terms in searchmags_temp:
