@@ -2318,7 +2318,7 @@ def _handle_seeding_status(
         return True  # Skip to next item
 
     # Handle normal seeding completion
-    if not keep_seeding and (book_state.finished or not wait_for_seeding):
+    if book_state.finished or (not keep_seeding and not wait_for_seeding):
         if book_state.finished:
             logger.debug(
                 f"{book_state.download_title} finished seeding at {book_state.source}"

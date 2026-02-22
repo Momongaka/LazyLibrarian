@@ -156,6 +156,9 @@ def get_progress(hashid):
     max_ratio = 0.0
     if 'max_ratio_enabled' in preferences and 'max_ratio' in preferences and preferences['max_ratio_enabled']:
         max_ratio = float(preferences['max_ratio'])
+    max_seeding_time = 0
+    if preferences.get('max_seeding_time_enabled') and 'max_seeding_time' in preferences:
+        max_seeding_time = int(preferences['max_seeding_time'])
     cat = CONFIG['QBITTORRENT_LABEL']
     if not cat:
         cat = None
@@ -182,8 +185,12 @@ def get_progress(hashid):
 
             # state was changed from pausedUP to stoppedUP in web API 2.11.0, but wiki doesn't reflect change
             # See: https://qbittorrent-api.readthedocs.io/en/latest/apidoc/definitions.html
-            if max_ratio <= ratio and (state == 'pausedUP' or state == 'stoppedUP'):
-                finished = True
+            if state == 'pausedUP' or state == 'stoppedUP':
+                ratio_met = max_ratio > 0 and ratio >= max_ratio
+                seeding_time = torrent.get('seeding_time', 0)
+                time_met = max_seeding_time > 0 and seeding_time >= max_seeding_time * 60
+                if ratio_met or time_met:
+                    finished = True
             return progress, state, finished
     return -1, '', False
 
