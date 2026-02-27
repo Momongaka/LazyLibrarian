@@ -6743,7 +6743,7 @@ class WebInterface:
             if action == 'Search':
                 if CONFIG.use_any():
                     logger.debug(f"Searching for magazine: {title}")
-                    search_magazines({"bookid": title}, False, False)
+                    search_magazines([{"bookid": title}], False, False)
                     passed += 1
                 else:
                     logger.warning("Not searching for magazine, no download methods set, check config")
