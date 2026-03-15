@@ -548,23 +548,36 @@ def preprocess_magazine(bookfolder, cover=0, tag=False, title='', issue='', genr
     logger.debug(f"Preprocess magazine {bookfolder} cover={cover}")
     try:
         sourcefile = None
+        source_extn = ''
         for fname in listdir(bookfolder):
             _, extn = splitext(fname)
-            if extn.lower() == '.pdf':
+            lower_extn = extn.lower()
+            if lower_extn == '.pdf':
                 sourcefile = fname
+                source_extn = lower_extn
                 break
+            if not sourcefile and lower_extn in ['.cbz', '.cbr']:
+                sourcefile = fname
+                source_extn = lower_extn
 
         if not sourcefile:
             msg = f"No suitable sourcefile found in {bookfolder}"
             logger.error(msg)
             return False, msg
 
+        cover = check_int(cover, 0)
+        dpi = CONFIG.get_int('SHRINK_MAG')
+
+        if source_extn in ['.cbz', '.cbr']:
+            if dpi or (CONFIG.get_bool('SWAP_COVERPAGE') and cover > 1) or tag:
+                logger.debug(f"Magazine preprocessing options apply to pdf only, leaving {sourcefile} unchanged")
+            else:
+                logger.debug(f"No preprocessing required for {source_extn} magazine archive")
+            return True, ''
+
         if not valid_pdf(os.path.join(bookfolder, sourcefile)):
             msg = f"Invalid pdf {sourcefile} in {bookfolder}"
             return False, msg
-
-        dpi = CONFIG.get_int('SHRINK_MAG')
-        cover = check_int(cover, 0)
 
         if not dpi and not (CONFIG.get_bool('SWAP_COVERPAGE') and cover > 1) and not tag:
             logger.debug("No preprocessing required")
