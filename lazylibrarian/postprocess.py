@@ -587,6 +587,10 @@ def _transfer_matching_files(
                     f"{type(why).__name__} {why!s}"
                 )
                 continue
+    if copy:
+        logger.debug(f"Copied {cnt} to subdirectory")
+    else:
+        logger.debug(f"Moved {cnt} to subdirectory")
     return cnt
 
 
@@ -1643,6 +1647,12 @@ def _process_matched_directory(
         Tuple of (is_valid, skip_reason)
     """
     candidate_ptr = book_state.candidate_ptr or ""
+    # Direct downloads place files in download root
+    # if candidate_ptr is download_dir, handle as single file in download root
+    if candidate_ptr and candidate_ptr.rstrip(os.sep) == download_dir.rstrip(os.sep):
+        candidate_ptr = os.path.join(candidate_ptr, book_state.download_title)
+        book_state.update_candidate(candidate_ptr)
+
     if not path_isdir(candidate_ptr):
         # It's a single file - check if it's in download root
         file_dir = os.path.dirname(candidate_ptr)

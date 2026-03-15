@@ -2210,22 +2210,22 @@ class WebInterface:
                             title = unaccented(title, only_ascii=False)
 
                 new_value_dict = {}
-                new_reject = kwargs.get(f'reject_list[{title}]', None)
+                new_reject = kwargs.get(f'reject_list[{title}]')
                 if new_reject != reject:
                     new_value_dict['Reject'] = new_reject
-                new_regex = kwargs.get(f'regex[{title}]', None)
+                new_regex = kwargs.get(f'regex[{title}]')
                 if new_regex != regex:
                     new_value_dict['Regex'] = new_regex
-                new_genres = kwargs.get(f'genre_list[{title}]', None)
+                new_genres = kwargs.get(f'genre_list[{title}]')
                 if new_genres != genres:
                     new_value_dict['Genre'] = new_genres
-                new_datetype = kwargs.get(f'datetype[{title}]', None)
+                new_datetype = kwargs.get(f'datetype[{title}]')
                 if new_datetype != datetype:
                     new_value_dict['DateType'] = new_datetype
-                new_coverpage = check_int(kwargs.get(f"coverpage[{title}]", None), 1)
+                new_coverpage = check_int(kwargs.get(f"coverpage[{title}]"), 1)
                 if new_coverpage != coverpage:
                     new_value_dict['CoverPage'] = new_coverpage
-                new_language = kwargs.get(f'language[{title}]', None)
+                new_language = kwargs.get(f'language[{title}]')
                 if new_language != language:
                     new_value_dict['Language'] = new_language
                 if new_value_dict:

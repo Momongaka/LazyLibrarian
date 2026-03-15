@@ -226,6 +226,8 @@ def search_magazines(mags=None, reset=False, backissues=False):
                 maglist = []
                 issues = []
                 bookid = ''
+                res = db.match("SELECT Regex from magazines WHERE Title=? AND Status='Active'", (book['bookid'],))
+                searchterms = get_list(res['Regex'], ',')
                 for nzb in resultlist:
                     total_nzbs += 1
                     bookid = nzb['bookid']
@@ -275,18 +277,25 @@ def search_magazines(mags=None, reset=False, backissues=False):
                             if len(nzbtitle_exploded) > len(bookid_exploded):
                                 # needs to be longer as it has to include a date
                                 # check all the words in the mag title are in the nzbtitle
-                                rejected = False
+                                # or one of the regex options for this title
+                                if not searchterms:
+                                    searchterms = [bookid]
                                 wlist = []
                                 for word in nzbtitle_exploded:
                                     if word == '&' or word == '+':
                                         word = 'and'
                                     wlist.append(word.lower())
-                                for word in bookid_exploded:
-                                    if word == '&' or word == '+':
-                                        word = 'and'
-                                    if word.lower() not in wlist:
-                                        logger.debug(f"Rejecting {nzbtitle}, missing [{word}]")
-                                        rejected = True
+                                for term in searchterms:
+                                    rejected = False
+                                    term_exploded = replace_all(term, dic).split()
+                                    for word in term_exploded:
+                                        if word == '&' or word == '+':
+                                            word = 'and'
+                                        if word.lower() not in wlist:
+                                            logger.debug(f"Rejecting {nzbtitle}, missing [{word}]")
+                                            rejected = True
+                                            break
+                                    if not rejected:
                                         break
 
                                 if rejected:

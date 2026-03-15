@@ -56,8 +56,8 @@ class DNB:
     def __init__(self):
         return
 
-    __name__ = "Deutsche Nationalbibliothek"
-    __id__ = "dnb"
+    __dnbname__ = "Deutsche Nationalbibliothek"
+    __dnbid__ = "dnb"
 
     logger = logging.getLogger(__name__)
     searchinglogger = logging.getLogger('special.searching')
@@ -700,8 +700,8 @@ class DNB:
             "authors": authors,
             "url": f"https://portal.dnb.de/opac.htm?method=simpleSearch&query={book_data.get('idn', '')}",
             "source": {
-                "id": self.__id__,
-                "description": self.__name__,
+                "id": self.__dnbid__,
+                "description": self.__dnbname__,
                 "link": "https://portal.dnb.de/",
             },
             "cover": cover_url,
