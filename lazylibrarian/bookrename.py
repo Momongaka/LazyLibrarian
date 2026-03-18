@@ -511,6 +511,7 @@ def audio_rename(bookid, rename=False, playlist=False, overwrite=False):
         bookfile = namevars['AudioSingleFile']
         if not bookfile:
             bookfile = f"{exists['AuthorName']} - {exists['BookName']}"
+        bookfile = sanitize(bookfile, True)
         out_type = splitext(part[3])[1]
         outfile = bookfile + out_type
         if playlist:
@@ -544,7 +545,7 @@ def audio_rename(bookid, rename=False, playlist=False, overwrite=False):
             pattern = ' '.join(pattern.split()).strip()
             pattern = pattern + splitext(part[3])[1]
             if rename:
-                pattern = sanitize(pattern)
+                pattern = sanitize(pattern, True)
 
             if playlist:
                 if rename:
