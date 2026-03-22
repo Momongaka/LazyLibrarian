@@ -338,8 +338,9 @@ class CacheRequest(ABC):
 
             result, success = self.fetch_data()
             if success:
-                self.cachelogger.debug(f"CacheHandler: Storing {self.name()} {myhash} for {self.url}")
+                self.cachelogger.debug(f"CacheHandler: Storing {self.name()} {myhash} {len(result)} bytes for {self.url}")
                 source, result = self.load_from_result_and_cache(result, hashfilename, expire_older_than)
+                self.cachelogger.debug(result)
             elif '404' in result:  # don't block on "not found"
                 return None, False
             else:
@@ -414,31 +415,34 @@ class XMLCacheRequest(CacheRequest):
     def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> (str, bool):
         source = None
         result = make_bytestr(result)
-        if result and result.startswith(b'<?xml'):
-            try:
-                source = ElementTree.fromstring(result)
-                if not docache:
-                    self.cachelogger.debug(f"Returning {len(source)} bytes xml uncached")
-                    return source, False
-            except UnicodeEncodeError:
-                # sometimes we get utf-16 data labelled as utf-8
+        if result:
+            if not result.startswith(b'<?xml'):
+                self.cachelogger.debug(f"{len(result)} bytes is not xml")
+            else:
                 try:
-                    result = result.decode('utf-16').encode('utf-8')
                     source = ElementTree.fromstring(result)
                     if not docache:
                         self.cachelogger.debug(f"Returning {len(source)} bytes xml uncached")
                         return source, False
-                except (ElementTree.ParseError, UnicodeEncodeError, UnicodeDecodeError):
+                except UnicodeEncodeError:
+                    # sometimes we get utf-16 data labelled as utf-8
+                    try:
+                        result = result.decode('utf-16').encode('utf-8')
+                        source = ElementTree.fromstring(result)
+                        if not docache:
+                            self.cachelogger.debug(f"Returning {len(source)} bytes xml uncached")
+                            return source, False
+                    except (ElementTree.ParseError, UnicodeEncodeError, UnicodeDecodeError):
+                        self.logger.error(f"Error parsing xml from {self.url}")
+                        source = None
+                except ElementTree.ParseError:
                     self.logger.error(f"Error parsing xml from {self.url}")
                     source = None
-            except ElementTree.ParseError:
-                self.logger.error(f"Error parsing xml from {self.url}")
-                source = None
 
         if source is not None:
             with open(syspath(filename), "wb") as cachefile:
                 cachefile.write(result)
-                self.cachelogger.debug(f"Cached {len(source)} bytes xml {filename}")
+                self.cachelogger.debug(f"Cached {len(result)} bytes xml {filename}")
         else:
             self.logger.error(f"Error getting xml data from {self.url}")
             if result:
