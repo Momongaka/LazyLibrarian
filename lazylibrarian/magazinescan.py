@@ -60,6 +60,77 @@ def create_id(issuename=None):
     return hash_id
 
 
+def clean_maglibrary():
+    logger = logging.getLogger(__name__)
+    db = database.DBConnection()
+    issues = db.select('select * from Issues')
+    mag_count = 0
+    issue_count = 0
+    # check all the issues are still there, delete entry if not
+    for issue in issues:
+        title = issue['Title']
+        issuedate = issue['IssueDate']
+        issuefile = issue['IssueFile']
+
+        if issuefile and not path_isfile(issuefile):
+            db.action('DELETE from Issues where issuefile=?', (issuefile,))
+            logger.info(f'Issue {title} - {issuedate} deleted as not found on disk')
+            issue_count += 1
+
+    # now check the magazine titles and delete any with no issues
+    if CONFIG.get_bool('MAG_DELFOLDER'):
+        mags = db.select('SELECT Title,count(Title) as counter from issues group by Title')
+        for mag in mags:
+            title = mag['Title']
+            issues = mag['counter']
+            if not issues:
+                logger.debug(f'Magazine {title} deleted as no issues found')
+                db.action('DELETE from magazines WHERE Title=?', (title,))
+                mag_count += 1
+
+    # now reset the magazine latest issues
+    mags = db.select('SELECT Title from magazines')
+    for mag in mags:
+        #issues = db.select('select issuedate from issues where title=?', (mag['Title'],))
+        control_value_dict = {"Title": mag['Title']}
+        new_value_dict = {"IssueStatus": "Open"}
+        # Set magazine_issuedate to issuedate of most recent issue we have
+        # Set latestcover to most recent issue cover
+        # Set magazine_added to acquired date of the earliest issue we have
+        # Set magazine_lastacquired to acquired date of most recent issue we have
+        # acquired dates are read from magazine file timestamps
+        res = db.match('SELECT MagazineAdded from magazines where title=?', (mag['Title'], ))
+        magazineadded = res['MagazineAdded']
+        new_value_dict["MagazineAdded"] = magazineadded
+        maglastacquired = None
+        magissuedate = None
+        issues = db.select('SELECT Title,IssueFile,IssueDate,Cover from issues WHERE Title=?', (mag['Title'], ))
+        for issue in issues:
+            mtime = os.path.getmtime(syspath(issue['IssueFile']))
+            iss_acquired = datetime.date.isoformat(datetime.date.fromtimestamp(mtime))
+            if not magazineadded or magazineadded == 'None' or iss_acquired < magazineadded:
+                magazineadded = iss_acquired
+                new_value_dict["MagazineAdded"] = magazineadded
+            if not maglastacquired or iss_acquired > maglastacquired:
+                maglastacquired = iss_acquired
+                new_value_dict["LastAcquired"] = maglastacquired
+            if not magissuedate or issue['IssueDate'] >= magissuedate:
+                magissuedate = issue['IssueDate']
+                new_value_dict["IssueDate"] = magissuedate
+                new_value_dict["LatestCover"] = issue['Cover']
+
+        # if no issues, but not deleting the folder, keep the details of the last issue we used to have
+        if not CONFIG.get_bool('MAG_DELFOLDER') and maglastacquired is None:
+            if "LastAcquired" in new_value_dict:
+                new_value_dict.pop("LastAcquired")
+            if "IssueDate" in new_value_dict:
+                new_value_dict.pop("IssueDate")
+            new_value_dict["LatestCover"] = ''
+        db.upsert("magazines", new_value_dict, control_value_dict)
+
+    return mag_count, issue_count
+
+
 def magazine_scan(title=None):
     logger = logging.getLogger(__name__)
     matchinglogger = logging.getLogger('special.matching')
@@ -80,35 +151,7 @@ def magazine_scan(title=None):
             mag_path = os.path.dirname(mag_path)
 
         if CONFIG.get_bool('FULL_SCAN') and not onetitle:
-            mags = db.select('select * from Issues')
-            # check all the issues are still there, delete entry if not
-            for mag in mags:
-                title = mag['Title']
-                issuedate = mag['IssueDate']
-                issuefile = mag['IssueFile']
-
-                if issuefile and not path_isfile(issuefile):
-                    db.action('DELETE from Issues where issuefile=?', (issuefile,))
-                    logger.info(f'Issue {title} - {issuedate} deleted as not found on disk')
-                    control_value_dict = {"Title": title}
-                    new_value_dict = {
-                        "LastAcquired": None,  # clear magazine dates
-                        "IssueDate": None,  # we will fill them in again later
-                        "LatestCover": None,
-                        "IssueStatus": "Skipped"  # assume there are no issues now
-                    }
-                    db.upsert("magazines", new_value_dict, control_value_dict)
-                    logger.debug(f'Magazine {title} details reset')
-
-            # now check the magazine titles and delete any with no issues
-            if CONFIG.get_bool('MAG_DELFOLDER'):
-                mags = db.select('SELECT Title,count(Title) as counter from issues group by Title')
-                for mag in mags:
-                    title = mag['Title']
-                    issues = mag['counter']
-                    if not issues:
-                        logger.debug(f'Magazine {title} deleted as no issues found')
-                        db.action('DELETE from magazines WHERE Title=?', (title,))
+            clean_maglibrary()
 
         logger.info(f" Checking [{mag_path}] for {CONFIG['MAG_TYPE']}")
 

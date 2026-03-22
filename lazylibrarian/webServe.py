@@ -143,7 +143,12 @@ from lazylibrarian.importer import (
 )
 from lazylibrarian.librarysync import library_scan
 from lazylibrarian.logconfig import LOGCONFIG
-from lazylibrarian.magazinescan import get_dateparts, magazine_scan, remove_if_empty, rename_issue
+from lazylibrarian.magazinescan import (
+    get_dateparts,
+    magazine_scan,
+    remove_if_empty,
+    rename_issue,
+)
 from lazylibrarian.manual_import import (
     process_alternate,
     process_book_from_dir,
@@ -6986,6 +6991,13 @@ class WebInterface:
         if library == 'AudioBook':
             raise cherrypy.HTTPRedirect("audio")
         raise cherrypy.HTTPRedirect("books")
+
+    @cherrypy.expose
+    @require_auth()
+    def clean_magazine_library(self):
+        self.check_permitted(lazylibrarian.perm_force)
+        magazinescan.clean_maglibrary()
+        raise cherrypy.HTTPRedirect("magazines")
 
     @cherrypy.expose
     @require_auth()

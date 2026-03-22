@@ -103,6 +103,7 @@ from lazylibrarian.importer import (
 from lazylibrarian.librarysync import library_scan
 from lazylibrarian.logconfig import LOGCONFIG
 from lazylibrarian.magazinescan import (
+    clean_maglibrary,
     format_issue_filename,
     get_dateparts,
     magazine_scan,
@@ -338,7 +339,8 @@ cmd_dict = {'help': (0, 'list available commands. Time consuming commands take a
             'listsecondaries': (0, 'list all authors that are not primary author of any book in the database'),
             'deletesecondaries': (1, 'delete all secondary authors in the database'),
             'isbnwords': (0, 'find an isbn for a title'),
-            'getDownloadProgress': (0, '[&source=] [&downloadid=] [&limit=] show active download progress')
+            'getDownloadProgress': (0, '[&source=] [&downloadid=] [&limit=] show active download progress'),
+            'cleanMagLibrary': (0, 'Clean the library, removing entries for missing issues')
             }
 
 
@@ -3138,6 +3140,11 @@ class Api:
             cnt += 1
             db.action('delete from authors where authorid=?', (item['authorid'], ))
         self.data = f"Removed {cnt} secondary authors"
+
+    def _cleanmaglibrary(self):
+        TELEMETRY.record_usage_data()
+        mags, issues = clean_maglibrary()
+        self.data = f"Removed {issues} {plural(issues, 'issue')}, {mags} {plural(mags, 'title')}"
 
     def _isbnwords(self, **kwargs):
         TELEMETRY.record_usage_data()
