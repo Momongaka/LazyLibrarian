@@ -904,8 +904,9 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
 
                         if not author or not book:
                             # try for details from a special file
-                            author, book, forced_bookid = get_book_meta(rootdir, reason="libraryscan")
-
+                            author, book, override_bookid = get_book_meta(rootdir, reason="libraryscan")
+                            if override_bookid:
+                                forced_bookid = override_bookid
                         # Failing anything better, just pattern match on filename
                         if pattern and (not author or not book):
                             # might need a different pattern match for audiobooks
@@ -997,28 +998,27 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 except NameError:
                                     bookid = None
                                 if bookid:
-                                    match = db.match('SELECT AuthorID,Status FROM books where BookID=?',
-                                                     (bookid,))
+                                    match = db.match('SELECT AuthorID,Status FROM books where BookID=?', (bookid,))
                                     if match:
                                         mtype = match['Status']
                                         if authorid != match['AuthorID']:
                                             logger.warning(
                                                 f"Metadata authorid [{authorid}] does not match database "
                                                 f"[{match['AuthorID']}]")
-                                    if not match:
-                                        cmd = "SELECT Status,BookID FROM books where BookName=? and AuthorID=?"
-                                        match = db.match(cmd, (book, authorid))
-                                        if match:
-                                            logger.warning(
-                                                f"Metadata bookid [{bookid}] not found in database, title matches "
-                                                f"{match['BookID']}")
-                                            mtype = match['Status']
-                                            # update stored bookid to match preferred (owned) book
-                                            db.action('PRAGMA foreign_keys = OFF')
-                                            for table in ['books', 'member', 'wanted', 'failedsearch', 'genrebooks']:
-                                                cmd = f"UPDATE {table} SET BookID=? WHERE BookID=?"
-                                                db.action(cmd, (bookid, match['BookID']))
-                                            db.action('PRAGMA foreign_keys = ON')
+                                if not match:
+                                    cmd = "SELECT Status,BookID FROM books where BookName=? and AuthorID=?"
+                                    match = db.match(cmd, (book, authorid))
+                                    if match:
+                                        logger.warning(
+                                            f"Metadata bookid [{bookid}] not found in database, title matches "
+                                            f"{match['BookID']}")
+                                        mtype = match['Status']
+                                        # update stored bookid to match preferred (owned) book
+                                        db.action('PRAGMA foreign_keys = OFF')
+                                        for table in ['books', 'member', 'wanted', 'failedsearch', 'genrebooks', 'bookauthors']:
+                                            cmd = f"UPDATE {table} SET BookID=? WHERE BookID=?"
+                                            db.action(cmd, (bookid, match['BookID']))
+                                        db.action('PRAGMA foreign_keys = ON')
 
                                 if not match:
                                     # Try and find in database under author and bookname
