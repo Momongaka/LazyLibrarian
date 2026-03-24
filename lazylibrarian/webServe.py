@@ -3107,8 +3107,9 @@ class WebInterface:
             if len(rowlist):
                 for row in rowlist:  # iterate through the sqlite3.Row objects
                     entry = list(row)
-                    if entry[16] is None:
-                        entry[16] = ""
+                    for pos in [5, 14, 16]:
+                        if entry[pos] is None:
+                            entry[pos] = ""
                     if CONFIG.get_bool('SORT_SURNAME'):
                         entry[1] = surname_first(entry[1], postfixes=get_list(CONFIG.get_csv('NAME_POSTFIX')))
                     if CONFIG.get_bool('SORT_DEFINITE'):
