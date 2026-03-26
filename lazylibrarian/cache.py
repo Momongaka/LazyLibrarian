@@ -440,17 +440,24 @@ class XMLCacheRequest(CacheRequest):
                     source = None
 
         if source is not None:
-            with open(syspath(filename), "wb") as cachefile:
-                cachefile.write(result)
-                self.cachelogger.debug(f"Cached {len(result)} bytes xml {filename}")
+            try:
+                with open(syspath(filename), "wb") as cachefile:
+                    cachefile.write(result)
+                    self.cachelogger.debug(f"Cached {len(result)} bytes xml {filename}")
+            except Exception as e:
+                self.logger.error(f"Exception {e} writing {filename}")
+                return source, False
         else:
             self.logger.error(f"Error getting xml data from {self.url}")
             if result:
                 self.logger.error(f"Result: {result[:80]}")
-                with open(syspath(f"{filename}.err"), "wb") as cachefile:
-                    cachefile.write(result)
-                    self.logger.error(f"Cached {len(result)} bytes {filename}.err")
-            return None, False
+                try:
+                    with open(syspath(f"{filename}.err"), "wb") as cachefile:
+                        cachefile.write(result)
+                        self.logger.error(f"Cached {len(result)} bytes {filename}.err")
+                except Exception as e:
+                    self.logger.error(f"Exception {e} writing {filename}.err")
+            return '', False
         return source, True
 
 
@@ -460,15 +467,24 @@ class HTMLCacheRequest(CacheRequest):
         return "HTML"
 
     def read_from_cache(self, hashfilename: str) -> (str, bool):
-        with open(syspath(hashfilename), "rb") as cachefile:
-            source = cachefile.read()
-        return source, True
+        try:
+            with open(syspath(hashfilename), "rb") as cachefile:
+                source = cachefile.read()
+            return source, True
+        except Exception as e:
+            self.logger.error(f"Exception {e} reading {hashfilename}")
+            return '', False
+
 
     def load_from_result_and_cache(self, result: str, filename, docache) -> (str, bool):
         source = make_bytestr(result)
-        with open(syspath(filename), "wb") as cachefile:
-            cachefile.write(source)
-        return source, True
+        try:
+            with open(syspath(filename), "wb") as cachefile:
+                cachefile.write(source)
+            return source, True
+        except Exception as e:
+            self.logger.error(f"Exception {e} writing {filename}")
+            return source, False
 
 
 class JSONCacheRequest(CacheRequest):
@@ -500,10 +516,13 @@ class JSONCacheRequest(CacheRequest):
             self.logger.error(f"{type(e).__name__} decoding json from {self.url}")
             self.logger.debug(f"{e} : {result}")
             return None, False
-        with open(filename, "w") as outfile:
-            json.dump(source, outfile)
-        return source, True
-
+        try:
+            with open(filename, "w") as outfile:
+                json.dump(source, outfile)
+            return source, True
+        except Exception as e:
+            self.logger.error(f"Exception {e} writing {outfile}")
+            return source, False
 
 def clean_cache():
     """ Remove unused files from the cache - delete if expired or unused.
