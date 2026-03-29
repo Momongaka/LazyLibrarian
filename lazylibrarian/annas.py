@@ -230,10 +230,16 @@ def annas_search(
         "sort": order_by.value,
     }
     annas_hosts = get_list(CONFIG['ANNA_HOST'])
+    if len(annas_hosts) == 1:
+        # old style single host, add the wikipedia entries
+        annas_hosts_update()
     soup = None
     for host in annas_hosts:
+        prefix = ''
+        if not host.startswith('http'):
+            prefix = "https://"
         try:
-            soup = html_parser(urljoin(host, "search"), params)
+            soup = html_parser(urljoin(prefix + host, "search"), params)
             if soup:
                 # got some results, prefer this host next time
                 annas_hosts_prefer(annas_hosts, host)
@@ -357,7 +363,10 @@ def annas_download(md5, folder, title, extn, domain_index=0):
     params = {'md5': md5, 'key': CONFIG['ANNA_KEY'], 'domain_index': domain_index}
     annas_hosts = get_list(CONFIG['ANNA_HOST'])
     for host in annas_hosts:
-        url = urljoin(host, '/dyn/api/fast_download.json')
+        prefix = ''
+        if not host.startswith('http'):
+            prefix = "http://"
+        url = urljoin(prefix + host, '/dyn/api/fast_download.json')
         response = get(url, params=params)
         if str(response.status_code).startswith('2'):
             annas_hosts_prefer(annas_hosts, host)
