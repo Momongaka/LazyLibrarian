@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from html import unescape as html_unescape
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 from requests import get
@@ -31,10 +31,11 @@ from lazylibrarian import database
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.filesystem import DIRS, get_directory, path_isfile, remove_file
-from lazylibrarian.formatter import check_int, md5_utf8, plural, sanitize, size_in_bytes
+from lazylibrarian.formatter import check_int, get_list, md5_utf8, plural, sanitize, size_in_bytes
 
 py310 = sys.version_info >= (3, 10)
 
+WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/Anna%27s_Archive"
 
 @dataclass(**({"slots": True} if py310 else {}))
 class FileInfo:
@@ -197,6 +198,21 @@ def html_parser(url: str, params: dict = None) -> BeautifulSoup:
     return BeautifulSoup(html, "html5lib")
 
 
+def annas_hosts_prefer(annas_hosts, host):
+    # success, move this host to front of list
+    annas_hosts.remove(host)
+    annas_hosts.insert(0, host)
+    CONFIG['ANNA_HOST'] = ','.join(annas_hosts)
+
+
+def annas_hosts_update():
+    annas_hosts = get_list(CONFIG['ANNA_HOST'])
+    new_hosts = fetch_annas_archive_domains()
+    annas_hosts.extend(new_hosts)
+    annas_hosts = set(annas_hosts)
+    CONFIG['ANNA_HOST'] = ','.join(annas_hosts)
+
+
 def annas_search(
     query: str,
     language: Language = Language.ANY,
@@ -204,7 +220,7 @@ def annas_search(
     order_by: OrderBy = OrderBy.MOST_RELEVANT,
 ) -> str | None:
 
-    logger = logging.getLogger(__name__)
+    downloadlogger = logging.getLogger('special.dlcomms')
     if not query.strip():
         raise ValueError("query can not be empty")
     params = {
@@ -213,11 +229,20 @@ def annas_search(
         "ext": file_type.value,
         "sort": order_by.value,
     }
-
-    try:
-        soup = html_parser(urljoin(CONFIG['ANNA_HOST'], "search"), params)
-    except Exception as e:
-        logger.error(f"{e}")
+    annas_hosts = get_list(CONFIG['ANNA_HOST'])
+    soup = None
+    for host in annas_hosts:
+        try:
+            soup = html_parser(urljoin(host, "search"), params)
+            if soup:
+                # got some results, prefer this host next time
+                annas_hosts_prefer(annas_hosts, host)
+                break
+        except Exception as e:
+            downloadlogger.error(f"{host}: {e}")
+    if not soup:
+        # no searches returned anything, update the host list
+        annas_hosts_update()
         return None
 
     raw_results = soup.select("div[class*='pt-3'][class*='border-b']")
@@ -329,12 +354,18 @@ def parse_result(raw_content: Tag) -> SearchResult | None:
 def annas_download(md5, folder, title, extn, domain_index=0):
     logger = logging.getLogger(__name__)
     downloadlogger = logging.getLogger('special.dlcomms')
-    url = urljoin(CONFIG['ANNA_HOST'], '/dyn/api/fast_download.json')
-    secret_key = CONFIG['ANNA_KEY']
-    params = {'md5': md5, 'key': secret_key, 'domain_index': domain_index}
-    response = get(url, params=params)
-    max_domain_index = check_int(CONFIG['ANNA_MAX_SERVERS'], 0) - 1 # Server indexes are 0-based
+    params = {'md5': md5, 'key': CONFIG['ANNA_KEY'], 'domain_index': domain_index}
+    annas_hosts = get_list(CONFIG['ANNA_HOST'])
+    for host in annas_hosts:
+        url = urljoin(host, '/dyn/api/fast_download.json')
+        response = get(url, params=params)
+        if str(response.status_code).startswith('2'):
+            annas_hosts_prefer(annas_hosts, host)
+            break
+        downloadlogger.debug(f"Failed to download from {host}: {response.status_code}")
+
     if str(response.status_code).startswith('2'):
+        max_domain_index = check_int(CONFIG['ANNA_MAX_SERVERS'], 0) - 1 # Server indexes are 0-based
         res = response.json()
         downloadlogger.debug(res)
         counters = res['account_fast_download_info']
@@ -352,18 +383,18 @@ def annas_download(md5, folder, title, extn, domain_index=0):
                     msg = f"Got a {r.status_code} response for {url}"
                     if domain_index < max_domain_index:
                         return annas_download(md5, folder, title, extn, domain_index + 1)
-                    logger.warning(msg)
+                    downloadlogger.warning(msg)
                     return False, msg
                 filedata = r.content
                 if not len(filedata):
                     msg = f"Got empty response for {url}"
-                    logger.warning(msg)
+                    downloadlogger.warning(msg)
                     return False, msg
                 if len(filedata) < 100:
                     msg = f"Only got {len(filedata)} bytes for {url}"
-                    logger.warning(msg)
+                    downloadlogger.warning(msg)
                     return False, msg
-                logger.debug(f"Got {len(filedata)} bytes for {url}")
+                downloadlogger.debug(f"Got {len(filedata)} bytes for {url}")
                 download_dir = get_directory('Download')
                 if folder:
                     parent = os.path.join(download_dir, folder)
@@ -519,3 +550,48 @@ def anna_grabs() -> tuple[int, int]:
     if grabs:
         return len(grabs), int(grabs[0]['completed'])
     return 0, 0
+
+
+def fetch_annas_archive_domains():
+    """Fetch current Anna's Archive domains from Wikipedia. Returns list of bare domains."""
+    logger = logging.getLogger(__name__)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    try:
+        response = get(WIKIPEDIA_URL, headers=headers, timeout=10)
+        if response.status_code != 200:
+            logger.warning(f"Wikipedia returned status {response.status_code}")
+            return []
+    except Exception as e:
+        logger.warning(f"Failed to fetch domains from Wikipedia: {e}")
+        return []
+
+    pattern_table = re.compile(
+        r'<table[^>]*class="[^"]*infobox vcard[^"]*"[^>]*>(.*?)(?:<h2|</table)',
+        re.DOTALL | re.IGNORECASE
+    )
+    pattern_span = re.compile(
+        r'<span[^>]*class="[^"]*url[^"]*"[^>]*>(.*?)</span>',
+        re.DOTALL | re.IGNORECASE
+    )
+    pattern_link = re.compile(
+        r'<a[^>]*class="[^"]*external text[^"]*"[^>]*href="([^"]+)"',
+        re.IGNORECASE
+    )
+
+    table_match = pattern_table.search(response.text)
+    if not table_match:
+        logger.warning("Could not find infobox table in Wikipedia page")
+        return []
+
+    domains = []
+    for span_html in pattern_span.findall(table_match.group(0)):
+        for href in pattern_link.findall(span_html):
+            parsed = urlparse(href if '://' in href else 'https:' + href)
+            if parsed.netloc:
+                domains.append(parsed.netloc)
+
+    logger.info(f"Fetched {len(domains)} domain(s) from Wikipedia: {domains}")
+    return domains
