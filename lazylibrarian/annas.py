@@ -365,7 +365,7 @@ def annas_download(md5, folder, title, extn, domain_index=0):
     for host in annas_hosts:
         prefix = ''
         if not host.startswith('http'):
-            prefix = "http://"
+            prefix = "https://"
         url = urljoin(prefix + host, '/dyn/api/fast_download.json')
         response = get(url, params=params)
         if str(response.status_code).startswith('2'):
