@@ -659,7 +659,7 @@ def add_author_books_to_db(resultqueue, bookstatus, audiostatus, entrystatus, en
 
             if CONFIG.get_bool('ADD_SERIES') and get_series_members and get_bookdict_for_bookid:
                 try:
-                    add_series_entries(bookdict, get_series_members, get_bookdict_for_bookid)
+                    add_series_entries(bookdict, book_status, audio_status, get_series_members, get_bookdict_for_bookid)
                 except Exception as e:
                     logger.error(str(e))
             else:
@@ -738,7 +738,7 @@ def add_author_books_to_db(resultqueue, bookstatus, audiostatus, entrystatus, en
     return summary
 
 
-def add_series_entries(bookdict, get_series_members, get_bookdict_for_bookid):
+def add_series_entries(bookdict, bookstatus, audiostatus, get_series_members, get_bookdict_for_bookid):
     # bookdict = standard keys
     # get_bookdict_for_bookid function returns standard bookdict and bool in_cache
     # get_series_members returns a list of lists
@@ -895,10 +895,10 @@ def add_series_entries(bookdict, get_series_members, get_bookdict_for_bookid):
                            f'OriginalPubDate, {source.lower()}_id) '
                            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
 
-                    if (not newbookdict.get('status') or not
-                            newbookdict.get('audiostatus')):
-                        newbookdict['status'] = bookdict['status']
-                        newbookdict['audiostatus'] = bookdict['audiostatus']
+                    if not newbookdict.get('status'):
+                        newbookdict['status'] = bookstatus if bookstatus else 'Skipped'
+                    if not newbookdict.get('audiostatus'):
+                        newbookdict['audiostatus'] = audiostatus if audiostatus else 'Skipped'
 
                     db.action(cmd, (auth_id, newbookdict['bookname'],
                                     cover_link, newbookdict['booklink'],
