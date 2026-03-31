@@ -108,8 +108,8 @@
                     elif booklist and result['bookid'] in booklist:
                         for item in booksearch:
                             if item['BookID'] == result['bookid']:
-                                value2 = '<i class="fa fa-book"></i> ' + item['Status']
-                                value3 = '<i class="fa fa-headphones"></i> ' + item['AudioStatus']
+                                value2 = '<i class="fa fa-book"></i> ' + (item['Status'] or 'Unknown')
+                                value3 = '<i class="fa fa-headphones"></i> ' + (item['AudioStatus'] or 'Unknown')
                                 valid_id = item['BookID']
 
                         if 'Open' in value2:
