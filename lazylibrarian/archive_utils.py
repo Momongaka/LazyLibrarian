@@ -155,8 +155,12 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                     if not make_dirs(dstdir):
                         logger.error(f"Failed to create directory {dstdir}")
                         return ""
-                    with open(syspath(dst), "wb") as f:
-                        f.write(z.read(item))
+                    try:
+                        with open(syspath(dst), "wb") as f:
+                            f.write(z.read(item))
+                    except Exception as e:
+                        logger.error(f"Unable to extract {item} from {archivename}: {e}")
+                        continue
 
         elif tarfile.is_tarfile(archivename):
             TELEMETRY.record_usage_data("Process/Archive/Tar")
