@@ -139,7 +139,7 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                 logger.error(f"Failed to create target dir {targetdir}")
                 return ""
 
-            logger.debug(f"Created target {targetdir}")
+            postprocesslogger.debug(f"Created target {targetdir}")
             # Look for any wanted files (inc jpg for cbr/cbz)
             for item in z.namelist():
                 if is_valid_type(
@@ -191,8 +191,12 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                     if not make_dirs(dstdir):
                         logger.error(f"Failed to create directory {dstdir}")
                         return ""
-                    with open(syspath(dst), "wb") as f:
-                        f.write(z.extractfile(item).read())
+                    try:
+                        with open(syspath(dst), "wb") as f:
+                            f.write(z.extractfile(item).read())
+                    except Exception as e:
+                        logger.error(f"Unable to extract {item} from {archivename}: {e}")
+                        continue
 
         elif lazylibrarian.UNRARLIB == 1 and RARFILE.is_rarfile(archivename):
             TELEMETRY.record_usage_data("Process/Archive/RarOne")
@@ -223,8 +227,12 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                     if not make_dirs(dstdir):
                         logger.error(f"Failed to create directory {dstdir}")
                         return ""
-                    with open(syspath(dst), "wb") as f:
-                        f.write(z.read(item))
+                    try:
+                        with open(syspath(dst), "wb") as f:
+                            f.write(z.read(item))
+                    except Exception as e:
+                        logger.error(f"Unable to extract {item} from {archivename}: {e}")
+                        continue
 
         elif lazylibrarian.UNRARLIB == 2:
             # noinspection PyBroadException
@@ -264,8 +272,11 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                             if not make_dirs(dstdir):
                                 logger.error(f"Failed to create directory {dstdir}")
                             else:
-                                with open(syspath(dst), "wb") as f:
-                                    f.write(entry[1])
+                                try:
+                                    with open(syspath(dst), "wb") as f:
+                                        f.write(entry[1])
+                                except Exception as e:
+                                    logger.error(f"Unable to extract {item} from {archivename}: {e}")
                             break
         if not targetdir:
             postprocesslogger.debug(

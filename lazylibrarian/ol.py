@@ -868,9 +868,10 @@ class OpenLibrary:
                                               'ScanResult, OriginalPubDate, BookPages, ol_id) '
                                               'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                                               (authorid, title, bookdesc, genres, isbn, publishers, bookrate,
-                                               cover_link, link, key, bookdate, lang, now(), book_status, '',
-                                               audio_status, id_librarything, reason, first_publish_year, bookpages,
-                                               key))
+                                               cover_link, link, key, bookdate, lang, now(),
+                                               book_status if book_status else 'Skipped', '',
+                                               audio_status if audio_status else 'Skipped',
+                                               id_librarything, reason, first_publish_year, bookpages, key))
                                 else:
                                     self.logger.debug(f"Rejected {key} {reason}")
                                     continue  # next book in docs
@@ -893,9 +894,9 @@ class OpenLibrary:
                                     book_stat, audio_stat = get_status(key, serieslist, bookstatus,
                                                                        audiostatus, entrystatus)
                                     if book_status not in ['Wanted', 'Open', 'Have'] and not ignore_book:
-                                        update_value_dict["Status"] = book_stat
+                                        update_value_dict["Status"] = book_stat if book_stat else 'Skipped'
                                     if audio_status not in ['Wanted', 'Open', 'Have'] and not ignore_book:
-                                        update_value_dict["AudioStatus"] = audio_stat
+                                        update_value_dict["AudioStatus"] = audio_stat if audio_stat else 'Skipped'
                                     self.searchinglogger.debug(f"status is now {book_status},{audio_status}")
                                 elif not exists:
                                     update_value_dict["ScanResult"] = reason
@@ -1123,8 +1124,8 @@ class OpenLibrary:
                                                                         bad_lang += 1
                                                                         rejected = True
                                                                     else:
-                                                                        book_status = 'Ignored'
-                                                                        audio_status = 'Ignored'
+                                                                        bookstatus = 'Ignored'
+                                                                        audiostatus = 'Ignored'
                                                                 if not rejected:
                                                                     if 'nocover' in cover or 'nophoto' in cover:
                                                                         start = time.time()
@@ -1149,9 +1150,10 @@ class OpenLibrary:
                                                                               '?,?,?,?,?,?,?,?,?)',
                                                                               (bauth_key, title, '', genres, '',
                                                                                '', rating, cover, worklink, workid,
-                                                                               publish_date, lang, '', bookstatus,
-                                                                               '', audiostatus, member[4],
-                                                                               reason, publish_date, workid))
+                                                                               publish_date, lang, '',
+                                                                               bookstatus if bookstatus else 'Skipped', '',
+                                                                               audiostatus if audiostatus else 'Skipped',
+                                                                               member[4], reason, publish_date, workid))
                                                             if not rejected:
                                                                 match = db.match(
                                                                     "SELECT * from seriesauthors WHERE "
@@ -1223,7 +1225,8 @@ class OpenLibrary:
                                 "BookDate, BookLang, BookAdded, Status, WorkPage, AudioStatus, ScanResult, "
                                 "OriginalPubDate, ol_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (authorid, title, cover, link, key, publish_date, lang, now(),
-                                 book_status, '', audio_status, reason, first_publish_year, key))
+                                 book_status if book_status else 'Skipped', '',
+                                 audio_status if audio_status else 'Skipped', reason, first_publish_year, key))
 
                     if not rejected:
                         db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',

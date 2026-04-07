@@ -647,8 +647,10 @@ def add_author_books_to_db(resultqueue, bookstatus, audiostatus, entrystatus, en
                                                            audiostatus, entrystatus)
                     if bookdict['status'] not in ['Wanted', 'Open', 'Have'] and not ignore_book:
                         update_value_dict["Status"] = book_status
+                        bookstatus = book_status
                     if bookdict['audiostatus'] not in ['Wanted', 'Open', 'Have'] and not ignore_audio:
                         update_value_dict["AudioStatus"] = audio_status
+                        audiostatus = audio_status
                     searchinglogger.debug(f"status is now {book_status},{audio_status}")
                 elif not exists:
                     update_value_dict["ScanResult"] = reason
@@ -659,7 +661,7 @@ def add_author_books_to_db(resultqueue, bookstatus, audiostatus, entrystatus, en
 
             if CONFIG.get_bool('ADD_SERIES') and get_series_members and get_bookdict_for_bookid:
                 try:
-                    add_series_entries(bookdict, book_status, audio_status, get_series_members, get_bookdict_for_bookid)
+                    add_series_entries(bookdict, bookstatus, audiostatus, get_series_members, get_bookdict_for_bookid)
                 except Exception as e:
                     logger.error(str(e))
             else:
