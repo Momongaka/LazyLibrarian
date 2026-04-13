@@ -15,6 +15,13 @@ from urllib.parse import quote
 
 import requests
 
+# Two different iso639 libraries.
+# The first library used languages, but does not support python 3.12
+# The new library is recently updated and uses Lang
+try:
+    from iso639 import Lang
+except ModuleNotFoundError:
+    Lang = None
 try:
     from iso639 import languages
 except ImportError:
@@ -494,15 +501,16 @@ class DNB:
 
             # Convert ISO code to English language name
             # language_name = isoLanguages.get_language_name(get_locale(), lang_code)
-            if not languages:
-                language_name = lang_code
-            else:
-                # noinspection PyUnresolvedReferences
+            isodata = None
+            if Lang:
+                isodata = Lang(lang_code)
+            elif languages:
                 isodata = languages.get(alpha2=lang_code[:2])
-                if isodata and isodata.name:
-                    language_name = isodata.name
-                else:
-                    language_name = "Unknown"
+
+            if isodata and isodata.name:
+                language_name = isodata.name
+            else:
+                language_name = lang_code if lang_code else "Unknown"
 
             if language_name and language_name != "Unknown":
                 raw_languages.append(language_name)
@@ -815,7 +823,7 @@ class DNB:
         if not CONFIG['DNB_API']:
             self.logger.warning('DNB API not enabled, check config')
             return
-        if not etree or not languages:
+        if not etree or (not Lang and not languages):
             self.logger.warning('Required modules missing, lxml and/or iso639')
             return
 
@@ -865,7 +873,7 @@ class DNB:
         if not CONFIG['DNB_API']:
             self.logger.warning('DNB API not enabled, check config')
             return False
-        if not etree or not languages:
+        if not etree or (not Lang and not languages):
             self.logger.warning('Required modules missing, lxml and/or iso639')
             return False
         if not bookstatus:
@@ -925,7 +933,7 @@ class DNB:
         if not CONFIG['DNB_API']:
             self.logger.warning('DNB API not enabled, check config')
             return False
-        if not etree or not languages:
+        if not etree or (not Lang and not languages):
             self.logger.warning('Required modules missing, lxml and/or iso639')
             return False
         try:

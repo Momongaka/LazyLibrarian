@@ -362,6 +362,8 @@ def annas_download(md5, folder, title, extn, domain_index=0):
     downloadlogger = logging.getLogger('special.dlcomms')
     params = {'md5': md5, 'key': CONFIG['ANNA_KEY'], 'domain_index': domain_index}
     annas_hosts = get_list(CONFIG['ANNA_HOST'])
+    if not annas_hosts:
+        return False, "No Annas hosts found"
     for host in annas_hosts:
         prefix = ''
         if not host.startswith('http'):
@@ -429,7 +431,7 @@ def annas_download(md5, folder, title, extn, domain_index=0):
         logger.error(errmsg)
         return False, errmsg
     if response.status_code == 409:
-        errmsg = (f"Error Status: {response.status_code} Over your daily limit.")
+        errmsg = f"Error Status: {response.status_code} Over your daily limit."
     else:
         downloadlogger.debug(url)
         downloadlogger.debug(str(params))

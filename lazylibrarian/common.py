@@ -458,7 +458,7 @@ def log_header(online=True) -> str:
         import iso639
         vers = getattr(iso639, "__version__", None)
         if not vers:
-            vers = "installed"
+            vers = "iso639-lang installed"
     except Exception:
         vers = "not found"
     header += f"iso639: {vers}\n"
