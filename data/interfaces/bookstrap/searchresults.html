@@ -184,7 +184,7 @@
     <p><a class="${but_class2} btn btn-xs" href="${destination2}">${value2}</a></p>
     <p><a class="${but_class3} btn btn-xs" href="${destination3}">${value3}</a></p>
   </td>
-  <td class="fuzz text-right">${result['highest_fuzz']}%</td>
+  <td class="fuzz text-right">${round(result['highest_fuzz'], 2)}%</td>
 </tr>
 %endfor
 %endif
