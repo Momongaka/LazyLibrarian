@@ -368,11 +368,14 @@ class Api:
         if not CONFIG.get_bool('API_ENABLED'):
             self.data = {'Success': False, 'Data': '', 'Error': {'Code': 501, 'Message': 'API not enabled'}}
             return
-        if not CONFIG.get_str('API_KEY'):
+        if not CONFIG.get_str('API_KEY') and not CONFIG.get_str('API_RO_KEY'):
             self.data = {'Success': False, 'Data': '', 'Error': {'Code': 501, 'Message': 'No API key'}}
             return
-        if len(CONFIG.get_str('API_KEY')) != 32:
+        if CONFIG.get_str('API_KEY') and len(CONFIG.get_str('API_KEY')) != 32:
             self.data = {'Success': False, 'Data': '', 'Error': {'Code': 503, 'Message': 'Invalid API key'}}
+            return
+        if CONFIG.get_str('API_RO_KEY') and len(CONFIG.get_str('API_RO_KEY')) != 32:
+            self.data = {'Success': False, 'Data': '', 'Error': {'Code': 503, 'Message': 'Invalid Read-Only API key'}}
             return
 
         if 'apikey' not in kwargs:
