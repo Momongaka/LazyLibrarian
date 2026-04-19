@@ -65,6 +65,7 @@ from lazylibrarian.comicid import cv_identify, cx_identify, name_words, title_wo
 from lazylibrarian.comicsearch import search_comics
 from lazylibrarian.common import (
     create_support_zip,
+    delete_empty_folders,
     get_readinglist,
     is_valid_email,
     log_header,
@@ -2364,17 +2365,24 @@ class WebInterface:
                         logger.info(f'Status set to "{action}" for "{check["AuthorName"]}"')
                         passed += 1
                     elif action == "Delete":
-                        logger.info(f"Deleting author and books: {check['AuthorName']}")
-                        books = db.select("SELECT BookFile from books WHERE AuthorID=? AND BookFile is not null",
-                                          (authorid,))
+                        logger.info(f"Deleting author and media files: {check['AuthorName']}")
+                        books = db.select("SELECT BookFile,AudioFile from books WHERE AuthorID=?", (authorid,))
                         for book in books:
-                            if path_exists(book['BookFile']):
-                                try:
-                                    foldername = os.path.dirname(book['BookFile'])
-                                    logger.debug(f"Deleting folder: {foldername}")
-                                    rmtree(foldername, ignore_errors=True)
-                                except Exception as e:
-                                    logger.warning(f'rmtree failed on {book["BookFile"]}, {type(e).__name__} {str(e)}')
+                            for location in [book['BookFile'], book['AudioFile']]:
+                                if location and path_exists(location):
+                                    try:
+                                        foldername = os.path.dirname(location)
+                                        logger.debug(f"Deleting folder: {foldername}")
+                                        rmtree(foldername, ignore_errors=True)
+                                    except Exception as e:
+                                        logger.warning(f'rmtree failed on {location}, {type(e).__name__} {str(e)}')
+
+                        delete_empty_folders(CONFIG['EBOOK_DIR'])
+                        if CONFIG['MAG_RELATIVE']:
+                            audio_folder = os.path.join(CONFIG['EBOOK_DIR'], CONFIG['AUDIO_DIR'])
+                        else:
+                            audio_folder = CONFIG['AUDIO_DIR']
+                        delete_empty_folders(audio_folder)
 
                         db.action('DELETE from authors WHERE AuthorID=?', (authorid,))
                         passed += 1
