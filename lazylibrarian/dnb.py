@@ -96,7 +96,7 @@ class DNB:
     def search(self, query: str, generic_cover: str = "", start=0, limit=10) -> list | None:
         try:
             if not self.active:
-                return None
+                return []
 
             val = []
             in_cache = 0
@@ -187,7 +187,7 @@ class DNB:
         # Add filters to exclude non-book materials
         filtered_queries = []
         for q in queries:
-            filtered_q = f'{q} NOT (mat=film OR mat=music OR mat=microfiches OR cod=tt)'
+            filtered_q = f'{q} NOT (mat=film OR mat=music OR mat=microfiches)'  # OR cod=tt)' allow audiobook results
             filtered_queries.append(filtered_q)
 
         return filtered_queries
@@ -237,10 +237,17 @@ class DNB:
                 response = requests.get(query_url, headers=headers, timeout=timeout)
                 response.raise_for_status()
 
-                self.logger.debug(f"CacheHandler: Storing xml {myhash}")
+                self.logger.debug(f"CacheHandler: Storing xml {hashfilename}")
                 with open(syspath(hashfilename), "wb") as cachefile:
                     cachefile.write(response.content)
-                xml_data = etree.XML(response.content)
+
+                cleaned_response = re.sub(b"&(?!amp;)", b"&amp;", response.content)
+                try:
+                    xml_data = etree.XML(cleaned_response)
+                except TypeError as e:
+                    self.logger.error(f'XML error: {e}')
+                    return [], False
+
 
             num_records = xml_data.xpath("./zs:numberOfRecords",
                                          namespaces={"zs": "http://www.loc.gov/zing/srw/"})[0].text.strip()
@@ -254,6 +261,7 @@ class DNB:
                                               "zs": "http://www.loc.gov/zing/srw/"}), valid_cache
         except Exception as e:
             self.logger.error(f'DNB query error: {e}')
+            self.logger.error(f'{traceback.format_exc()}')
             return [], False  # Return empty list, not None
 
     def is_in_cache(self, expiry: int, hashfilename: str, myhash: str) -> bool:
@@ -307,18 +315,18 @@ class DNB:
         }
 
         # Skip audio/video content
-        try:
-            mediatype = record.xpath("./marc21:datafield[@tag='336']/marc21:subfield[@code='a']",
-                                     namespaces=ns)[0].text.strip().lower()
-            if mediatype in 'gesprochenes wort':
-                return None
-        except (IndexError, AttributeError):
-            pass
+        # try:
+        #    mediatype = record.xpath("./marc21:datafield[@tag='336']/marc21:subfield[@code='a']",
+        #                             namespaces=ns)[0].text.strip().lower()
+        #    if mediatype in 'gesprochenes wort':
+        #        return None
+        # except (IndexError, AttributeError):
+        #    pass
 
         try:
             mediatype = record.xpath("./marc21:datafield[@tag='337']/marc21:subfield[@code='a']",
                                      namespaces=ns)[0].text.strip().lower()
-            if mediatype in ('audio', 'video'):
+            if mediatype == 'video':  # in ('audio', 'video'):
                 return None
         except (IndexError, AttributeError):
             pass
@@ -728,7 +736,8 @@ class DNB:
     def _remove_sorting_characters(text):
         """Remove sorting word markers"""
         if text:
-            return ''.join([c for c in text if ord(c) != 152 and ord(c) != 156])
+            return text.replace('&#152;', '').replace('&#156;', '')
+            # return ''.join([c for c in text if ord(c) != 152 and ord(c) != 156])
         return None
 
     def _clean_title(self, title):
