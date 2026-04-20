@@ -734,10 +734,10 @@ class DNB:
     # Helper functions adapted from original plugin
     @staticmethod
     def _remove_sorting_characters(text):
-        """Remove sorting word markers"""
+        """Remove sorting word markers, which may be raw or encoded"""
         if text:
-            return text.replace('&#152;', '').replace('&#156;', '')
-            # return ''.join([c for c in text if ord(c) != 152 and ord(c) != 156])
+            text = text.replace('&#152;', '').replace('&#156;', '')
+            return ''.join([c for c in text if ord(c) != 152 and ord(c) != 156])
         return None
 
     def _clean_title(self, title):
