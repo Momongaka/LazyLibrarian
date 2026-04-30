@@ -3189,6 +3189,9 @@ class WebInterface:
                 # now add html to the ones we want to display
                 data = []  # the masterlist to be filled with the html data
                 for row in rows:
+                    title = row[2]
+                    if not title:
+                        continue
                     worklink = ''
                     sitelink = ''
                     if CONFIG.get_bool('RATESTARS'):
@@ -3222,7 +3225,7 @@ class WebInterface:
                         sitelink = f'<a href="{row[9]}"><small><i>HardCover</i></small></a>'
                     elif 'books.google.com' in row[9] or 'market.android.com' in row[9]:
                         sitelink = f'<a href="{row[9]}"><small><i>GoogleBooks</i></small></a>'
-                    title = row[2]
+
                     if row[8] and ' #' not in row[8] and row[8] != "None":  # is there a subtitle that's not series info
                         title = f'{title}<br><small><i>{row[8]}</i></small>'
                     # elif row[20]:  # series info
@@ -6658,10 +6661,14 @@ class WebInterface:
                 remove_file(fname + extn)
             # if the directory is now empty, delete that too
             if CONFIG.get_bool('MAG_DELFOLDER'):
+                parent_dir = syspath(os.path.dirname(issuefile))
+                files = os.listdir(parent_dir)
                 try:
-                    os.rmdir(syspath(os.path.dirname(issuefile)))
+                    if len(files) == 1 and '.ll_ignore' in files:
+                        remove_file('.ll_ignore')
+                    os.rmdir(parent_dir)
                 except OSError as e:
-                    logger.debug(f'Directory {os.path.dirname(issuefile)} not deleted: {str(e)}')
+                    logger.debug(f'Directory {parent_dir} not deleted: {str(e)}')
             return True
         except Exception as e:
             logger.warning(f'delete issue failed on {issuefile}, {type(e).__name__} {str(e)}')

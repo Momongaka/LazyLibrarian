@@ -1668,7 +1668,7 @@ def _process_matched_directory(
             while fname_prefix and fname_prefix[-1] in "_.  ":
                 fname_prefix = fname_prefix[:-1]
 
-            # Determine if we should copy or move
+            # Determine if we should copy or move or link
             if CONFIG.get_bool("DESTINATION_COPY") or (
                 book_state.is_torrent() and CONFIG.get_bool("KEEP_SEEDING")
             ):

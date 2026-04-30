@@ -376,7 +376,7 @@ def make_dirs(dest_path, new=False) -> bool:
 
 
 def safe_move(src, dst, action='move'):
-    """ Move or copy src to dst
+    """ Move or copy or symlink src to dst
         Retry without accents if unicode error as some file systems can't handle (some) accents
         Retry with some characters stripped if bad filename
         e.g. Windows can't handle <>?"*:| (and maybe others) in filenames
@@ -391,6 +391,8 @@ def safe_move(src, dst, action='move'):
         try:
             if action == 'copy':
                 shutil.copyfile(syspath(src), syspath(dst))
+            elif action == 'symlink':
+                os.symlink(syspath(src), syspath(dst))
             elif path_isdir(src) and dst.startswith(src):
                 _ = copy_tree(syspath(src), syspath(dst))
             else:

@@ -592,6 +592,15 @@ def check_db(upgradelog=None):
                 logger.warning(msg)
                 db.action("DELETE from magazines WHERE Title IS NULL or Title = ''")
 
+            # remove books with no title
+            lazylibrarian.UPDATE_MSG = 'Removing books with no title'
+            mags = db.select("SELECT BookName FROM books WHERE BookName IS NULL or BookName = ''")
+            if mags:
+                cnt += len(mags)
+                msg = f"Removing {len(mags)} {plural(len(mags), 'book')} with no title"
+                logger.warning(msg)
+                db.action("DELETE from books WHERE BookName IS NULL or BookName = ''")
+
             # remove authors with no books
             lazylibrarian.UPDATE_MSG = 'Removing authors with no listed books'
             authors = db.select('SELECT AuthorID FROM authors WHERE TotalBooks=0')

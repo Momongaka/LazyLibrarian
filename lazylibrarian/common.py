@@ -607,7 +607,7 @@ def delete_empty_folders(root):
                 still_has_subdirs = True
                 break
 
-        if not any(files) and not still_has_subdirs:
+        if (len(files) == 1 and '.ll_ignore' in files) or (not any(files) and not still_has_subdirs):
             os.rmdir(current_dir)
             deleted.add(current_dir)
 
