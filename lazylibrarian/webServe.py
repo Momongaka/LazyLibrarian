@@ -6687,131 +6687,137 @@ class WebInterface:
         lazylibrarian.MARK_ISSUES = True
         passed = 0
         failed = 0
+        title = ''
         for itm in args:
-            if not lazylibrarian.MARK_ISSUES:
-                break
-            title = itm
-            if action == "Paused" or action == "Active":
-                control_value_dict = {"Title": title}
-                new_value_dict = {"Status": action}
-                db.upsert("magazines", new_value_dict, control_value_dict)
-                logger.info(f'Status of magazine {title} changed to {action}')
-                passed += 1
-
-            if action == "Delete":
-                issues = db.select('SELECT * from issues WHERE Title=?', (title,))
-                logger.debug(f'Deleting magazine {title} from disc')
-                issuedir = ''
-                for issue in issues:  # delete all issues of this magazine
-                    result = self.delete_issue(issue['IssueFile'])
-                    if result:
-                        passed += 1
-                        logger.debug(f'Issue {issue["IssueFile"]} deleted from disc')
-                        if CONFIG['IMP_CALIBREDB'] and CONFIG.get_bool('IMP_CALIBRE_MAGAZINE'):
-                            self.delete_from_calibre(issue)
-                        issuedir = os.path.dirname(issue['IssueFile'])
-                    else:
-                        failed += 1
-                        logger.debug(f'Failed to delete {issue["IssueFile"]}')
-
-                # if the directory is now empty, delete that too
-                if issuedir and CONFIG.get_bool('MAG_DELFOLDER'):
-                    magdir = os.path.dirname(issuedir)
-                    try:
-                        os.rmdir(syspath(magdir))
-                        logger.debug(f'Magazine directory {magdir} deleted from disc')
-                    except OSError:
-                        logger.debug(f'Magazine directory {magdir} is not empty')
-                        failed += 1
-                    logger.info(f'Magazine {title} deleted from disc')
-
-            if action == 'tag':
-                issues = db.select('SELECT * from issues WHERE Title=?', (title,))
-                mag = db.match('SELECT Language,Genre FROM magazines where Title=?', (title,))
-                total_items += len(issues)
-                for issue in issues:
-                    logger.debug(f"Tagging {issue['IssueFile']}")
-                    current_item += 1
-                    current_percent = int(current_item * 100 / total_items)
-                    lazylibrarian.magazinescan_data = f"{current_item}/{total_items}/{current_percent}"
-                    genres = mag[1]
-                    tags = {}
-                    cnt = 1
-                    for itm in get_list(genres):
-                        tags[f'/Genre_{cnt}'] = itm
-                        cnt += 1
-                    try:
-                        res = write_pdf_tags(issue['IssueFile'], title, issue["IssueDate"], tags)
-                    except Exception as e:
-                        logger.error(f"Failed to tag {issue['IssueFile']}: {e}")
-                        res = False
-                    if not res:
-                        failed += 1
-                    else:
-                        passed += 1
-                        if CONFIG.get_bool('IMP_MAGOPF'):
-                            logger.debug(f"Writing opf for {issue['IssueFile']}")
-                            _, _ = lazylibrarian.metadata_opf.create_mag_opf(issue['IssueFile'], title,
-                                                                             issue["IssueDate"],
-                                                                             issue["IssueID"],
-                                                                             language=mag[0],
-                                                                             genres=genres,
-                                                                             overwrite=True)
-
-            if action == 'Scan':
-                magazine_scan(title)
-
-            if action == 'Search':
-                if CONFIG.use_any():
-                    logger.debug(f"Searching for magazine: {title}")
-                    search_magazines([{"bookid": title}], False, False)
+            try:
+                if not lazylibrarian.MARK_ISSUES:
+                    break
+                title = itm
+                if action == "Paused" or action == "Active":
+                    control_value_dict = {"Title": title}
+                    new_value_dict = {"Status": action}
+                    db.upsert("magazines", new_value_dict, control_value_dict)
+                    logger.info(f'Status of magazine {title} changed to {action}')
                     passed += 1
-                else:
-                    logger.warning("Not searching for magazine, no download methods set, check config")
 
-            if action == "Remove" or action == "Delete":
-                db.action('DELETE from magazines WHERE Title=? COLLATE NOCASE', (title,))
-                db.action('DELETE from pastissues WHERE BookID=? COLLATE NOCASE', (title,))
-                db.action('DELETE from wanted where BookID=? COLLATE NOCASE', (title,))
-                logger.info(f'Magazine {title} removed from database')
-                passed += 1
-            elif action == "Reset":
-                control_value_dict = {"Title": title}
-                new_value_dict = {
-                    "LastAcquired": '',
-                    "IssueDate": '',
-                    "LatestCover": '',
-                    "IssueStatus": "Wanted"
-                }
-                db.upsert("magazines", new_value_dict, control_value_dict)
-                logger.info(f'Magazine {title} details reset')
-                passed += 1
-            elif action == 'Subscribe':
-                cookie = cherrypy.request.cookie
-                if cookie and 'll_uid' in list(cookie.keys()):
-                    userid = cookie['ll_uid'].value
-                    res = db.match("SELECT * from subscribers WHERE UserID=? and Type=? and WantID=?",
-                                   (userid, 'magazine', title))
-                    if res:
-                        logger.debug(f"User {userid} is already subscribed to {title}")
-                        failed += 1
-                    else:
-                        db.action('INSERT into subscribers (UserID, Type, WantID) VALUES (?, ?, ?)',
-                                  (userid, 'magazine', title))
-                        logger.debug(f"Subscribe {userid} to magazine {title}")
+                if action == "Delete":
+                    issues = db.select('SELECT * from issues WHERE Title=?', (title,))
+                    logger.debug(f'Deleting magazine {title} from disc')
+                    issuedir = ''
+                    for issue in issues:  # delete all issues of this magazine
+                        result = self.delete_issue(issue['IssueFile'])
+                        if result:
+                            passed += 1
+                            logger.debug(f'Issue {issue["IssueFile"]} deleted from disc')
+                            if CONFIG['IMP_CALIBREDB'] and CONFIG.get_bool('IMP_CALIBRE_MAGAZINE'):
+                                self.delete_from_calibre(issue)
+                            issuedir = os.path.dirname(issue['IssueFile'])
+                        else:
+                            failed += 1
+                            logger.debug(f'Failed to delete {issue["IssueFile"]}')
+
+                    # if the directory is now empty, delete that too
+                    if issuedir and CONFIG.get_bool('MAG_DELFOLDER'):
+                        magdir = os.path.dirname(issuedir)
+                        try:
+                            os.rmdir(syspath(magdir))
+                            logger.debug(f'Magazine directory {magdir} deleted from disc')
+                        except OSError:
+                            logger.debug(f'Magazine directory {magdir} is not empty')
+                            failed += 1
+                        logger.info(f'Magazine {title} deleted from disc')
+
+                if action == 'tag':
+                    issues = db.select('SELECT * from issues WHERE Title=?', (title,))
+                    mag = db.match('SELECT Language,Genre FROM magazines where Title=?', (title,))
+                    total_items += len(issues)
+                    for issue in issues:
+                        logger.debug(f"Tagging {issue['IssueFile']}")
+                        current_item += 1
+                        current_percent = int(current_item * 100 / total_items)
+                        lazylibrarian.magazinescan_data = f"{current_item}/{total_items}/{current_percent}"
+                        genres = mag[1]
+                        tags = {}
+                        cnt = 1
+                        for itm in get_list(genres):
+                            tags[f'/Genre_{cnt}'] = itm
+                            cnt += 1
+                        try:
+                            res = write_pdf_tags(issue['IssueFile'], title, issue["IssueDate"], tags)
+                        except Exception as e:
+                            logger.error(f"Failed to tag {issue['IssueFile']}: {e}")
+                            res = False
+                        if not res:
+                            failed += 1
+                        else:
+                            passed += 1
+                            if CONFIG.get_bool('IMP_MAGOPF'):
+                                logger.debug(f"Writing opf for {issue['IssueFile']}")
+                                _, _ = lazylibrarian.metadata_opf.create_mag_opf(issue['IssueFile'], title,
+                                                                                 issue["IssueDate"],
+                                                                                 issue["IssueID"],
+                                                                                 language=mag[0],
+                                                                                 genres=genres,
+                                                                                 overwrite=True)
+
+                if action == 'Scan':
+                    magazine_scan(title)
+                    passed += 1
+
+                if action == 'Search':
+                    if CONFIG.use_any():
+                        logger.debug(f"Searching for magazine: {title}")
+                        search_magazines([{"bookid": title}], False, False)
                         passed += 1
-            elif action == 'Unsubscribe':
-                cookie = cherrypy.request.cookie
-                if cookie and 'll_uid' in list(cookie.keys()):
-                    userid = cookie['ll_uid'].value
-                    db.action('DELETE from subscribers WHERE UserID=? and Type=? and WantID=?',
-                              (userid, 'magazine', title))
-                    res = db.select('SELECT issueid from issues where title=?', (title, ))
-                    for iss in res:
+                    else:
+                        logger.warning("Not searching for magazine, no download methods set, check config")
+
+                if action == "Remove" or action == "Delete":
+                    db.action('DELETE from magazines WHERE Title=? COLLATE NOCASE', (title,))
+                    db.action('DELETE from pastissues WHERE BookID=? COLLATE NOCASE', (title,))
+                    db.action('DELETE from wanted where BookID=? COLLATE NOCASE', (title,))
+                    logger.info(f'Magazine {title} removed from database')
+                    passed += 1
+                elif action == "Reset":
+                    control_value_dict = {"Title": title}
+                    new_value_dict = {
+                        "LastAcquired": '',
+                        "IssueDate": '',
+                        "LatestCover": '',
+                        "IssueStatus": "Wanted"
+                    }
+                    db.upsert("magazines", new_value_dict, control_value_dict)
+                    logger.info(f'Magazine {title} details reset')
+                    passed += 1
+                elif action == 'Subscribe':
+                    cookie = cherrypy.request.cookie
+                    if cookie and 'll_uid' in list(cookie.keys()):
+                        userid = cookie['ll_uid'].value
+                        res = db.match("SELECT * from subscribers WHERE UserID=? and Type=? and WantID=?",
+                                       (userid, 'magazine', title))
+                        if res:
+                            logger.debug(f"User {userid} is already subscribed to {title}")
+                            failed += 1
+                        else:
+                            db.action('INSERT into subscribers (UserID, Type, WantID) VALUES (?, ?, ?)',
+                                      (userid, 'magazine', title))
+                            logger.debug(f"Subscribe {userid} to magazine {title}")
+                            passed += 1
+                elif action == 'Unsubscribe':
+                    cookie = cherrypy.request.cookie
+                    if cookie and 'll_uid' in list(cookie.keys()):
+                        userid = cookie['ll_uid'].value
                         db.action('DELETE from subscribers WHERE UserID=? and Type=? and WantID=?',
-                                  (userid, 'magazine', iss['issueid']))
-                    logger.debug(f"Unsubscribe {userid} to magazine {title}")
-                passed += 1
+                                  (userid, 'magazine', title))
+                        res = db.select('SELECT issueid from issues where title=?', (title, ))
+                        for iss in res:
+                            db.action('DELETE from subscribers WHERE UserID=? and Type=? and WantID=?',
+                                      (userid, 'magazine', iss['issueid']))
+                        logger.debug(f"Unsubscribe {userid} to magazine {title}")
+                    passed += 1
+
+            except Exception as e:
+                logger.error(f'Unable to {action} {title}: {type(e).__name__} {str(e)}')
 
         logger.debug(f"{action}:{title}: Pass {passed}, Fail {failed}")
         db.close()
