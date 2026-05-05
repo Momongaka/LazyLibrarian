@@ -33,7 +33,8 @@ def get_client():
         url = f"{host}:{port}"
 
     try:
-        qb = Client(url, CONFIG['QBITTORRENT_USER'], CONFIG['QBITTORRENT_PASS'])
+        verify_ssl = not CONFIG.get_bool('QBITTORRENT_IGNORE_SSL')
+        qb = Client(url, CONFIG['QBITTORRENT_USER'], CONFIG['QBITTORRENT_PASS'], verify=verify_ssl)
     except WrongCredentials:
         logger.error("qBittorrent reports Wrong Credentials")
         return None

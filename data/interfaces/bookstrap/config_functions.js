@@ -414,7 +414,8 @@
             let user = $.trim($("#qbittorrent_user").val());
             let pwd = $.trim($("#qbittorrent_pass").val());
             let label = $.trim($("#qbittorrent_label").val());
-            $.get('test_qbittorrent', {'host': host, 'port': port, 'base': base, 'user': user, 'pwd': pwd, 'label': label},
+            let ignore_ssl = $("#qbittorrent_ignore_ssl").is(':checked') ? '1' : '0';
+            $.get('test_qbittorrent', {'host': host, 'port': port, 'base': base, 'user': user, 'pwd': pwd, 'label': label, 'ignore_ssl': ignore_ssl},
                 function(data) {
                 bootbox.dialog({
                     title: 'qBittorrent Connection',

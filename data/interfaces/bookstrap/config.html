@@ -1433,6 +1433,17 @@
                           <br>
                         </div>
                       </div>
+                      <div class="row">
+                        <div class="col-md-12">
+                          <div class="checkbox">
+                            <% checked = 'checked="checked"' if CONFIG['QBITTORRENT_IGNORE_SSL'] else '' %>
+                            <label for="qbittorrent_ignore_ssl" class="control-label">
+                              <input type="checkbox" id="qbittorrent_ignore_ssl" name="qbittorrent_ignore_ssl" value="1" ${checked} />
+                              Ignore SSL certificate verification
+                            </label>
+                          </div>
+                        </div>
+                      </div>
                     </fieldset>
                     <div class="checkbox">
                       <% checked = 'checked="checked"' if CONFIG['TOR_DOWNLOADER_BLACKHOLE'] else '' %>

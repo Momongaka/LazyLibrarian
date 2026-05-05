@@ -6688,6 +6688,7 @@ class WebInterface:
         passed = 0
         failed = 0
         title = ''
+        logger.debug(f"Marking {len(args)} {action}")
         for itm in args:
             try:
                 if not lazylibrarian.MARK_ISSUES:
@@ -6833,7 +6834,7 @@ class WebInterface:
         else:
             summary += " No items were processed."
 
-        return {
+        res = {
             'success': True,
             'action': action,
             'passed': passed,
@@ -6841,6 +6842,9 @@ class WebInterface:
             'total': total,
             'summary': summary
         }
+        logger.debug(f"{res}")
+        logger.debug(f"Returning to {get_info_on_caller(depth=1)}")
+        return res
 
     @cherrypy.expose
     @require_auth()
@@ -8684,6 +8688,8 @@ class WebInterface:
                 CONFIG.set_str('QBITTORRENT_LABEL', kwargs['label'])
             else:
                 fail += 'label '
+        if 'ignore_ssl' in kwargs:
+            CONFIG.set_bool('QBITTORRENT_IGNORE_SSL', kwargs['ignore_ssl'] == '1')
         if fail:
             msg = f'QbitTorrent failed, bad parameter: {fail}'
         else:
