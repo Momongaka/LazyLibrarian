@@ -15,7 +15,7 @@ import os
 import time
 
 from lazylibrarian.config2 import CONFIG
-from lib.qbittorrent import Client, WrongCredentials
+from lib.qbittorrent import Client, WrongCredentialsError
 
 
 def get_client():
@@ -35,7 +35,7 @@ def get_client():
     try:
         verify_ssl = not CONFIG.get_bool('QBITTORRENT_IGNORE_SSL')
         qb = Client(url, CONFIG['QBITTORRENT_USER'], CONFIG['QBITTORRENT_PASS'], verify=verify_ssl)
-    except WrongCredentials:
+    except WrongCredentialsError:
         logger.error("qBittorrent reports Wrong Credentials")
         return None
     except Exception as e:
