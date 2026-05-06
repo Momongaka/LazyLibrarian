@@ -1,12 +1,13 @@
 # modified from https://github.com/v1k45/python-qBittorrent
 
 import json
-from typing import Optional
+
 import requests
+
 from lazylibrarian.common import proxy_list
 
 
-class WrongCredentials(Exception):
+class WrongCredentialsError(Exception):
     def __str__(self):
         return "Please make sure the username and password are correct"
 
@@ -65,7 +66,7 @@ class Client:
         Updates the username and attempts to re-login
 
         :param value:
-        :raises WrongCredentials: If the username & password combination are wrong
+        :raises WrongCredentialsError: If the username & password combination are wrong
         :return:
         """
         self._username = value
@@ -81,7 +82,7 @@ class Client:
         Updates the password and attempts to re-login
 
         :param value:
-        :raises WrongCredentials: If the username & password combination are wrong
+        :raises WrongCredentialsError: If the username & password combination are wrong
         :return:
         """
         self._password = value
@@ -106,11 +107,11 @@ class Client:
         In case you need to update both username and password you can use this function instead of the property
         setters. It will attempt to log in after changes are made.
 
-        This should avoid raising WrongCredentials when both credentials change.
+        This should avoid raising WrongCredentialsError when both credentials change.
 
         :param username:
         :param password:
-        :raises WrongCredentials: If the username & password combination are wrong
+        :raises WrongCredentialsError: If the username & password combination are wrong
         :return:
         """
         self._username = username
@@ -188,7 +189,7 @@ class Client:
         stores the authenticated session if the login is correct.
         Else, shows the login error.
 
-        :raises WrongCredentials: When given credentials are wrong
+        :raises WrongCredentialsError: When given credentials are wrong
         :return:
         """
         self._session = requests.Session()
@@ -202,12 +203,12 @@ class Client:
             data={"username": self.username, "password": self.password},
             verify=self._verify,
         )
-        if login.text == "Ok.":
+        if login.text == "Ok." or login.status_code == 204:
             return
 
-        raise WrongCredentials
+        raise WrongCredentialsError
 
-    def logout(self) -> Optional[requests.Response]:
+    def logout(self) -> requests.Response | None:
         """
         Logout the current session.
         """
@@ -444,7 +445,7 @@ class Client:
         if isinstance(file_buffer, list):
             torrent_files = {}
             for i, f in enumerate(file_buffer):
-                torrent_files.update({"torrents%s" % i: f})
+                torrent_files.update({f"torrents{i}": f})
         else:
             torrent_files = {"torrents": file_buffer}
 
@@ -704,7 +705,7 @@ class Client:
         """
         if priority not in [0, 1, 2, 4, 6, 7]:
             raise ValueError("Invalid priority, refer WEB-UI docs for info.")
-        elif not isinstance(file_id, int):
+        if not isinstance(file_id, int):
             raise TypeError("File ID must be an int")
 
         data = {"hash": infohash.lower(), "id": file_id, "priority": priority}
@@ -805,7 +806,7 @@ class Client:
 
         :param kwargs: set preferences in kwargs form.
         """
-        json_data = "json={}".format(json.dumps(kwargs))
+        json_data = f"json={json.dumps(kwargs)}"
         headers = {"content-type": "application/x-www-form-urlencoded"}
         return self._post("app/setPreferences", data=json_data, headers=headers)
 
