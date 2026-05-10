@@ -2332,7 +2332,21 @@ class WebInterface:
                 booklist.append(itm['BookID'])
         booklist = list(set(booklist))
         # we don't know if searchfor is an author, book or isbn
-        searchresults = search_for(searchfor, CONFIG['BOOK_API'])
+        try:
+            searchresults = search_for(searchfor, CONFIG['BOOK_API'])
+            logger.debug(f"Found {len(searchresults)} from {CONFIG['BOOK_API']}")
+            if CONFIG.get_bool('MULTI_SOURCE'):
+                for info_source in lazylibrarian.INFOSOURCES.keys():
+                    itm = lazylibrarian.INFOSOURCES[info_source]
+                    if CONFIG['BOOK_API'] != info_source and CONFIG[itm['enabled']]:
+                        moreresults = search_for(searchfor, info_source)
+                        logger.debug(f"Found {len(moreresults)} from {info_source}")
+                        # Prefer our configured book api if equal matches by downgrading all the others slightly.
+                        for res in moreresults:
+                            res['highest_fuzz'] -= 1
+                            searchresults.append(res)
+        except Exception as e:
+            logger.debug(str(e))
         sortedlist = sorted(searchresults, key=lambda x: (x['highest_fuzz'], x['bookrate_count']),
                             reverse=True)
         lazylibrarian.SEARCHING = 0
