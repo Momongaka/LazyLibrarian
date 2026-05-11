@@ -19,6 +19,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from html import unescape as html_unescape
 from urllib.parse import urljoin, urlparse
@@ -383,7 +384,7 @@ def annas_download(md5, folder, title, extn, domain_index=0):
         CONFIG.set_int('ANNA_DLLIMIT', counters['downloads_per_day'])
         lazylibrarian.TIMERS['ANNA_REMAINING'] = counters['downloads_left']
         if counters['downloads_left'] == 0:
-            msg = f"Download limit ({counters['downloads_per_day']}) reached"
+            msg = f"Download limit reached ({counters})"
             block_annas(counters['downloads_per_day'])
             return False, msg
         url = res['download_url']
@@ -415,13 +416,9 @@ def annas_download(md5, folder, title, extn, domain_index=0):
                 with open(dest_filename, 'wb') as f:
                     f.write(filedata)
                 logger.debug(f"Data written to file {dest_filename}")
-                if counters['downloads_left'] == 1:
-                    # just used the last download
-                    block_annas(counters['downloads_per_day'])
-                else:
-                    lazylibrarian.TIMERS['ANNA_REMAINING'] = counters['downloads_left'] - 1
-                    logger.info(f"Anna {lazylibrarian.TIMERS['ANNA_REMAINING']} remaining "
-                                f"of {counters['downloads_per_day']}")
+                lazylibrarian.TIMERS['ANNA_REMAINING'] = counters['downloads_left'] - 1
+                logger.info(f"Anna {lazylibrarian.TIMERS['ANNA_REMAINING']} remaining "
+                            f"of {counters['downloads_per_day']}")
                 return True, dest_filename
             except Exception as e:
                 logger.debug(str(e))
@@ -542,11 +539,25 @@ def anna_search(book=None, searchtype='ebook', test=False):
 
 
 def block_annas(dl_limit=0):
+    logger = logging.getLogger(__name__)
     grabs, oldest = anna_grabs()
-    # rolling 18hr delay if limit reached
-    delay = oldest + 18 * 60 * 60 - time.time()
-    res = f"Reached Daily download limit ({grabs}/{dl_limit})"
-    BLOCKHANDLER.block_provider("annas", res, delay=delay)
+    if dl_limit and grabs >= dl_limit:
+        old_datestr = datetime.utcfromtimestamp(oldest).strftime('%Y-%m-%d %H:%M:%S')
+        # rolling delay if limit reached
+        resume = oldest + (18 * 60 * 60)
+        if resume > time.time():
+            delay = time.time() - resume
+        else:
+            # default delay if our grab was too old (it wasn't us)
+            delay = (30 * 60)
+
+        logger.debug(f"Grabs: {grabs}, Oldest: {old_datestr}, Limit: {dl_limit}, Delay: {delay}")
+        res = f"Reached Daily download limit ({grabs}/{dl_limit})"
+        BLOCKHANDLER.block_provider("annas", res, delay=delay)
+    else:
+        # we haven't grabbed enough, someone else is also using annas, wait 30 mins...
+        res = f"Anna reports 0 left of {dl_limit}"
+        BLOCKHANDLER.block_provider("annas", res, delay=30 * 60)
 
 
 def anna_grabs() -> tuple[int, int]:
@@ -554,7 +565,7 @@ def anna_grabs() -> tuple[int, int]:
     # so although we can count how many we downloaded, normally we ask anna and use their counter
     # If we are over limit we try to use our datestamp to find out when the counter will reset
     db = database.DBConnection()
-    eighteen_hours_ago = time.time() - 18 * 60 * 60
+    eighteen_hours_ago = time.time() - (18 * 60 * 60)
     grabs = db.select("SELECT completed from wanted WHERE nzbprov='annas' and completed > ? order by completed",
                       (eighteen_hours_ago,))
     db.close()
