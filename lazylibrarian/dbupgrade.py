@@ -1082,9 +1082,7 @@ def db_v56(db, upgradelog):
         issues = db.select('SELECT * from comicissues')
         tot = len(issues)
         start_time = time.time()
-        cnt = 0
-        for issue in issues:
-            cnt += 1
+        for cnt, issue in enumerate(issues, start=1):
             lazylibrarian.UPDATE_MSG = (f"Updating comicissue cover for {issue['IssueFile']}: "
                                         f"{calc_eta(start_time, tot, cnt)}")
             coverfile = f"{splitext(issue['IssueFile'])[0]}.jpg"

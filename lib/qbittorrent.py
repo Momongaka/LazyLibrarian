@@ -203,6 +203,7 @@ class Client:
             data={"username": self.username, "password": self.password},
             verify=self._verify,
         )
+        # qbittorrent 5.xx sometimes returns status code 204
         if login.text == "Ok." or login.status_code == 204:
             return
 

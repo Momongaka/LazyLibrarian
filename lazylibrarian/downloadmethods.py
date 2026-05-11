@@ -351,6 +351,7 @@ def direct_dl_method(bookid=None, dl_title=None, dl_url=None, library='eBook', p
         count = TIMERS['ANNA_REMAINING']
         dl_limit = CONFIG.get_int('ANNA_DLLIMIT')
         if dl_limit and count <= 0:
+            TIMERS['ANNA_REMAINING'] = 0
             block_annas(dl_limit)
             return False, f"Download limit {dl_limit} reached"
 

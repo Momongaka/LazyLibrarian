@@ -563,14 +563,17 @@ def _transfer_matching_files(
     cnt = 0
     list_dir = listdir(sourcedir)
     valid_extensions = CONFIG.get_all_types_list()
-
+    logger.debug(f"Scanning {list_dir}")
+    logger.debug(f"Valid extensions {valid_extensions}")
     for _ourfile in list_dir:
         ourfile = str(_ourfile)
+        logger.debug(f"Checking if {ourfile} matches {fname_prefix}")
         # Only transfer files that start with our book's name and are valid media files
         if ourfile.startswith(fname_prefix) and is_valid_type(ourfile, extensions=valid_extensions):
             try:
                 srcfile = os.path.join(sourcedir, ourfile)
                 dstfile = os.path.join(targetdir, ourfile)
+                logger.debug(f"Trying to {'copy' if copy else 'move'} {srcfile} to {dstfile}")
 
                 if copy:
                     dstfile = safe_copy(srcfile, dstfile)
