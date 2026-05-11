@@ -81,7 +81,7 @@ class GoodReads:
                 searchterm = searchterm.replace('<ll>', ' ')
                 searchtitle = searchtitle.split(' (')[0]  # without any series info
 
-            url = quote_plus(make_utf8bytes(searchterm)[0])
+            url = quote_plus(searchterm.encode("utf-8"))
             set_url = '/'.join([CONFIG['GR_URL'],
                                 f"search.xml?q={url}&{urlencode(self.params)}"])
             self.logger.debug(f'Now searching GoodReads API with searchterm: {searchterm}')
