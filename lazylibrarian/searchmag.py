@@ -364,7 +364,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
                             dateparts = get_dateparts(nzbtitle_formatted, datetype=datetype)
                             if dateparts['style']:
                                 logger.debug(f"Match {dateparts['dbdate']} (datestyle {dateparts['style']}) "
-                                             f"for {nzbtitle_formatted}, {datetype}")
+                                             f"for {nzbtitle_formatted}, [{datetype}]")
                             else:
                                 logger.debug(
                                     f'Magazine {nzbtitle_formatted} not in a recognised date format [{datetype}]')
@@ -377,20 +377,20 @@ def search_magazines(mags=None, reset=False, backissues=False):
                             if dateparts.get('dbdate'):
                                 issuedate = dateparts['dbdate']
                                 control_date = results['IssueDate']
-                                logger.debug(f"Control date: [{control_date}]")
+                                logger.debug(f"Latest IssueDate: [{control_date}]")
                                 if not control_date:  # we haven't got any copies of this magazine yet
                                     # get a rough time just over MAX_AGE days ago to compare to, in format yyyy-mm-dd
                                     # could perhaps calc differently for weekly, biweekly etc.
-                                    # For magazines with only an issue number use zero as we can't tell age
+                                    # For magazines with only an issue number use current year as we can't tell age
 
+                                    start_time = time.time()
+                                    start_time -= CONFIG.get_int('MAG_AGE') * 24 * 60 * 60
+                                    if start_time < 0:  # limit of unixtime (1st Jan 1970)
+                                        start_time = 0
                                     if issuedate.isdigit():
-                                        logger.debug(f'Magazine comparing issue numbers ({issuedate})')
-                                        control_date = 0
+                                        control_date = time.strftime("%Y0000", time.localtime(start_time))
+                                        logger.debug(f'Magazine comparing issue numbers to {control_date}')
                                     elif re.match(r'\d+-\d\d-\d\d', str(issuedate)):
-                                        start_time = time.time()
-                                        start_time -= CONFIG.get_int('MAG_AGE') * 24 * 60 * 60
-                                        if start_time < 0:  # limit of unixtime (1st Jan 1970)
-                                            start_time = 0
                                         control_date = time.strftime("%Y-%m-%d", time.localtime(start_time))
                                         logger.debug(f'Magazine date comparing to {control_date}')
                                     else:
@@ -447,7 +447,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
                                         'nzburl': nzburl,
                                         'nzbmode': nzbmode
                                     })
-                                    logger.debug(f'This issue of {nzbtitle_formatted} is new, downloading')
+                                    logger.debug(f'This issue ({issuedate}) of {nzbtitle_formatted} is new, downloading')
                                     issues.append(issue)
                                     logger.debug(f'Magazine request number {len(issues)}')
                                     searchinglogger.debug(str(issues))

@@ -2262,7 +2262,7 @@ def return_search_structure(provider: ConfigDict, api_key, book, search_type, se
                     "t": provider['BOOKSEARCH'],
                     "apikey": api_key,
                     "title": bookname.encode("utf-8"),
-                    "author": (authorname).encode("utf-8"),
+                    "author": authorname.encode("utf-8"),
                     "cat": provider['BOOKCAT']
                 }
         elif provider['GENERALSEARCH'] and provider['BOOKCAT']:  # if not, try general search
@@ -2278,8 +2278,8 @@ def return_search_structure(provider: ConfigDict, api_key, book, search_type, se
             params = {
                 "t": provider['AUDIOSEARCH'],
                 "apikey": api_key,
-                "title": (bookname).encode("utf-8"),
-                "author": (authorname).encode("utf-8"),
+                "title": bookname.encode("utf-8"),
+                "author": authorname.encode("utf-8"),
                 "cat": provider['AUDIOCAT']
             }
         elif provider['GENERALSEARCH'] and provider['AUDIOCAT']:  # if not, try general search
@@ -2295,14 +2295,14 @@ def return_search_structure(provider: ConfigDict, api_key, book, search_type, se
                 "t": provider['MAGSEARCH'],
                 "apikey": api_key,
                 "cat": provider['MAGCAT'],
-                "q": (book['searchterm'].replace(':', '')).encode("utf-8"),
+                "q": book['searchterm'].replace(':', '').encode("utf-8"),
             }
         elif provider['GENERALSEARCH'] and provider['MAGCAT']:
             params = {
                 "t": provider['GENERALSEARCH'],
                 "apikey": api_key,
                 "cat": provider['MAGCAT'],
-                "q": (book['searchterm'].replace(':', '')).encode("utf-8"),
+                "q": book['searchterm'].replace(':', '').encode("utf-8"),
             }
     else:
         if provider['GENERALSEARCH']:
@@ -2318,7 +2318,7 @@ def return_search_structure(provider: ConfigDict, api_key, book, search_type, se
             params = {
                 "t": provider['GENERALSEARCH'],
                 "apikey": api_key,
-                "q": (searchterm).encode("utf-8"),
+                "q": searchterm.encode("utf-8"),
             }
     if params:
         if provider['EXTENDED']:

@@ -547,6 +547,7 @@ def get_dateparts(title_or_issue, datetype=''):
     # 15 just a year (annual)
     # 16 to 18 internal issuedates used for filenames, YYYYIIII, VVVVIIII, YYYYVVVVIIII
     #
+    logger = logging.getLogger(__name__)
     dic = {'.': ' ', '-': ' ', '/': ' ', '+': ' ', '_': ' ', '(': '', ')': '', '[': ' ', ']': ' ', '#': '# '}
     words = replace_all(title_or_issue, dic).split()
     issuenouns = get_list(CONFIG['ISSUE_NOUNS'])
@@ -600,6 +601,7 @@ def get_dateparts(title_or_issue, datetype=''):
     # Radio.Times.31.May-06.June.2025 should return 31 May 2025
     # and Radio.Times.08-14.November.2025 should return 08 November 2025
     if months:
+        logger.debug(f"Months:[{months}] Words:[{words}]")
         while pos < len(words):
             if pos > 0 and month2num(words[pos]) == month:
                 first = check_int(re.sub(r"\D", "", words[pos - 1]), 0)
