@@ -6677,12 +6677,11 @@ class WebInterface:
             if CONFIG.get_bool('MAG_DELFOLDER'):
                 parent_dir = syspath(os.path.dirname(issuefile))
                 files = os.listdir(parent_dir)
-                try:
-                    if len(files) == 1 and '.ll_ignore' in files:
-                        remove_file('.ll_ignore')
-                    os.rmdir(parent_dir)
-                except OSError as e:
-                    logger.debug(f'Directory {parent_dir} not deleted: {str(e)}')
+                if not files or (len(files) == 1 and files[0] == '.ll_ignore'):
+                    rmtree(parent_dir)
+                else:
+                    logger.warning(f'Directory {parent_dir} not deleted as not empty')
+                    logger.debug(f"{files}")
             return True
         except Exception as e:
             logger.warning(f'delete issue failed on {issuefile}, {type(e).__name__} {str(e)}')
