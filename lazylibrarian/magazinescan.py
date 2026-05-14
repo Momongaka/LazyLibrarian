@@ -771,6 +771,7 @@ def get_dateparts(title_or_issue, datetype=''):
                             dateparts['day'] = 0
                             dateparts['style'] = 2
                 pos += 1
+
         # Issue/No/Nr/Vol/# nn with/without year in any position
         if not dateparts['style']:
             pos = 0
@@ -819,15 +820,13 @@ def get_dateparts(title_or_issue, datetype=''):
                 if check_year(words[pos]):
                     if words[pos - 1].isdigit():
                         if pos > 1 and words[pos - 2].isdigit():
+                            # we assume dd mm yyyy rather than mm dd yyyy
                             m = int(words[pos - 1])
                             d = int(words[pos - 2])
-                            # Most monthly magazines are 1st of the month
-                            # so if one of the numbers is 1 and the other is < 13
-                            # assume day 1 of month.
-                            # Otherwise if only one of the numbers is < 13 assume that's month
-                            if m == 1 and d < 13:
-                                m = d
-                                d = 1
+                            # unless overridden by per-title config
+                            if "MDY" in datetype:
+                                m, d = d, m
+                            # if only one of the numbers is < 13 assume month
                             if m < 13:
                                 dateparts['months'] = [m]
                                 dateparts['day'] = d
@@ -866,7 +865,14 @@ def get_dateparts(title_or_issue, datetype=''):
             dateparts['style'] = 14
 
     datetype_ok = True
-    if datetype and dateparts['style']:
+    if dateparts['year'] and dateparts['month'] and dateparts['day']:
+        # Check the components are a valid date, checks days in month and leap years
+        try:
+            _ = datetime.datetime.strptime(f"{dateparts['year']}-{dateparts['month']:02d}-{dateparts['day']:02d}", "%Y-%m-%d")
+        except ValueError:
+            datetype_ok = False
+
+    if datetype_ok and datetype and dateparts['style']:
         # check all wanted parts are in the result
         if 'M' in datetype and (dateparts['style'] not in [1, 2, 3, 4, 5, 6, 7, 12] or not dateparts['month']):
             datetype_ok = False
@@ -883,6 +889,7 @@ def get_dateparts(title_or_issue, datetype=''):
         if 'Y' in datetype and (dateparts['style'] not in [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 15, 16, 18]
                                 or not dateparts['year']):
             datetype_ok = False
+
     if not datetype_ok:
         dateparts['style'] = 0
         dateparts['dbdate'] = ''
