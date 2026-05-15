@@ -2315,6 +2315,10 @@ def _handle_seeding_status(
         f"Waiting:{wait_for_seeding} Keep Seeding: {keep_seeding}"
     )
 
+    """
+        Is changing to Snatched really necessary? If the download has already been processed
+        while still seeding, and the files are not moved, we will end up processing it twice
+    """
     # Handle case where torrent not found in client (was removed after seeding)
     if isinstance(book_state.progress, int) and book_state.progress < 0:
         # Torrent not found in client - it was removed after seeding completed
@@ -2322,11 +2326,11 @@ def _handle_seeding_status(
         # Change status to Snatched so file matching logic will run next cycle to find and process files
         logger.info(
             f"{book_state.download_title} not found at {book_state.source}, "
-            f"torrent was removed, changing status to Snatched to process files from download directory"
+            #f"torrent was removed, changing status to Snatched to process files from download directory"
         )
-        if book_state.book_id != "unknown":
-            cmd = "UPDATE wanted SET status='Snatched' WHERE status='Seeding' and DownloadID=?"
-            db.action(cmd, (book_state.download_id,))
+        #if book_state.book_id != "unknown":
+        #    cmd = "UPDATE wanted SET status='Snatched' WHERE status='Seeding' and DownloadID=?"
+        #    db.action(cmd, (book_state.download_id,))
         # File matching will process it next cycle
         return True  # Skip to next item
 

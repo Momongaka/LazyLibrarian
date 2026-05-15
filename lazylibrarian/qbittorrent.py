@@ -146,13 +146,14 @@ def get_progress(hashid):
     hashid = hashid.lower()
     qbclient = get_client()
     if not qbclient:
-        return -1, '', False
-
+        return -1, 'no connection', False
+    failure = ''
     try:
         preferences = qbclient.preferences()
     except Exception as e:
         dlcommslogger.error(f"Failed to get_progress: {e}")
         preferences = {}
+        failure = str(e)
     dlcommslogger.debug(str(preferences))
     max_ratio = 0.0
     if 'max_ratio_enabled' in preferences and 'max_ratio' in preferences and preferences['max_ratio_enabled']:
@@ -168,6 +169,8 @@ def get_progress(hashid):
     except Exception as e:
         dlcommslogger.error(f"Failed to get_progress: {e}")
         torrents = ''
+        failure = str(e)
+
     for torrent in torrents:
         if torrent.get('hash') == hashid:
             state = torrent.get('state', '')
@@ -193,7 +196,7 @@ def get_progress(hashid):
                 if ratio_met or time_met:
                     finished = True
             return progress, state, finished
-    return -1, '', False
+    return -1, failure if failure else 'hash not found', False
 
 
 def remove_torrent(hashid, remove_data=False):

@@ -587,7 +587,10 @@ def get_download_progress(source, downloadid):
         elif source == "QBITTORRENT":
             progress, status, finished = qbittorrent.get_progress(downloadid)
             if progress == -1:
-                logger.debug(f"{downloadid} not found at {source}")
+                msg = f"{downloadid} not found at {source}"
+                if status:
+                    msg += f" Status: {status}"
+                logger.debug(msg)
                 # Keep progress as -1 to signal "not found" rather than "0% progress"
             if status == "error":
                 cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
