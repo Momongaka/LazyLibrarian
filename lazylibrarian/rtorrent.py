@@ -127,14 +127,14 @@ def add_torrent(tor_url, hash_id, data=None):
 def get_progress(hash_id):
     server, _ = get_server()
     if not server:
-        return 0, 'error'
+        return -2, 'connection error'
     mainview = server.download_list("", "main")
     for tor in mainview:
         if tor.upper() == hash_id.upper():
             if server.d.complete(tor):
                 return 100, 'finished'
             return int((server.d.bytes_done(tor) * 100) / server.d.size_bytes(tor)), 'OK'
-    return -1, ''
+    return -1, 'not found'
 
 
 def get_files(hash_id):

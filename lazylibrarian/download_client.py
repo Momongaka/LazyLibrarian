@@ -452,10 +452,9 @@ def get_download_progress(source, downloadid):
             progress, errorstring, finished = transmission.get_torrent_progress(
                 downloadid
             )
-            if errorstring:
+            if errorstring and progress == -1:
                 cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
                 db.action(cmd, (errorstring, downloadid, source))
-                progress = -1
 
         elif source == "DIRECT" or str(source).startswith("IRC"):
             cmd = "SELECT * from wanted WHERE DownloadID=? and Source=?"
@@ -469,7 +468,9 @@ def get_download_progress(source, downloadid):
         elif source == "SABNZBD":
             data = {}
             if not lazylibrarian.SAB_VER[0]:
-                _ = sabnzbd.check_link()
+                res = sabnzbd.check_link()
+                if 'successful' not in res:
+                    progress = -2  # connection error
             if lazylibrarian.SAB_VER > (3, 2, 0):
                 res, _ = sabnzbd.sab_nzbd(nzburl="queue", nzo_ids=downloadid)
             else:
@@ -482,7 +483,7 @@ def get_download_progress(source, downloadid):
 
             found = False
             if not res or "queue" not in res:
-                progress = 0
+                progress = -2
             else:
                 logger.debug(
                     f"SAB queue returned {len(res['queue']['slots'])} for {downloadid}"
@@ -501,7 +502,7 @@ def get_download_progress(source, downloadid):
                     res, _ = sabnzbd.sab_nzbd(nzburl="history")
 
                 if not res or "history" not in res:
-                    progress = 0
+                    progress = -2
                 else:
                     logger.debug(
                         f"SAB history returned {len(res['history']['slots'])} for {downloadid}"
@@ -528,9 +529,9 @@ def get_download_progress(source, downloadid):
             if not found:
                 errorstring = f"{downloadid} not found at {source}"
                 logger.debug(errorstring)
-                cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, (errorstring, downloadid, source))
-                progress = -1
+                if progress == -1:
+                    cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
+                    db.action(cmd, (errorstring, downloadid, source))
 
         elif source == "NZBGET":
             res, _ = nzbget.send_nzb(cmd="listgroups")
@@ -586,16 +587,15 @@ def get_download_progress(source, downloadid):
 
         elif source == "QBITTORRENT":
             progress, status, finished = qbittorrent.get_progress(downloadid)
-            if progress == -1:
+            # progress -2 is a communication error which we can retry on next run
+            if progress < 0:
                 msg = f"{downloadid} not found at {source}"
                 if status:
-                    msg += f" Status: {status}"
+                    msg += f" Status: {status} Progress: {progress}"
                 logger.debug(msg)
-                # Keep progress as -1 to signal "not found" rather than "0% progress"
-            if status == "error":
+            if status == "error" or progress == -1:
                 cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, ("QBITTORRENT returned error", downloadid, source))
-                progress = -1
+                db.action(cmd, (f"QBITTORRENT returned {status}:{progress}", downloadid, source))
 
         elif source == "UTORRENT":
             progress, status, finished = utorrent.progress_torrent(downloadid)
@@ -612,25 +612,22 @@ def get_download_progress(source, downloadid):
 
         elif source == "RTORRENT":
             progress, status = rtorrent.get_progress(downloadid)
-            if progress == -1:
+            if progress < 0:
                 logger.debug(f"{downloadid} not found at {source}")
-                # Keep progress as -1 to signal "not found" rather than "0% progress"
-            if status == "finished":
+            elif status == "finished":
                 progress = 100
                 finished = True
-            elif status == "error":
+            if progress == -1:
                 cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, ("rTorrent returned error", downloadid, source))
-                progress = -1
+                db.action(cmd, (f"rTorrent returned {status}", downloadid, source))
 
         elif source.startswith("SYNOLOGY"):
             progress, status, finished = synology.get_progress(downloadid)
             if status == "finished":
                 progress = 100
-            elif status == "error":
+            elif progress == -1:
                 cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, ("Synology returned error", downloadid, source))
-                progress = -1
+                db.action(cmd, (f"Synology returned {status}", downloadid, source))
 
         elif source == "DELUGEWEBUI":
             progress, message, finished = deluge.get_torrent_progress(downloadid)

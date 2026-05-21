@@ -412,31 +412,32 @@ def get_progress(download_id):
     hosturl = _host_url()
     if hosturl:
         auth_cgi, task_cgi, sid = _login(hosturl)
-        if sid:
-            result = _get_info(task_cgi, sid, download_id)  # type: dict
-            _logout(auth_cgi, sid)
-            if result:
-                status = result.get("status", "")
-                # can't see how to get a % from synology, so have to work it out ourselves...
-                if 'additional' in result:
-                    try:
-                        files = result['additional']['file']
-                    except KeyError:
-                        files = []
-                else:
+        if not sid:
+            return -2, 'connection error', False
+        result = _get_info(task_cgi, sid, download_id)  # type: dict
+        _logout(auth_cgi, sid)
+        if result:
+            status = result.get("status", "")
+            # can't see how to get a % from synology, so have to work it out ourselves...
+            if 'additional' in result:
+                try:
+                    files = result['additional']['file']
+                except KeyError:
                     files = []
-                tot_size = 0
-                got_size = 0
-                for item in files:
-                    tot_size += check_int(item['size'], 0)
-                    got_size += check_int(item['size_downloaded'], 0)
+            else:
+                files = []
+            tot_size = 0
+            got_size = 0
+            for item in files:
+                tot_size += check_int(item['size'], 0)
+                got_size += check_int(item['size_downloaded'], 0)
 
-                if tot_size:
-                    pc = int((got_size * 100) / tot_size)
-                else:
-                    pc = 0
-                return pc, status, (status == 'finished')
-    return -1, '', False
+            if tot_size:
+                pc = int((got_size * 100) / tot_size)
+            else:
+                pc = 0
+            return pc, status, (status == 'finished')
+    return -1, 'not found', False
 
 
 def get_files(download_id):

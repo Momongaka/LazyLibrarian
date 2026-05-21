@@ -141,12 +141,14 @@ def get_folder(hashid):
 
 
 def get_progress(hashid):
+    # returns int(progress/error), state/errormessage, bool(complete)
+    # error codes -1 not found, -2 communication error
     dlcommslogger = logging.getLogger('special.dlcomms')
     dlcommslogger.debug(f'get_progress({hashid})')
     hashid = hashid.lower()
     qbclient = get_client()
     if not qbclient:
-        return -1, 'no connection', False
+        return -2, 'error connecting', False
     failure = ''
     try:
         preferences = qbclient.preferences()
@@ -167,9 +169,8 @@ def get_progress(hashid):
     try:
         torrents = qbclient.torrents(category=cat)
     except Exception as e:
-        dlcommslogger.error(f"Failed to get_progress: {e}")
-        torrents = ''
-        failure = str(e)
+        dlcommslogger.error(f"Failed to get torrents: {e}")
+        return -2, 'error getting torrents', False
 
     for torrent in torrents:
         if torrent.get('hash') == hashid:
@@ -196,7 +197,7 @@ def get_progress(hashid):
                 if ratio_met or time_met:
                     finished = True
             return progress, state, finished
-    return -1, failure if failure else 'hash not found', False
+    return -1, failure if failure else 'error hash not found', False
 
 
 def remove_torrent(hashid, remove_data=False):

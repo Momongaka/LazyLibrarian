@@ -198,7 +198,7 @@ def get_torrent_progress(torrentid):  # uses hashid
         else:
             msg = 'No response from transmission'
             logger.debug(msg)
-            return 0, msg, False
+            return -2, msg, False
 
         retries -= 1
         if retries:
