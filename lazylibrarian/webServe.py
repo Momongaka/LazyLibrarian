@@ -4591,7 +4591,7 @@ class WebInterface:
                                 if bookfile and path_isfile(bookfile):
                                     try:
                                         rmtree(os.path.dirname(bookfile), ignore_errors=True)
-                                        logger.info(f'AudioBook {bookname} deleted from disc')
+                                        logger.info(f'AudioBook {os.path.dirname(bookfile)} deleted from disc')
                                         passed += 1
                                     except Exception as e:
                                         logger.warning(f'rmtree failed on {bookfile}, {type(e).__name__} {str(e)}')
@@ -4601,6 +4601,7 @@ class WebInterface:
                                 if bookfile and path_isfile(bookfile):
                                     try:
                                         rmtree(os.path.dirname(bookfile), ignore_errors=True)
+                                        logger.info(f'eBook {os.path.dirname(bookfile)} deleted from disc')
                                         deleted = True
                                         passed += 1
                                     except Exception as e:
@@ -5483,11 +5484,9 @@ class WebInterface:
                 # if the directory is now empty, delete that too
                 if issuedir and CONFIG.get_bool('COMIC_DELFOLDER'):
                     magdir = os.path.dirname(issuedir)
-                    try:
-                        os.rmdir(syspath(magdir))
-                        logger.debug(f'Comic directory {magdir} deleted from disc')
-                    except OSError:
-                        logger.debug(f'Comic directory {magdir} is not empty')
+                    # if no magazine issues left in the folder, delete it
+                    # (removes any trailing cover images, opf etc)
+                    remove_if_empty(magdir, booktype='comic')
                     logger.info(f'Comic {itm} deleted from disc')
 
             if action == "Remove" or action == "Delete":
@@ -6678,6 +6677,7 @@ class WebInterface:
                 parent_dir = syspath(os.path.dirname(issuefile))
                 files = os.listdir(parent_dir)
                 if not files or (len(files) == 1 and files[0] == '.ll_ignore'):
+                    logger.debug(f'Directory {parent_dir} deleted as empty')
                     rmtree(parent_dir)
                 else:
                     logger.warning(f'Directory {parent_dir} not deleted as not empty')
@@ -6733,12 +6733,9 @@ class WebInterface:
                     # if the directory is now empty, delete that too
                     if issuedir and CONFIG.get_bool('MAG_DELFOLDER'):
                         magdir = os.path.dirname(issuedir)
-                        try:
-                            os.rmdir(syspath(magdir))
-                            logger.debug(f'Magazine directory {magdir} deleted from disc')
-                        except OSError:
-                            logger.debug(f'Magazine directory {magdir} is not empty')
-                            failed += 1
+                        # if no magazine issues left in the folder, delete it
+                        # (removes any trailing cover images, opf etc)
+                        remove_if_empty(magdir, booktype='mag')
                         logger.info(f'Magazine {title} deleted from disc')
 
                 if action == 'tag':

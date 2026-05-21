@@ -482,6 +482,7 @@ def audio_rename(bookid, rename=False, playlist=False, overwrite=False):
                     logger.error(f"Failed to copy {failed} files to {dest_path}")
                     logger.debug(f"{err}")
                     return ''
+                logger.debug(f"Removing folder {old_path}")
                 shutil.rmtree(old_path)
             else:
                 if path_isdir(dest_path) and not overwrite:
@@ -718,12 +719,14 @@ def book_rename(bookid, overwrite=False):
 
     if not len(listdir(old_path)):
         # everything moved out...
+        logger.debug(f"Removing empty {old_path}")
         os.rmdir(old_path)
 
     return fullname, msg
 
 
 def delete_empty_folders(startdir):
+    logger = logging.getLogger(__name__)
     deleted = set()
     for current_dir, subdirs, files in os.walk(startdir, topdown=False):
         still_has_subdirs = False
@@ -735,6 +738,8 @@ def delete_empty_folders(startdir):
         if not any(files) and not still_has_subdirs:
             os.rmdir(current_dir)
             deleted.add(current_dir)
+    if deleted:
+        logger.debug(f"Removed empty {deleted}")
     return deleted
 
 

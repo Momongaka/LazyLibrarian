@@ -434,6 +434,7 @@ def import_csv(search_dir: str, status: str = 'Wanted', library: str = '', confi
                 if path_isdir(f"{csvfile}.fail"):
                     try:
                         shutil.rmtree(f"{csvfile}.fail")
+                        logger.debug(f"Removed folder {csvfile}.fail")
                     except Exception as why:
                         logger.warning(f"Unable to remove {csvfile}.fail, {type(why).__name__} {why}")
                 try:

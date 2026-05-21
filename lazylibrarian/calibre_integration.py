@@ -115,6 +115,7 @@ def send_to_calibre(booktype, global_name, folder, data):
                 if path_isfile(srcfile):
                     remove_file(srcfile)
                 elif path_isdir(srcfile):
+                    logger.debug(f"Removing directory {srcfile}")
                     shutil.rmtree(srcfile)
 
         identifier = ""

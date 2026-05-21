@@ -241,8 +241,9 @@ def remove_dir(name: str, remove_contents: bool = False) -> bool:
     try:
         if remove_contents:
             shutil.rmtree(syspath(name))  # , ignore_errors=True)
-
-        os.rmdir(syspath(name))
+        else:
+            os.rmdir(syspath(name))
+        logger.debug(f"Removed {syspath(name)}")
         ok = True
     except OSError as err:
         if err.errno == 2:  # does not exist is ok
