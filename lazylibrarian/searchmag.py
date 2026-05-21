@@ -223,9 +223,11 @@ def search_magazines(mags=None, reset=False, backissues=False):
                 rejects = 0
                 total_nzbs = 0
                 new_date = 0
+                new_list = []
                 maglist = []
                 issues = []
                 bookid = ''
+                wanted_list = []
                 res = db.match("SELECT Regex from magazines WHERE Title=? AND Status='Active'", (book['bookid'],))
                 searchterms = get_list(res['Regex'], ',')
                 for nzb in resultlist:
@@ -382,12 +384,11 @@ def search_magazines(mags=None, reset=False, backissues=False):
                                     # get a rough time just over MAX_AGE days ago to compare to, in format yyyy-mm-dd
                                     # could perhaps calc differently for weekly, biweekly etc.
                                     # For magazines with only an issue number use current year as we can't tell age
-
                                     start_time = time.time()
                                     start_time -= CONFIG.get_int('MAG_AGE') * 24 * 60 * 60
                                     if start_time < 0:  # limit of unixtime (1st Jan 1970)
                                         start_time = 0
-                                    if issuedate.isdigit():
+                                    if str(issuedate).isdigit():
                                         control_date = time.strftime("%Y0000", time.localtime(start_time))
                                         logger.debug(f'Magazine comparing issue numbers to {control_date}')
                                     elif re.match(r'\d+-\d\d-\d\d', str(issuedate)):
@@ -438,6 +439,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
                             elif comp_date > 0:
                                 # keep track of what we're going to download, so we don't download dupes
                                 new_date += 1
+                                new_list.append(issuedate)
                                 issue = f"{bookid},{issuedate}"
                                 if issue not in issues:
                                     maglist.append({
@@ -497,12 +499,31 @@ def search_magazines(mags=None, reset=False, backissues=False):
                                 else:
                                     new_value_dict["Status"] = "Skipped"
                                 new_value_dict["Added"] = int(time.time())
-                            db.upsert(insert_table, new_value_dict, control_value_dict)
-                            logger.info(f"Added {nzbtitle} to {insert_table} marked {new_value_dict['Status']}")
+                                db.upsert(insert_table, new_value_dict, control_value_dict)
+                                logger.info(f"Added {nzbtitle} to {insert_table} marked {new_value_dict['Status']}")
+                            else:
+                                wanted_list.append([new_value_dict, control_value_dict])
 
-                msg = f"Found {total_nzbs} {plural(total_nzbs, 'result')} for {bookid}. {new_date} new,"
+                if str(control_date).isdigit():
+                    # for mags with issue number rather than date, use MAX_AGE as a counter of how many issues to grab
+                    sorted_list = sorted(wanted_list, key=lambda x: x[0][3], reverse=True)  # sort on descending issuedate
+                    logger.debug(CONFIG.get_int('MAG_AGE'))
+                    for item in sorted_list:
+                        logger.debug(f"{item[1][0]}:{item[0][3]}")
+                    if CONFIG.get_int('MAG_AGE') and len(sorted_list) > CONFIG.get_int('MAG_AGE'):
+                        wanted_list = sorted_list[:CONFIG.get_int('MAG_AGE')]  # and limit
+                    else:
+                        wanted_list = sorted_list
+
+                for item in wanted_list:
+                    new_value_dict = item[0]
+                    control_value_dict = item[1]
+                    db.upsert("wanted", new_value_dict, control_value_dict)
+                    logger.info(f"Added {control_value_dict['NZBtitle']} to wanted marked {new_value_dict['Status']}")
+
+                msg = f"Found {total_nzbs} {plural(total_nzbs, 'result')} for {bookid}. {new_date} new,{new_list}"
                 msg += f' {old_date} old, {bad_date} fail date, {bad_name} fail name,'
-                msg += f' {rejects} rejected: {len(maglist)} to download'
+                msg += f' {rejects} rejected: {len(wanted_list)} to download'
                 logger.info(msg)
 
                 threading.Thread(target=download_maglist, name='DL-MAGLIST', args=[maglist, 'pastissues']).start()

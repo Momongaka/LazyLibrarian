@@ -1000,15 +1000,15 @@ def rename_issue(issueid, tags=None):
     return new_filename, ''
 
 
-def remove_if_empty(foldername):
+def remove_if_empty(foldername, booktype='mag'):
     logger = logging.getLogger(__name__)
     # if no magazine issues left in the folder, delete it
     # (removes any trailing cover images, opf, ignorefile etc)
-    if not book_file(foldername, booktype='mag', config=CONFIG, recurse=True):
+    if not book_file(foldername, booktype=booktype, config=CONFIG, recurse=True):
         logger.debug(f"Removing empty directory {foldername}")
         remove_dir(foldername, remove_contents=True)
         parent = os.path.dirname(foldername)
         # if parent folder is now empty, delete that too, issue might have been in an issue folder
-        if not book_file(parent, booktype='mag', config=CONFIG, recurse=True):
+        if not book_file(parent, booktype=booktype, config=CONFIG, recurse=True):
             logger.debug(f"Removing empty parent directory {parent}")
             remove_dir(parent, remove_contents=True)
