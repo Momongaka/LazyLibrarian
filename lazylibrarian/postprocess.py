@@ -563,8 +563,10 @@ def _transfer_matching_files(
     cnt = 0
     list_dir = listdir(sourcedir)
     valid_extensions = CONFIG.get_all_types_list()
-    logger.debug(f"Scanning {list_dir}")
+    logger.debug(f"Source: {sourcedir}")
+    logger.debug(f"Contents {list_dir}")
     logger.debug(f"Valid extensions {valid_extensions}")
+    logger.debug(f"Destination: {targetdir}")
     for _ourfile in list_dir:
         ourfile = str(_ourfile)
         logger.debug(f"Checking if {ourfile} matches {fname_prefix}")
@@ -1481,6 +1483,7 @@ def _cleanup_failed_download(book_path, logger) -> None:
     else:
         # Move to .fail directory for manual inspection
         fail_path = f"{book_path}.fail"
+        logger.debug(f"Making sure {fail_path} is clean")
         shutil.rmtree(fail_path, ignore_errors=True)
 
         try:
@@ -1681,12 +1684,14 @@ def _process_matched_directory(
 
             # Create isolated .unpack directory
             targetdir = os.path.join(download_dir, f"{md5_utf8(fname_prefix)[-8:]}.unpack")
-            if not make_dirs(targetdir, new=True):
-                return False, f"Failed to create isolation directory {targetdir}"
+            try:
+                os.makedirs(targetdir, exist_ok=True)
+            except Exception as e:
+                return False, f"Failed to create isolation directory {targetdir}: {e}"
 
             # Selectively transfer ONLY files matching this book's name
             cnt = _transfer_matching_files(
-                download_dir, targetdir, fname_prefix, copy=copy_files
+                file_dir, targetdir, fname_prefix, copy=copy_files
             )
 
             if cnt:
@@ -1696,6 +1701,7 @@ def _process_matched_directory(
                 return True, ""  # Success - file isolated to .unpack folder
             # No files transferred - cleanup empty directory
             try:
+                logger.debug(f"No files moved to {targetdir}, removing it")
                 os.rmdir(targetdir)
             except OSError:
                 contextlib.suppress(OSError)
@@ -2319,18 +2325,21 @@ def _handle_seeding_status(
         Is changing to Snatched really necessary? If the download has already been processed
         while still seeding, and the files are not moved, we will end up processing it twice
     """
-    # Handle case where torrent not found in client (was removed after seeding)
+    # Handle case where torrent not found in client (was removed after seeding or communication issue)
     if isinstance(book_state.progress, int) and book_state.progress < 0:
-        # Torrent not found in client - it was removed after seeding completed
+        # -1 signals not found, -2 communication issue, can be retried
         # Files should still be on disk, but file processing loop has already run
-        # Change status to Snatched so file matching logic will run next cycle to find and process files
-        logger.info(
-            f"{book_state.download_title} not found at {book_state.source}, "
-            #f"torrent was removed, changing status to Snatched to process files from download directory"
-        )
-        #if book_state.book_id != "unknown":
-        #    cmd = "UPDATE wanted SET status='Snatched' WHERE status='Seeding' and DownloadID=?"
-        #    db.action(cmd, (book_state.download_id,))
+        # Change status to Snatched if -1, so file matching logic will run next cycle to find and process files
+        msg = f"{book_state.download_title} not found at {book_state.source}, "
+        if book_state.progress == -1:
+            msg += "torrent was removed, changing status to Snatched to process files from download directory"
+            if book_state.book_id != "unknown":
+                cmd = "UPDATE wanted SET status='Snatched' WHERE status='Seeding' and DownloadID=?"
+                db.action(cmd, (book_state.download_id,))
+        else:
+            msg += "communication issue, will retry on next run"
+        logger.info(msg)
+
         # File matching will process it next cycle
         return True  # Skip to next item
 
@@ -2936,16 +2945,16 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
                 if result > 0:
                     ppcount += result
                     postprocesslogger.info(
-                        f"Matching Stage / First Pass SUCCESS: {book_state.download_title}"
+                        f"Matching Stage - First Pass SUCCESS: {book_state.download_title}"
                     )
                     continue  # Successfully processed, move to next book
 
                 postprocesslogger.debug(
-                    f"Matching Stage / First Pass unsuccessful for {book_state.download_title}, trying Pass 2"
+                    f"Matching Stage - First Pass unsuccessful for {book_state.download_title}, trying Pass 2"
                 )
             else:
                 postprocesslogger.debug(
-                    f"Matching Stage / First Pass skipped because no targeted download folder "
+                    f"Matching Stage - First Pass skipped because no targeted download folder "
                     f"specified for {book_state.download_title}, trying Pass 2"
                 )
 
@@ -2954,7 +2963,7 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
             #  * Only here if not processed in First Pass
             # =======================================================
             postprocesslogger.debug(
-                f"Matching Stage | Second Pass: Fallback search for {book_state.download_title}"
+                f"Matching Stage - Second Pass: Fallback search for {book_state.download_title}"
             )
             result = _process_snatched_book(
                 book_state,
@@ -2967,11 +2976,11 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
             if result > 0:
                 ppcount += result
                 postprocesslogger.info(
-                    f"Matching Stage | Second Pass SUCCESS: {book_state.download_title}"
+                    f"Matching Stage - Second Pass SUCCESS: {book_state.download_title}"
                 )
             else:
                 postprocesslogger.warning(
-                    f"Matching Stage | Second Pass FAILED: {book_state.download_title}. No matches"
+                    f"Matching Stage - Second Pass FAILED: {book_state.download_title}. No matches"
                 )
 
         postprocesslogger.debug("Snatched Processing Stage Complete")
@@ -3302,7 +3311,7 @@ def process_book(book_path: str, book_id: str, logger=None, library=""):
                     _update_downloads_provider_count("manually added")
                 return True
             logger.error(
-                f"Postprocessing for {global_name!r} has failed: {dest_file!r}"
+                f"Postprocessing for {global_name!r} has failed: {dest_file!r}. Deleting {book_path}.fail"
             )
             shutil.rmtree(f"{book_path}.fail", ignore_errors=True)
             try:
