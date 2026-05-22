@@ -509,7 +509,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
                     sorted_list = sorted(wanted_list, key=lambda x: x[0]['AuxInfo'], reverse=True)  # sort on descending issuedate
                     logger.debug(CONFIG.get_int('MAG_AGE'))
                     for item in sorted_list:
-                        logger.debug(f"{item[1][0]}:{item[0][3]}")
+                        logger.debug(f"{item[1]['NZBtitle']}:{item[0]['AuxInfo']}")
                     if CONFIG.get_int('MAG_AGE') and len(sorted_list) > CONFIG.get_int('MAG_AGE'):
                         wanted_list = sorted_list[:CONFIG.get_int('MAG_AGE')]  # and limit
                     else:
