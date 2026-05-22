@@ -506,7 +506,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
 
                 if str(control_date).isdigit():
                     # for mags with issue number rather than date, use MAX_AGE as a counter of how many issues to grab
-                    sorted_list = sorted(wanted_list, key=lambda x: x[0][3], reverse=True)  # sort on descending issuedate
+                    sorted_list = sorted(wanted_list, key=lambda x: x[0]['AuxInfo'], reverse=True)  # sort on descending issuedate
                     logger.debug(CONFIG.get_int('MAG_AGE'))
                     for item in sorted_list:
                         logger.debug(f"{item[1][0]}:{item[0][3]}")
