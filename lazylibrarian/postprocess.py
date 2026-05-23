@@ -395,13 +395,12 @@ class BookState:
 
         if self.source and self.download_id:
             general_folder = get_download_folder(self.source, self.download_id)
-            download_name = get_download_name(self.download_title, self.source, self.download_id)
             res = None
-            if general_folder is None and self.source == 'DIRECT':
+            if self.source == 'DIRECT':
                 res = db.match("SELECT NZBprov,NZBtitle,NZBurl from wanted where source='DIRECT' and DownloadID=?", (self.download_id, ))
-                # These download into first download_dir
-                if res and res['NZBprov'] in ['annas', 'zlibrary', 'soulseek'] or res['NZBprov'].startswith('libgen'):
-                    general_folder = get_directory('Download')
+                download_name = res['NZBtitle']
+            else:
+                download_name = get_download_name(self.download_title, self.source, self.download_id)
             # For usenet clients (SABnzbd, NZBGet), the storage field already contains
             # the complete download path including the folder name
             if self.source in ("SABNZBD", "NZBGET") and general_folder:
@@ -412,9 +411,12 @@ class BookState:
             elif res and res['NZBprov'] == 'soulseek':
                 try:
                     soulseek = json.loads(res['NZBurl'].split('^')[1].replace('\\','/'))
-                    self.download_folder = os.path.join(general_folder, soulseek.get("name", '').rsplit('/', 1)[1])
+                    self.download_folder = os.path.join(get_directory('Download'), soulseek.get("name", '').rsplit('/', 1)[1])
                 except (KeyError, IndexError):
                     self.download_folder = general_folder
+            elif res and res['NZBprov'] in ['annas', 'zlibrary'] or res['NZBprov'].startswith('libgen'):
+                # these download into first download directory
+                self.download_folder = get_directory('Download')
             # For torrent clients, combine base folder with download name
             elif general_folder and download_name:
                 self.download_folder = os.path.join(general_folder, download_name)
@@ -1655,7 +1657,12 @@ def _process_matched_directory(
     candidate_ptr = book_state.candidate_ptr or ""
     # Direct downloads place files in download root
     # if candidate_ptr is download_dir, handle as single file in download root
-    if candidate_ptr and candidate_ptr.rstrip(os.sep) == download_dir.rstrip(os.sep):
+    logger.debug(f"candidate_ptr: {candidate_ptr}")
+    logger.debug(f"download_dir: {download_dir}")
+    logger.debug(f"download_title: {book_state.download_title}")
+
+    if candidate_ptr and candidate_ptr.rstrip(os.sep) == get_directory('Download').rstrip(os.sep):
+        download_dir = candidate_ptr
         candidate_ptr = os.path.join(candidate_ptr, book_state.download_title)
         book_state.update_candidate(candidate_ptr)
 
@@ -2697,7 +2704,7 @@ def _search_in_known_location(
 
     # Set candidate_ptr to the known folder
     book_state.update_candidate(book_state.download_folder)
-    logger.debug(f"Candidate set to: {book_state.candidate_ptr}")
+    logger.debug(f"Candidate folder set to: {book_state.candidate_ptr}")
 
     # Get parent directory for processing context
     parent_dir = os.path.dirname(book_state.download_folder.rstrip(os.sep))

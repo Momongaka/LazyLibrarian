@@ -441,6 +441,7 @@ class GoodReads:
 
             url = '/'.join([CONFIG['GR_URL'],
                             f"author/list/{gr_id}.xml?{urlencode(self.params)}"])
+            self.logger.debug(url)
             try:
                 self.searchinglogger.debug(url)
                 rootxml, in_cache = gr_xml_request(url, use_cache=not refresh)
@@ -497,6 +498,7 @@ class GoodReads:
                         if lazylibrarian.STOPTHREADS and threadname == "AUTHORUPDATE":
                             self.logger.debug(f"Aborting {threadname}")
                             break
+                        lang_source = ''
                         total_count += 1
                         rejected = []
                         book_language = "Unknown"
@@ -542,11 +544,15 @@ class GoodReads:
                             if isbn13:
                                 find_field = 'isbn13'
                                 book_language, cache_hit, thing_hit = isbnlang(isbn13)
+                                if book_language:
+                                    lang_source = f'isbn13 {isbn13}'
                                 if thing_hit:
                                     lt_lang_hits += 1
                             if not book_language and isbn10:
                                 find_field = 'isbn'
                                 book_language, cache_hit, thing_hit = isbnlang(isbn10)
+                                if book_language:
+                                    lang_source = f'isbn10 {isbn10}'
                                 if thing_hit:
                                     lt_lang_hits += 1
 
@@ -575,6 +581,7 @@ class GoodReads:
                                                 bk_language = book_rootxml.find('./book/language_code').text
                                                 if bk_language:
                                                     book_language = bk_language
+                                                    lang_source = f'bookpage {book_url}'
                                             except Exception as e:
                                                 self.logger.error(
                                                     f"{type(e).__name__} finding language_code in book xml: "
@@ -672,7 +679,7 @@ class GoodReads:
 
                         if CONFIG.get_bool('NO_PUBDATE') and (not bookdate or bookdate == '0000'):
                             rejected.append(['date', 'No publication date'])
-
+                        self.logger.debug(f"{book_language} {lang_source} {bookname}")
                         dic = {'.': ' ', '-': ' ', '/': ' ', '+': ' ', '_': ' ', '(': '', ')': '',
                                '[': ' ', ']': ' ', '#': '# ', ':': ' ', ';': ' '}
                         name = replace_all(shortname, dic).strip()
