@@ -441,7 +441,6 @@ class GoodReads:
 
             url = '/'.join([CONFIG['GR_URL'],
                             f"author/list/{gr_id}.xml?{urlencode(self.params)}"])
-            self.logger.debug(url)
             try:
                 self.searchinglogger.debug(url)
                 rootxml, in_cache = gr_xml_request(url, use_cache=not refresh)

@@ -1666,7 +1666,7 @@ def _process_matched_directory(
         candidate_ptr = os.path.join(candidate_ptr, book_state.download_title)
         book_state.update_candidate(candidate_ptr)
 
-    if not path_isdir(candidate_ptr):
+    if path_isfile(candidate_ptr):
         # It's a single file - check if it's in download root
         file_dir = os.path.dirname(candidate_ptr)
 
