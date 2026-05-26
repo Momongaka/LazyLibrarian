@@ -286,14 +286,14 @@ def search_magazines(mags=None, reset=False, backissues=False):
                                 for word in nzbtitle_exploded:
                                     if word == '&' or word == '+':
                                         word = 'and'
-                                    wlist.append(word.lower())
+                                    wlist.append(unaccented(word).lower())
                                 for term in searchterms:
                                     rejected = False
                                     term_exploded = replace_all(term, dic).split()
                                     for word in term_exploded:
                                         if word == '&' or word == '+':
                                             word = 'and'
-                                        if word.lower() not in wlist:
+                                        if unaccented(word).lower() not in wlist:
                                             logger.debug(f"Rejecting {nzbtitle}, missing [{word}]")
                                             rejected = True
                                             break
