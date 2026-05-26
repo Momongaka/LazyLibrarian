@@ -30,6 +30,7 @@ from lazylibrarian.bookwork import (
     is_set_or_part,
     isbn_from_words,
     isbnlang,
+    language_from_words,
     librarything_wait,
 )
 from lazylibrarian.cache import html_request, json_request
@@ -1378,7 +1379,11 @@ class OpenLibrary:
             bookdict['bookpub'] = ', '.join(bookdict['bookpub'])
         bookdict['bookdate'] = date_format(workinfo.get('publish_date', ''),
                                            context=bookdict['bookname'], datelang=CONFIG['DATE_LANG'])
-        bookdict['booklang'] = "Unknown"
+        detected_lang, confidence = language_from_words(bookdict['bookname'])
+        if detected_lang and confidence > 0.6:
+            bookdict['booklang'] = detected_lang
+        else:
+            bookdict['booklang'] = "Unknown"
         bookdict['booklink'] = workinfo.get('key')
         bookdict['bookrate'] = 0
         bookdict['bookrate_count'] = 0

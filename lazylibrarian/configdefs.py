@@ -76,6 +76,7 @@ BASE_DEFAULTS: list[ConfigItem] = [
     ConfigCSV('General', 'NAME_POSTFIX', 'snr, jnr, jr, sr, phd', force_lower=True),
     ConfigCSV('General', 'NAME_DEFINITE', 'the, a', force_lower=True),
     ConfigCSV('General', 'MULTI_AUTHOR_SPLIT', 'and, und, with', force_lower=True),
+    ConfigBool('General', 'GOOGLE_TRANS_ID', 1),
 
     ConfigBool('API', 'API_ENABLED', 0),
     ConfigStr('API', 'API_KEY', ''),

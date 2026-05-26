@@ -2285,7 +2285,7 @@ class WebInterface:
         self.check_permitted(lazylibrarian.perm_search)
         logger = logging.getLogger('special.searching')
         logger.debug(f"Search {btnsearch}: {searchfor}")
-
+        searchresults = None
         self.label_thread('SEARCH')
         if not searchfor:
             raise cherrypy.HTTPRedirect("home")
@@ -2336,11 +2336,11 @@ class WebInterface:
             searchresults = search_for(searchfor, CONFIG['BOOK_API'])
             logger.debug(f"Found {len(searchresults)} from {CONFIG['BOOK_API']}")
             if CONFIG.get_bool('MULTI_SOURCE'):
-                for info_source in lazylibrarian.INFOSOURCES.keys():
-                    itm = lazylibrarian.INFOSOURCES[info_source]
-                    if CONFIG['BOOK_API'] != info_source and CONFIG[itm['enabled']]:
-                        moreresults = search_for(searchfor, info_source)
-                        logger.debug(f"Found {len(moreresults)} from {info_source}")
+                for info_src in lazylibrarian.INFOSOURCES.keys():
+                    itm = lazylibrarian.INFOSOURCES[info_src]
+                    if CONFIG['BOOK_API'] != info_src and CONFIG[itm['enabled']]:
+                        moreresults = search_for(searchfor, info_src)
+                        logger.debug(f"Found {len(moreresults)} from {info_src}")
                         # Prefer our configured book api if equal matches by downgrading all the others slightly.
                         for res in moreresults:
                             res['highest_fuzz'] -= 1

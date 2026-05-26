@@ -31,6 +31,7 @@ from lazylibrarian.bookwork import (
     is_set_or_part,
     isbn_from_words,
     isbnlang,
+    language_from_words,
     set_genres,
     set_series,
 )
@@ -540,7 +541,12 @@ class GoodReads:
 
                         if book_language == "Unknown":
                             book_language = ""
-                            if isbn13:
+                            detected_lang, confidence = language_from_words(bookname)
+                            if detected_lang and confidence > 0.6:
+                                book_language = detected_lang
+                                lang_source = 'language_from_words'
+
+                            if not book_language and isbn13:
                                 find_field = 'isbn13'
                                 book_language, cache_hit, thing_hit = isbnlang(isbn13)
                                 if book_language:
@@ -1378,7 +1384,6 @@ class GoodReads:
         workid = rootxml.find('.book/work/id').text
 
         db = database.DBConnection()
-        added = False
         try:
             match = db.match('SELECT AuthorName from authors WHERE AuthorID=?', (authorid,))
             if match:
@@ -1471,7 +1476,6 @@ class GoodReads:
             match = db.match("SELECT * from authors where AuthorID=?", (author_id,))
             if not match:
                 self.logger.warning(f"Authorid {author_id} not found in database, unable to add {bookname}")
-                added = False
             else:
                 control_value_dict = {"BookID": bookid}
                 new_value_dict = {

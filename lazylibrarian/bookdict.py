@@ -97,6 +97,7 @@ from lazylibrarian.bookwork import (
     is_set_or_part,
     isbn_from_words,
     isbnlang,
+    language_from_words,
 )
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.formatter import (
@@ -155,12 +156,16 @@ def validate_bookdict(bookdict, current_db=None):
         if wantedlanguages and 'All' not in wantedlanguages:
             lang = ''
             languages = get_list(bookdict.get('booklang'))
+            if not languages:
+                detected_lang, confidence = language_from_words(bookdict['bookname'])
+                if detected_lang and confidence > 0.6:
+                    languages = [detected_lang]
             if languages:
                 for item in languages:
                     if item in wantedlanguages:
                         lang = item
                         break
-            elif bookdict.get('bookisbn'):
+            if not lang and bookdict.get('bookisbn'):
                 lang, _, _ = isbnlang(bookdict['bookisbn'])
             if not lang and languages:
                 lang = languages[0]

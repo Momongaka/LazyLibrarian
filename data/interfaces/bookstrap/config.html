@@ -3845,6 +3845,13 @@
                     <label for="date_format" class="control=label">Words allowed in magazine titles:</label>
                     <input type="text" id="mag_nouns" name="mag_nouns" value="${CONFIG['MAG_NOUNS']}" class="form-control" placeholder="Allowed in magazine titles">
                   </div>
+                  <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['GOOGLE_TRANS_ID'] else '' %>
+                    <label for="google_trans_id" class="control-label">
+                      <input type="checkbox" id="google_trans_id" name="google_trans_id" value="1" ${checked} />
+                      Use Google Translate to identify language from book title
+                    </label>
+                  </div>
               </div>
             </div>
           </div>

@@ -19,7 +19,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from html import unescape as html_unescape
 from urllib.parse import urljoin, urlparse
@@ -365,6 +365,8 @@ def annas_download(md5, folder, title, extn, domain_index=0):
     annas_hosts = get_list(CONFIG['ANNA_HOST'])
     if not annas_hosts:
         return False, "No Annas hosts found"
+    response = None
+    url = None
     for host in annas_hosts:
         prefix = ''
         if not host.startswith('http'):
@@ -376,7 +378,7 @@ def annas_download(md5, folder, title, extn, domain_index=0):
             break
         downloadlogger.debug(f"Failed to download from {host}: {response.status_code}")
 
-    if str(response.status_code).startswith('2'):
+    if response and str(response.status_code).startswith('2'):
         max_domain_index = check_int(CONFIG['ANNA_MAX_SERVERS'], 0) - 1 # Server indexes are 0-based
         res = response.json()
         downloadlogger.debug(res)
@@ -542,7 +544,7 @@ def block_annas(dl_limit=0):
     logger = logging.getLogger(__name__)
     grabs, oldest = anna_grabs()
     if dl_limit and grabs >= dl_limit:
-        old_datestr = datetime.utcfromtimestamp(oldest).strftime('%Y-%m-%d %H:%M:%S')
+        old_datestr = datetime.fromtimestamp(oldest, UTC).strftime('%Y-%m-%d %H:%M:%S')
         # rolling delay if limit reached
         resume = oldest + (18 * 60 * 60)
         if resume > time.time():

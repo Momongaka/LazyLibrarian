@@ -7,7 +7,7 @@ where = ["lazylibrarian"]
 
 [project]
 name = "LazyLibrarian"
-version = "2025.09.16"
+version = "2026.05.25"
 description = "LazyLibrarian is a SickBeard, CouchPotato, Headphones-like application for ebooks, audiobooks and magazines"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,6 +41,7 @@ dependencies = [
     'lxml',
     'iso639-lang',
     'xmltodict',
+    'googletrans',
 ]
 
 [project.urls]

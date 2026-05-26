@@ -2,7 +2,9 @@
 #    uv pip compile pyproject.toml
 annotated-doc==0.0.4
     # via typer
-apprise==1.9.9
+anyio==4.13.0
+    # via httpx
+apprise==1.10.0
     # via lazylibrarian (pyproject.toml)
 apscheduler==3.11.2
     # via lazylibrarian (pyproject.toml)
@@ -10,9 +12,11 @@ beautifulsoup4==4.14.3
     # via bs4
 bs4==0.0.2
     # via lazylibrarian (pyproject.toml)
-certifi==2026.2.25
+certifi==2026.5.20
     # via
     #   apprise
+    #   httpcore
+    #   httpx
     #   requests
 cffi==2.0.0
     # via cryptography
@@ -28,24 +32,41 @@ cherrypy==18.10.0
     #   cherrypy-cors
 cherrypy-cors==1.7.0
     # via lazylibrarian (pyproject.toml)
-click==8.3.2
+click==8.4.1
     # via
     #   apprise
     #   typer
-cryptography==46.0.7
+cryptography==48.0.0
     # via pyopenssl
 deluge-client==1.10.2
     # via lazylibrarian (pyproject.toml)
+googletrans==4.0.2
+    # via lazylibrarian (pyproject.toml)
+h11==0.16.0
+    # via httpcore
+h2==4.3.0
+    # via httpx
+hpack==4.1.0
+    # via h2
 html5lib==1.1
     # via lazylibrarian (pyproject.toml)
 httpagentparser==1.9.9
     # via
     #   lazylibrarian (pyproject.toml)
     #   cherrypy-cors
+httpcore==1.0.9
+    # via httpx
 httplib2==0.31.2
     # via lazylibrarian (pyproject.toml)
-idna==3.11
-    # via requests
+httpx==0.28.1
+    # via googletrans
+hyperframe==6.1.0
+    # via h2
+idna==3.16
+    # via
+    #   anyio
+    #   httpx
+    #   requests
 irc==20.5.0
     # via lazylibrarian (pyproject.toml)
 iso639-lang==2.6.3
@@ -54,9 +75,12 @@ jaraco-collections==5.2.1
     # via
     #   cherrypy
     #   irc
+    #   tempora
 jaraco-context==6.1.2
-    # via jaraco-text
-jaraco-functools==4.4.0
+    # via
+    #   jaraco-text
+    #   tempora
+jaraco-functools==4.5.0
     # via
     #   cheroot
     #   irc
@@ -70,19 +94,19 @@ jaraco-text==4.2.0
     # via
     #   irc
     #   jaraco-collections
-lxml==6.0.4
+lxml==6.1.1
     # via lazylibrarian (pyproject.toml)
-mako==1.3.10
+mako==1.3.12
     # via lazylibrarian (pyproject.toml)
 markdown==3.10.2
     # via apprise
-markdown-it-py==4.0.0
+markdown-it-py==4.2.0
     # via rich
 markupsafe==3.0.3
     # via mako
 mdurl==0.1.2
     # via markdown-it-py
-more-itertools==11.0.2
+more-itertools==11.1.0
     # via
     #   cheroot
     #   cherrypy
@@ -90,6 +114,7 @@ more-itertools==11.0.2
     #   jaraco-functools
     #   jaraco-stream
     #   jaraco-text
+    #   tempora
 oauthlib==3.3.1
     # via requests-oauthlib
 pillow==12.2.0
@@ -100,13 +125,13 @@ pycparser==3.0
     # via cffi
 pygments==2.20.0
     # via rich
-pyopenssl==26.0.0
+pyopenssl==26.2.0
     # via lazylibrarian (pyproject.toml)
 pyparsing==3.3.2
     # via
     #   lazylibrarian (pyproject.toml)
     #   httplib2
-pypdf==6.10.0
+pypdf==6.12.1
     # via lazylibrarian (pyproject.toml)
 pysocks==1.7.1
     # via requests
@@ -114,13 +139,13 @@ python-dateutil==2.9.0.post0
     # via tempora
 python-magic==0.4.27
     # via lazylibrarian (pyproject.toml)
-pytz==2026.1.post1
+pytz==2026.2
     # via irc
 pyyaml==6.0.3
     # via apprise
 rapidfuzz==3.14.5
     # via lazylibrarian (pyproject.toml)
-requests==2.33.1
+requests==2.34.2
     # via
     #   lazylibrarian (pyproject.toml)
     #   apprise
@@ -140,24 +165,24 @@ six==1.17.0
     #   python-dateutil
 slskd-api==0.2.4
     # via lazylibrarian (pyproject.toml)
-soupsieve==2.8.3
+soupsieve==2.8.4
     # via beautifulsoup4
-tempora==5.8.1
+tempora==5.9.0
     # via
     #   irc
     #   jaraco-logging
     #   portend
-typer==0.24.1
+typer==0.25.1
     # via typer-slim
 typer-slim==0.24.0
     # via jaraco-text
 typing-extensions==4.15.0
     # via beautifulsoup4
-tzdata==2026.1
+tzdata==2026.2
     # via lazylibrarian (pyproject.toml)
 tzlocal==5.3.1
     # via apscheduler
-urllib3==2.6.3
+urllib3==2.7.0
     # via
     #   lazylibrarian (pyproject.toml)
     #   requests

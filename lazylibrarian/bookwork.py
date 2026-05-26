@@ -38,6 +38,15 @@ from lazylibrarian.formatter import (
     unaccented,
 )
 
+if CONFIG.get_bool('GOOGLE_TRANS_ID'):
+    try:
+        from googletrans import Translator
+    except (ModuleNotFoundError, ImportError):
+        Translator = None
+else:
+    Translator = None
+import asyncio
+
 
 def set_all_book_authors():
     logger = logging.getLogger(__name__)
@@ -1325,6 +1334,27 @@ def isbnlang(isbn):
         logger.error(str(e))
     db.close()
     return book_language, cache_hit, thing_hit
+
+
+def language_from_words(words):
+    if not Translator:
+        return 0, 0
+    logger = logging.getLogger(__name__)
+    logging.getLogger('googletrans').setLevel(logging.CRITICAL)
+    logging.getLogger('asyncio').setLevel(logging.CRITICAL)
+    logging.getLogger('hpack').setLevel(logging.CRITICAL)
+    logging.getLogger('httpcore').setLevel(logging.CRITICAL)
+    async def lang_detect(s):
+        async with Translator() as translator:
+            result = await translator.detect(s)
+            return result
+    try:
+        res = asyncio.run(lang_detect(words))
+        logger.debug(f"Detected {res.lang}:{res.confidence} for {words}")
+        return res.lang, res.confidence
+    except Exception as e:
+        logger.debug(str(e))
+        return 0, 0
 
 
 def isbn_from_words(words):
