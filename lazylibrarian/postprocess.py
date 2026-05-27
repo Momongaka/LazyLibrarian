@@ -1721,6 +1721,9 @@ def _process_matched_directory(
         logger.debug(f"Updated candidate from file to parent directory: {parent_dir}")
         return True, ""
 
+    if not path_isdir(book_state.candidate_ptr):
+        return False, f"Folder {book_state.candidate_ptr} is not found"
+
     logger.debug(
         f"Found folder ({round(match_percent, 2)}%) [{book_state.candidate_ptr}] "
         f"for {book_state.get_book_type_str()} {book_state.download_title}"
