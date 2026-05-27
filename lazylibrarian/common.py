@@ -598,7 +598,7 @@ def dbbackup(source='lazylibrarian'):
 
 def delete_empty_folders(root):
     logger = logging.getLogger(__name__)
-    deleted = set()
+    deleted = []
 
     for current_dir, subdirs, files in os.walk(root, topdown=False):
         still_has_subdirs = False
@@ -609,6 +609,6 @@ def delete_empty_folders(root):
 
         if (len(files) == 1 and '.ll_ignore' in files) or (not any(files) and not still_has_subdirs):
             os.rmdir(current_dir)
-            deleted.add(current_dir)
+            deleted.append(current_dir)
 
     logger.debug(f"Deleted {len(deleted)} empty folders: {deleted}")
