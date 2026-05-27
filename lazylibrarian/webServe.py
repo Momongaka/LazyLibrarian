@@ -2390,13 +2390,11 @@ class WebInterface:
                                         rmtree(foldername, ignore_errors=True)
                                     except Exception as e:
                                         logger.warning(f'rmtree failed on {location}, {type(e).__name__} {str(e)}')
-
-                        delete_empty_folders(CONFIG['EBOOK_DIR'])
-                        if CONFIG['MAG_RELATIVE']:
-                            audio_folder = os.path.join(CONFIG['EBOOK_DIR'], CONFIG['AUDIO_DIR'])
-                        else:
-                            audio_folder = CONFIG['AUDIO_DIR']
-                        delete_empty_folders(audio_folder)
+                        try:
+                            delete_empty_folders(CONFIG['EBOOK_DIR'])
+                            delete_empty_folders(CONFIG['AUDIO_DIR'])
+                        except Exception as e:
+                            logger.error(f"Error deleting: {e}")
 
                         db.action('DELETE from authors WHERE AuthorID=?', (authorid,))
                         passed += 1
