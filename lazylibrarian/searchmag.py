@@ -248,7 +248,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
                     # Need to make sure that substrings of magazine titles don't get found
                     # (e.g. Maxim USA will find Maximum PC USA) so split into "words"
                     dic = {'.': ' ', '-': ' ', '/': ' ', '_': ' ', '(': '', ')': '', '[': ' ', ']': ' ',
-                           '#': '# ', '!': ' '}
+                           '#': '# ', '!': ' ', ':': ' '}
                     nzbtitle_formatted = replace_all(nzbtitle, dic)
 
                     # remove extra spaces if they're in a row
