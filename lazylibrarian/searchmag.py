@@ -228,6 +228,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
                 issues = []
                 bookid = ''
                 wanted_list = []
+                control_date = ''
                 res = db.match("SELECT Regex from magazines WHERE Title=? AND Status='Active'", (book['bookid'],))
                 searchterms = get_list(res['Regex'], ',')
                 for nzb in resultlist:
@@ -504,7 +505,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
                             else:
                                 wanted_list.append([new_value_dict, control_value_dict])
 
-                if str(control_date).isdigit():
+                if wanted_list and str(control_date).isdigit():
                     # for mags with issue number rather than date, use MAX_AGE as a counter of how many issues to grab
                     sorted_list = sorted(wanted_list, key=lambda x: x[0]['AuxInfo'], reverse=True)  # sort on descending issuedate
                     logger.debug(CONFIG.get_int('MAG_AGE'))

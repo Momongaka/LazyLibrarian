@@ -5023,7 +5023,7 @@ class WebInterface:
                 threading.Thread(target=search_comics, name='SEARCHCOMIC', args=[comicid]).start()
                 logger.debug(f"Searching for comic ID {comicid}")
             else:
-                logger.warning("Not searching for comic, no download methods set, check config")
+                logger.warning("Not searching for comic, no download methods available. Check config and blocklist")
         else:
             logger.debug("ComicSearch called with no comic ID")
 
@@ -6881,7 +6881,7 @@ class WebInterface:
                 threading.Thread(target=search_magazines, name='SEARCHMAG', args=[mags, False, False]).start()
                 logger.debug(f"Searching for magazine with title: {mags[0]['bookid']}")
             else:
-                logger.warning("Not searching for magazine, no download methods set, check config")
+                logger.warning("Not searching for magazine, no download methods available. Check config and blocklist")
         else:
             logger.debug("MagazineSearch called with no magazines")
 
