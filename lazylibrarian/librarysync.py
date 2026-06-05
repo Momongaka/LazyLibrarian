@@ -244,7 +244,7 @@ def get_book_info(fname):
                             res['gr_id'] = txt
                         elif attrib[k] == 'OPENLIBRARY':
                             res['ol_id'] = txt
-                        elif attrib[k] in ['HARDCOVER', 'HARDCOVER-ID'] and txt.isnumeric():
+                        elif attrib[k].upper() in ['HARDCOVER', 'HARDCOVER-ID'] and txt.isnumeric():
                             res['hc_id'] = txt
                         elif attrib[k] == 'GOOGLE':
                             res['gb_id'] = txt
