@@ -475,18 +475,24 @@ def format_issue_filename(base, mag_title, dateparts):
         # month might be single or range
         startmonth = dateparts['months'][0]
         issuemonth = lazylibrarian.MONTHNAMES[0][startmonth][lang]
+        issuemonthnum = startmonth
         if len(dateparts['months']) > 1:
             endmonth = dateparts['months'][-1]
             issuemonth = f"{issuemonth}-{lazylibrarian.MONTHNAMES[0][endmonth][lang]}"
+            issuemonthnum = f"{startmonth}-{endmonth}"
     else:
         issuemonth = ''
+        issuemonthnum = ''
+
     mydict = {"Title": mag_title,
               "IssueYear": str(dateparts['year']),
               "IssueNum": str(dateparts['issue']).zfill(4),
               "IssueDay": str(dateparts['day']).zfill(2),
               "IssueVol": str(dateparts['volume']).zfill(4),
               "IssueDate": str(dateparts['dbdate']),
-              "IssueMonth": issuemonth}
+              "IssueMonth": issuemonth,
+              "IssueMonthNum": issuemonthnum
+              }
 
     if base == CONFIG['MAG_DEST_FOLDER']:
         # No special requirements on folder name
@@ -511,6 +517,8 @@ def format_issue_filename(base, mag_title, dateparts):
         if '$Title' in base and '$IssueNum' in base and mydict['Title'] and mydict['IssueNum']:
             valid_format = True
         if '$IssueVol' in base and '$IssueNum' in base and mydict['IssueVol'] and mydict['IssueNum']:
+            valid_format = True
+        if '$IssueYear' in base and '$IssueMonthNum' in base and mydict['IssueYear'] and mydict['IssueMonthNum']:
             valid_format = True
         if '$IssueYear' in base and '$IssueMonth' in base and mydict['IssueYear'] and mydict['IssueMonth']:
             valid_format = True

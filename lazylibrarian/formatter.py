@@ -986,7 +986,7 @@ def replacevars(base, mydict, is_folder=False):
     matchinglogger.debug(base)
     vardict = ['$Author', '$SortAuthor', '$Title', '$SortTitle', '$Series', '$FmtName', '$FmtNum', '$Language',
                '$SerName', '$SerNum', '$PadNum', '$PubYear', '$SerYear', '$Part', '$Total', '$Abridged',
-               '$IssueDate', '$IssueNum', '$IssueVol', '$IssueMonth', '$IssueYear', '$IssueDay']
+               '$IssueDate', '$IssueNum', '$IssueVol', '$IssueMonth', '$IssueMonthNum', '$IssueYear', '$IssueDay']
 
     # first strip any braced expressions where any var in the expression is empty
     # eg {$SerName - $SerNum} becomes '' if either var is empty
