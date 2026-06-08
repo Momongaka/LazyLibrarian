@@ -645,32 +645,35 @@ class WebInterface:
             cmd = ("SELECT AuthorImg,AuthorName,LastBook,LastDate,Status,AuthorLink,LastLink,HaveBooks,"
                    "UnignoredBooks,AuthorID,LastBookID,DateAdded,Reason from authors ")
             if lazylibrarian.IGNORED_AUTHORS:
-                cmd += "where Status == 'Ignored' "
                 if CONFIG.get_bool('IGNORE_PAUSED'):
-                    cmd += "or Status == 'Paused' "
+                    cmd = "where Status IN ('Ignored', 'Paused') "
+                else:
+                    cmd += "where Status == 'Ignored' "
             else:
-                cmd += "where Status != 'Ignored' "
                 if CONFIG.get_bool('IGNORE_PAUSED'):
-                    cmd += "and  Status != 'Paused' "
+                    cmd += "where Status NOT IN ('Ignored', 'Paused') "
+                else:
+                    cmd += "where Status != 'Ignored' "
             cmd += "and AuthorName is not null "
 
             if lazylibrarian.PRIMARY_AUTHORS:
                 # is the author a primary author for any book...
-                bookauthors = []
+                bookauthors = set()
                 res = db.select(f"SELECT AuthorID from bookauthors WHERE role={ROLE['PRIMARY']}")
                 for author in res:
-                    bookauthors.append(author['AuthorID'])
+                    bookauthors.add(author['AuthorID'])
                 cmd += " and AuthorID in (" + ", ".join(f"'{w}'" for w in bookauthors) + ")"
-            myauthors = []
+            myauthors = set()
             if userid and userprefs & lazylibrarian.pref_myauthors:
                 res = db.select("SELECT WantID from subscribers WHERE Type='author' and UserID=?", (userid,))
                 serversidelogger.debug(f"User subscribes to {len(res)} authors")
                 for author in res:
-                    myauthors.append(author['WantID'])
+                    myauthors.add(author['WantID'])
                 cmd += " and AuthorID in (" + ", ".join(f"'{w}'" for w in myauthors) + ")"
 
             cmd += " order by AuthorName COLLATE NOCASE"
             serversidelogger.debug(f"get_index {cmd}")
+            print(1, cmd)
 
             rowlist = db.select(cmd)
             # At his point we want to sort and filter _before_ adding the html as it's much quicker

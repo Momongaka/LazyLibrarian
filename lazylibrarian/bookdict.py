@@ -584,13 +584,13 @@ def add_author_books_to_db(resultqueue, bookstatus, audiostatus, entrystatus, en
                             bookdict['booklang'] = booklang
 
                 cover_link = bookdict['bookimg']
-                if 'nocover' in cover_link or 'nophoto' in cover_link:
+                if not cover_link or 'nocover' in cover_link or 'nophoto' in cover_link:
                     start = time.time()
-                    cover_link, _ = get_book_cover(bookdict['bookid'], ignore='dnb')
+                    cover_link, _ = get_book_cover(bookdict['bookid'], ignore=bookdict['source'])
                     summary['cover_time'] += (time.time() - start)
                     summary['covers'] += 1
                 elif cover_link and cover_link.startswith('http'):
-                    cover_link = cache_bookimg(cover_link, bookdict['bookid'], 'dn')
+                    cover_link = cache_bookimg(cover_link, bookdict['bookid'], bookdict['source'])
                 if not cover_link:  # no results on search or failed to cache it
                     cover_link = 'images/nocover.png'
 

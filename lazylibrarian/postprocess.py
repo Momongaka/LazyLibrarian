@@ -3670,7 +3670,7 @@ def _find_preferred_book_file(
 def _handle_magazine_comic_metadata(
     book_type: str,
     book_path: str,
-    book_file: str,
+    book_filename: str,
     bookid: str,
     issueid: str,
     title: str,
@@ -3737,7 +3737,7 @@ def _handle_magazine_comic_metadata(
             )
             if entry:
                 _, _ = create_mag_opf(
-                    book_file,
+                    book_filename,
                     title,
                     issuedate,
                     issueid,

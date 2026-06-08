@@ -949,7 +949,6 @@ class DNB:
             resultlist = []
             resultcount = 0
             ignored = 0
-            total_count = 0
             no_author_count = 0
             title = ''
             authorname = ''
@@ -1072,7 +1071,6 @@ class DNB:
             self.logger.debug(
                 f"Returning {resultcount} {plural(resultcount, 'result')} for {searchterm}")
 
-            self.logger.debug(f"Found {total_count} {plural(total_count, 'result')}")
             self.logger.debug(f"Removed {ignored} unwanted language {plural(ignored, 'result')}")
             self.logger.debug(f"Removed {no_author_count} {plural(no_author_count, 'book')} with no author")
             queue.put(resultlist)
