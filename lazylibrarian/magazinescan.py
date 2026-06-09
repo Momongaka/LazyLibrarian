@@ -491,7 +491,7 @@ def format_issue_filename(base, mag_title, dateparts):
               "IssueVol": str(dateparts['volume']).zfill(4),
               "IssueDate": str(dateparts['dbdate']),
               "IssueMonth": issuemonth,
-              "IssueMonthNum": issuemonthnum
+              "IssueMNum": issuemonthnum
               }
 
     if base == CONFIG['MAG_DEST_FOLDER']:
@@ -518,7 +518,7 @@ def format_issue_filename(base, mag_title, dateparts):
             valid_format = True
         if '$IssueVol' in base and '$IssueNum' in base and mydict['IssueVol'] and mydict['IssueNum']:
             valid_format = True
-        if '$IssueYear' in base and '$IssueMonthNum' in base and mydict['IssueYear'] and mydict['IssueMonthNum']:
+        if '$IssueYear' in base and '$IssueMNum' in base and mydict['IssueYear'] and mydict['IssueMNum']:
             valid_format = True
         if '$IssueYear' in base and '$IssueMonth' in base and mydict['IssueYear'] and mydict['IssueMonth']:
             valid_format = True
