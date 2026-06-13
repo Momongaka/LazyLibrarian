@@ -224,14 +224,21 @@ def get_content_path(hashid):
     cat = CONFIG['QBITTORRENT_LABEL']
     if not cat:
         cat = None
-    try:
-        torrents = qbclient.torrents(category=cat)
-    except Exception as e:
-        dlcommslogger.error(f"Failed to get_content_path: {e}")
-        return ''
-    for torrent in torrents:
-        if torrent.get('hash') == hashid and torrent.get('content_path'):
-            return torrent['content_path']
+    # content_path is normally populated as soon as the torrent exists, but can be briefly
+    # empty right after completion; retry a few times (short sleep) before giving up.
+    retries = 3
+    while retries:
+        try:
+            torrents = qbclient.torrents(category=cat)
+        except Exception as e:
+            dlcommslogger.error(f"Failed to get_content_path: {e}")
+            return ''
+        for torrent in torrents:
+            if torrent.get('hash') == hashid and torrent.get('content_path'):
+                return torrent['content_path']
+        retries -= 1
+        if retries:
+            time.sleep(2)
     return ''
 
 
