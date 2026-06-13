@@ -28,6 +28,7 @@ from lazylibrarian.postprocess import (
     _handle_snatched_timeout,
     _is_valid_media_file,
     _normalize_title,
+    _process_matched_directory,
     _should_delete_processed_files,
     _tokenize_file,
     _validate_candidate_directory,
@@ -571,6 +572,67 @@ class PostprocessFileOperationsTest(LLTestCaseWithStartup):
         # Should delegate to CONFIG methods
         result = _is_valid_media_file("test.epub", book_type="ebook")
         self.assertTrue(result)
+
+    def test_process_matched_directory_finds_nested_audiobook(self):
+        """Test that _process_matched_directory recurses into subfolders for nested media.
+
+        Torrent clients often place multi-part audiobooks under a year subfolder, e.g.:
+          <Title>/
+            <Title> (2009)/
+              Part1.mp3
+        The non-recursive first-pass finds nothing; the fix must recurse before giving up.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            sub = os.path.join(root, "Good Omens (2009)")
+            os.makedirs(sub)
+            open(os.path.join(sub, "Good Omens Unabridged~Part1.mp3"), "w").close()
+
+            book_state = BookState(
+                book_id="434342", download_title="Good Omens", aux_type="AudioBook"
+            )
+            book_state.update_candidate(root)
+
+            logger = logging.getLogger("test")
+            download_dir = os.path.dirname(root)
+            is_valid, skip_reason = _process_matched_directory(
+                book_state, download_dir, 100.0, logger, logger
+            )
+
+            self.assertTrue(
+                is_valid,
+                f"expected nested audiobook to validate, got: {skip_reason}",
+            )
+            self.assertEqual(book_state.candidate_ptr, sub)
+
+    def test_process_matched_directory_nested_ebook_not_recursed(self):
+        """Test that the recursive fallback is scoped to audiobooks only.
+
+        The recursive find returns the first valid-extension file with no sample
+        filtering or name matching, so eBooks must NOT recurse into subfolders here:
+        they keep the original bail and let the archive/collection best-match logic
+        handle nested layouts. A nested eBook with no top-level file must fail.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            sub = os.path.join(root, "Some Book (2009)")
+            os.makedirs(sub)
+            open(os.path.join(sub, "Some Book.epub"), "w").close()
+
+            book_state = BookState(
+                book_id="999", download_title="Some Book", aux_type="eBook"
+            )
+            book_state.update_candidate(root)
+
+            logger = logging.getLogger("test")
+            download_dir = os.path.dirname(root)
+            is_valid, skip_reason = _process_matched_directory(
+                book_state, download_dir, 100.0, logger, logger
+            )
+
+            self.assertFalse(
+                is_valid,
+                "eBooks must not recurse into subfolders in the no-archive fallback",
+            )
+            self.assertEqual(skip_reason, "No valid file or archives found")
 
 
 class PostprocessIntegrationTest(LLTestCaseWithStartup):
