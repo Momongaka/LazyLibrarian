@@ -211,6 +211,30 @@ def get_folder(hashid):
     return os.path.basename(os.path.normpath(save_path))
 
 
+def get_content_path(hashid):
+    """qBittorrent's actual content path (root of the downloaded files) for a torrent.
+    Differs from save_path + name when the torrent was renamed; use it to locate the real
+    folder for post-processing. Returns '' if unavailable."""
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug(f'get_content_path({hashid})')
+    hashid = hashid.lower()
+    qbclient = get_client()
+    if not qbclient:
+        return ''
+    cat = CONFIG['QBITTORRENT_LABEL']
+    if not cat:
+        cat = None
+    try:
+        torrents = qbclient.torrents(category=cat)
+    except Exception as e:
+        dlcommslogger.error(f"Failed to get_content_path: {e}")
+        return ''
+    for torrent in torrents:
+        if torrent.get('hash') == hashid and torrent.get('content_path'):
+            return torrent['content_path']
+    return ''
+
+
 def get_progress(hashid):
     # returns int(progress/error), state/errormessage, bool(complete)
     # error codes -1 not found, -2 communication error

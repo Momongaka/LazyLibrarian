@@ -482,6 +482,19 @@ def get_download_folder(source, downloadid):
         return None
 
 
+def get_download_content_path(source, downloadid):
+    """Actual on-disk content path from the download client, where it differs from
+    save_path + torrent name. Currently only qBittorrent reports this; other clients
+    return '' so the caller keeps its existing behavior."""
+    # noinspection PyBroadException
+    try:
+        if source == "QBITTORRENT":
+            return qbittorrent.get_content_path(downloadid)
+    except Exception:
+        return ''
+    return ''
+
+
 def get_download_progress(source, downloadid):
     logger = logging.getLogger(__name__)
     dlcommslogger = logging.getLogger("special.dlcomms")
