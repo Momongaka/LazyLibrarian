@@ -691,6 +691,9 @@ class OpenLibrary:
                     if not isbn and CONFIG.get_bool('NO_ISBN'):
                         rejected.append(['isbn', 'No ISBN'])
 
+                    if auth_id and ol_id and auth_id != ol_id:
+                        rejected.append(['name', f"Wrong authorid ({auth_id}/{ol_id})"])
+
                     dic = {'.': ' ', '-': ' ', '/': ' ', '+': ' ', '_': ' ', '(': '', ')': '',
                            '[': ' ', ']': ' ', '#': '# ', ':': ' ', ';': ' '}
                     name = replace_all(title, dic).strip()
