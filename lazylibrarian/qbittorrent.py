@@ -128,9 +128,9 @@ def get_folder(hashid):
             dlcommslogger.error(f"Failed to get_folder: {e}")
             torrents = ''
         for torrent in torrents:
-            if torrent.get('hash') == hashid and torrent.get('save_path'):
-                # If there's no folder yet then it's probably a magnet, try until folder is populated
-                return torrent['save_path']
+            if torrent.get('hash') == hashid and torrent.get('content_path'):
+                # return absolute path of single file, or folder contaning multi files
+                return torrent['content_path']
         time.sleep(6)
         retries -= 1
     if not save_path:
