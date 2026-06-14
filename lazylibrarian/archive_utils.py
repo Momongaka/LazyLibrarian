@@ -28,7 +28,6 @@ import traceback
 import zipfile
 
 import lazylibrarian
-from lazylibrarian import RARFILE
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.filesystem import listdir, make_dirs, path_isfile, syspath
 from lazylibrarian.formatter import is_valid_type, make_unicode
@@ -80,6 +79,8 @@ def unpack_multipart(source_dir, download_dir, title):
                     return ""
         for f in listdir(targetdir):
             f = str(f)
+            if not os.path.exists(os.path.join(targetdir, f)):
+                continue
             if f.endswith(".rar"):
                 resultdir = unpack_archive(
                     os.path.join(targetdir, f), targetdir, title, targetdir=targetdir
@@ -198,11 +199,11 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                         logger.error(f"Unable to extract {item} from {archivename}: {e}")
                         continue
 
-        elif lazylibrarian.UNRARLIB == 1 and RARFILE.is_rarfile(archivename):
+        elif lazylibrarian.UNRARLIB == 1 and lazylibrarian.RARFILE and lazylibrarian.RARFILE.is_rarfile(archivename):
             TELEMETRY.record_usage_data("Process/Archive/RarOne")
             postprocesslogger.debug(f"{archivename} is a rar file")
             try:
-                z = RARFILE.RarFile(archivename)
+                z = lazylibrarian.RARFILE.RarFile(archivename)
             except Exception as e:
                 logger.error(f"Failed to unrar {archivename}: {e}")
                 return ""
@@ -234,7 +235,7 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                         logger.error(f"Unable to extract {item} from {archivename}: {e}")
                         continue
 
-        elif lazylibrarian.UNRARLIB == 2:
+        elif lazylibrarian.UNRARLIB == 2 and lazylibrarian.RARFILE:
             # noinspection PyBroadException
             try:
                 z = lazylibrarian.RARFILE(archivename)
