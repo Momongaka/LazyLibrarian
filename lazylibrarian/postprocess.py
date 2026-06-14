@@ -417,6 +417,14 @@ class BookState:
             elif res and (res['NZBprov'] in ['annas', 'zlibrary'] or res['NZBprov'].startswith('libgen')):
                 # these download into first download directory
                 self.download_folder = get_directory('Download')
+            elif self.source == "QBITTORRENT" and general_folder:
+                if os.path.isdir(general_folder):
+                    # root directory for multi-file torrents
+                    self.download_folder = general_folder
+                else:
+                    # absolute file path for single-file torrents
+                    self.download_folder = os.path.dirname(general_folder)
+                    self.download_title = os.path.basename(general_folder)
             # For torrent clients, combine base folder with download name
             elif general_folder and download_name:
                 self.download_folder = os.path.join(general_folder, download_name)
@@ -425,7 +433,7 @@ class BookState:
                 self.download_folder = general_folder
 
             logger.debug(f"General:{general_folder} DownloadName:{download_name} "
-                         f"DownloadFolder:{self.download_folder}")
+                          f"DownloadFolder:{self.download_folder} DownloadTitle:{self.download_title}")
         # Get actual book title for drill-down matching
         if self.book_id and self.is_book():
             result = db.match(
@@ -1038,7 +1046,9 @@ def _extract_archives_in_directory(
             extn = extn.lower()
 
             # Skip files that are ebooks/comics (they're already in zip format)
-            if extn not in [".epub", ".cbr", ".cbz"]:
+            if item and extn not in [".epub", ".cbr", ".cbz"]:
+                if not os.path.exists(os.path.join(dirpath, item)):
+                    continue
                 res = unpack_archive(os.path.join(dirpath, item), download_dir, title)
                 if res:
                     candidate_ptr = res
