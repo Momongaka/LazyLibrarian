@@ -484,6 +484,8 @@ def process_alternate(source_dir=None, library="eBook"):
                 for f in listdir(source_dir):
                     if not is_valid_type(f, extensions=CONFIG.get_all_types_list()):
                         # Is file an archive, if so look inside and extract to new dir
+                        if not os.path.exists(os.path.join(source_dir, f)):
+                            continue
                         res = _unpack_archive(os.path.join(source_dir, f), source_dir, f)
                         if res:
                             source_dir = res

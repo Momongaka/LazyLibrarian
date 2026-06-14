@@ -1005,7 +1005,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                             logger.warning(
                                                 f"Metadata authorid [{authorid}] does not match database "
                                                 f"[{match['AuthorID']}]")
-                                if not match:
+                                if bookid and not match:
                                     cmd = "SELECT Status,BookID FROM books where BookName=? and AuthorID=?"
                                     match = db.match(cmd, (book, authorid))
                                     if match:
