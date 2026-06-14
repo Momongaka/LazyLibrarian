@@ -558,8 +558,6 @@ def get_book_cover(bookid=None, src=None, ignore=''):
                 res, src = crawl_image('google', src, cachedir, bookid, safeparams, imgid=imgid)
                 if res:
                     return res, src
-
-        logger.debug("No image found from any configured source")
         return None, src
     except Exception:
         logger.error(f'Unhandled exception in get_book_cover: {traceback.format_exc()}')
