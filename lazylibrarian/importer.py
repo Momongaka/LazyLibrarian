@@ -18,6 +18,7 @@ import string
 import threading
 import time
 import traceback
+from hashlib import sha1
 from queue import Queue
 from urllib.parse import unquote_plus
 
@@ -31,6 +32,7 @@ from lazylibrarian.formatter import (
     check_int,
     format_author_name,
     get_list,
+    make_bytestr,
     plural,
     thread_name,
     today,
@@ -58,37 +60,46 @@ def is_valid_authorid(authorid: str, api=None) -> bool:
     return bool(authorid.isdigit() and api != 'OpenLibrary')
 
 
-def get_preferred_author(author):
-    # Look up an authorname in the database, if not found try fuzzy match
+def get_preferred_author(author, authorid=''):
+    # Look up an author in the database, if not found try fuzzy match
     # Return possibly changed authorname and authorid if found in library
     logger = logging.getLogger(__name__)
     author = format_author_name(author, postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
-    authorid = ''
     db = database.DBConnection()
-    check_exist_author = db.match('SELECT * FROM authors where AuthorName=?', (author,))
+    check_exist_author = None
+    if authorid:
+        keys = author_keys()
+        cmd = "SELECT * from authors WHERE AuthorID=?"
+        for k in keys:
+            cmd += f" or {k}=?"
+        check_exist_author = db.match(cmd, tuple([str(authorid)] * (len(keys) + 1)))
+    if not check_exist_author:
+        check_exist_author = db.match('SELECT * FROM authors where AuthorName=?', (author,))
     if check_exist_author:
-        authorid = check_exist_author['AuthorID']
-    else:  # If no exact match, look for a close fuzzy match to handle misspellings, accents or AKA
-        match_name = author.lower().replace('.', '')
-        res = db.action('select AuthorID,AuthorName,AKA from authors')
-        for item in res:
-            aname = item['AuthorName']
-            if aname:
-                match_fuzz = fuzz.ratio(aname.lower().replace('.', ''), match_name)
+        db.close()
+        return check_exist_author['AuthorName'], check_exist_author['AuthorID']
+
+    # If no exact match, look for a close fuzzy match to handle misspellings, accents or AKA
+    match_name = author.lower().replace('.', '')
+    res = db.action('select AuthorID,AuthorName,AKA from authors')
+    for item in res:
+        aname = item['AuthorName']
+        if aname:
+            match_fuzz = fuzz.ratio(aname.lower().replace('.', ''), match_name)
+            if match_fuzz >= CONFIG.get_int('NAME_RATIO'):
+                logger.debug(f"Fuzzy match [{item['AuthorName']}] {round(match_fuzz, 2)}% for [{author}]")
+                author = item['AuthorName']
+                authorid = item['AuthorID']
+                break
+        akas = get_list(item['AKA'], ',')
+        if akas:
+            for aka in akas:
+                match_fuzz = fuzz.token_set_ratio(aka.lower().replace('.', '').replace(',', ''), match_name)
                 if match_fuzz >= CONFIG.get_int('NAME_RATIO'):
-                    logger.debug(f"Fuzzy match [{item['AuthorName']}] {round(match_fuzz, 2)}% for [{author}]")
+                    logger.debug(f"Fuzzy AKA match [{aka}] {round(match_fuzz, 2)}% for [{author}]")
                     author = item['AuthorName']
                     authorid = item['AuthorID']
                     break
-            akas = get_list(item['AKA'], ',')
-            if akas:
-                for aka in akas:
-                    match_fuzz = fuzz.token_set_ratio(aka.lower().replace('.', '').replace(',', ''), match_name)
-                    if match_fuzz >= CONFIG.get_int('NAME_RATIO'):
-                        logger.debug(f"Fuzzy AKA match [{aka}] {round(match_fuzz, 2)}% for [{author}]")
-                        author = item['AuthorName']
-                        authorid = item['AuthorID']
-                        break
     db.close()
     return author, authorid
 
@@ -200,7 +211,11 @@ def add_author_name_to_db(author=None, refresh=False, addbooks=None, reason=None
                         f"Failed to match author [{author}] to authorname [{match_name}] fuzz [{match_fuzz}]")
 
             if not author_info:
-                return "", "", new
+                # not found at any enabled provider. Fake it, generate our own ID...
+                author_info['authorname'] = author
+                author_info['authorid'] = f'LL{sha1(make_bytestr(author)).hexdigest()}'
+                logger.debug(f"Generated ID {author_info['authorid']} for {author_info['authorname']}")
+                match_fuzz = 100
 
             # To save loading hundreds of books by unknown authors at GR or GB, ignore unknown
             if "unknown" not in author.lower() and 'anonymous' not in author.lower() and \
@@ -298,10 +313,15 @@ def get_all_author_details(authorid='', authorname=None):
             cmd += f" or {k}=?"
         match = db.match(cmd, tuple([str(authorid)] * (len(keys) + 1)))
     if not match and authorname:
-        a_name, a_id = get_preferred_author(authorname)
+        a_name, a_id = get_preferred_author(authorname, authorid=authorid)
         if a_id:
             cmd = f"SELECT {','.join(keys)},authorid,authorname from authors WHERE authorname=? COLLATE NOCASE"
-            match = db.match(cmd, (a_name,))
+            name_match = db.match(cmd, (a_name,))
+            if name_match:
+                for k in keys:
+                    if name_match[k] == authorid:
+                        match = name_match
+                        break
     if match:
         authorname = match['authorname']
         authorid = match['authorid']
@@ -404,33 +424,32 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
                 cmd += f" or {k}=?"
             dbauthor = db.match(cmd, tuple([str(authorid)] * (len(authorkeys) + 1)))
         else:
-            dbauthor = []
+            dbauthor = {}
         if dbauthor:
             new_author = False
             authorid = dbauthor['AuthorID']
             authorname = dbauthor['AuthorName']
         elif authorname and 'unknown' not in authorname and 'anonymous' not in authorname:
-            dbauthor = db.match("SELECT * from authors WHERE AuthorName=?", (authorname,))
-            if dbauthor:
-                new_author = False
-                authorid = dbauthor['AuthorID']
-            else:
-                dbauthor = db.match("SELECT * from authors WHERE instr(AKA, ?) > 0", (authorname,))
-                if dbauthor:
-                    new_author = False
-                    authorid = dbauthor['AuthorID']
-                    authorname = dbauthor['AuthorName']
-
+            dbauthor = db.match("SELECT * from authors WHERE AuthorName=? or instr(AKA, ?) > 0", (authorname, authorname))
+            if dbauthor:  # same name or AKA but different id
+                for k in authorkeys:
+                    if dbauthor[k] == authorid:
+                        new_author = False
+                        authorid = dbauthor['AuthorID']
+                        authorname = dbauthor['AuthorName']
+                        break
         if new_author or refresh:
             current_author = get_all_author_details(authorid, authorname)
             if authorid:
                 current_author['authorid'] = authorid  # keep entry authorid
+            if authorname:
+                current_author['authorname'] = authorname  # and entry authorname
         else:
             current_author = {}
             for item in dict(dbauthor):
                 current_author[item.lower()] = dbauthor[item]
 
-        if new_author and not authorname and current_author.get('authorname'):
+        if new_author and not authorid and current_author.get('authorname'):
             # maybe we only had authorid(s) to search for
             dbauthor = db.match("SELECT * from authors WHERE AuthorName=? COLLATE NOCASE",
                                 (current_author['authorname'],))
@@ -483,16 +502,44 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
                 db.action('UPDATE authors SET AuthorName=? WHERE AuthorID=?',
                           (current_author['authorname'], current_author['authorid']))
 
-        if not current_author.get('authorid'):
+        if authorid and not current_author.get('authorid'):
             current_author['authorid'] = authorid
-        if not current_author.get('authorname'):
+        if not current_author['authorid']:
+            logger.debug(
+                f"Unable to update author: AuthorID missing: Entry ID {authorid}, Entry name {authorname}, dbauthor {dict(dbauthor)}")
+            return None
+        if authorname and not current_author.get('authorname'):
             current_author['authorname'] = authorname
+        if not current_author['authorname']:
+            logger.debug(
+                f"Unable to update author {current_author['authorid']}: Authorname missing: Entry name {authorname}, dbauthor {dict(dbauthor)}")
+            return None
 
         control_value_dict = {"AuthorID": current_author['authorid']}
         if not current_author['manual']:
             new_value_dict = current_author.copy()
             new_value_dict.pop('authorid')
             try:
+                # at this point we should be able to add as a new author
+                # but the name may collide if an existing author has the same name
+                # but different authorid, eg there are several "David Mitchell" in openlibrary
+                if new_author:
+                    new_name = current_author['authorname']
+                    while True:
+                        existing = db.match("SELECT * from authors WHERE AuthorName=? COLLATE NOCASE",
+                                            (new_name,))
+                        if existing and existing['AuthorID'] != current_author['authorid']:
+                            words = new_name.split()
+                            if len(words) > 1:  # add an extra dot to make the name different
+                                new_name = words[0] + '. ' + ' '.join(words[1:])
+                            else:
+                                new_name = f"{new_name}."
+                            logger.warning(f"Authorname {current_author['authorname']} already exists, Trying {new_name}")
+                        else:
+                            break
+                    new_value_dict['authorname'] = new_name
+                    current_author['authorname'] = new_name
+
                 db.upsert("authors", new_value_dict, control_value_dict)
             except sqlite3.IntegrityError as err:
                 # Had a report of authorname constraint failed here but currently can't see why. Need more info
@@ -520,6 +567,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
         }
         if new_author:
             new_value_dict["AuthorImg"] = "images/nophoto.png"
+            new_value_dict["AuthorName"] = current_author['authorname']
             new_value_dict['Reason'] = reason
             new_value_dict['DateAdded'] = today()
             refresh = True
