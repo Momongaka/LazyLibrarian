@@ -412,7 +412,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
         thread_name("AddAuthorToDB")
     db = database.DBConnection()
     ret_id = None
-
+    current_author = {}
     # noinspection PyBroadException
     try:
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
@@ -444,7 +444,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
                 current_author['authorid'] = authorid  # keep entry authorid
             if authorname:
                 current_author['authorname'] = authorname  # and entry authorname
-        else:
+        elif dbauthor:
             current_author = {}
             for item in dict(dbauthor):
                 current_author[item.lower()] = dbauthor[item]
@@ -469,8 +469,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
         if new_author:
             current_author['status'] = CONFIG['NEWAUTHOR_STATUS']
         else:
-            if dbauthor['manual'] in [True, 'True', 1, '1']:
-                current_author['manual'] = True
+            current_author['manual'] = bool(dbauthor['manual'] in [True, 'True', 1, '1'])
             current_author['status'] = dbauthor['status']
 
         if not current_author.get('authorid'):

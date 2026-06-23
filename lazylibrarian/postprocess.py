@@ -425,7 +425,7 @@ class BookState:
                     # absolute file path for single-file torrents
                     self.download_folder = os.path.dirname(general_folder)
                     self.download_title = os.path.basename(general_folder)
-            # For torrent clients, combine base folder with download name
+            # For other torrent clients, combine base folder with download name
             elif general_folder and download_name:
                 self.download_folder = os.path.join(general_folder, download_name)
             elif general_folder:
