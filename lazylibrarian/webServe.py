@@ -646,7 +646,7 @@ class WebInterface:
                    "UnignoredBooks,AuthorID,LastBookID,DateAdded,Reason from authors ")
             if lazylibrarian.IGNORED_AUTHORS:
                 if CONFIG.get_bool('IGNORE_PAUSED'):
-                    cmd = "where Status IN ('Ignored', 'Paused') "
+                    cmd += "where Status IN ('Ignored', 'Paused') "
                 else:
                     cmd += "where Status == 'Ignored' "
             else:
