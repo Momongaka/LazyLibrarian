@@ -66,7 +66,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
-
+        logger.debug(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
         searchlist = []
 
@@ -538,6 +538,7 @@ def search_magazines(mags=None, reset=False, backissues=False):
     except Exception:
         logger.error(f'Unhandled exception in search_magazines: {traceback.format_exc()}')
     finally:
+        logger.debug(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         db.close()
         thread_name("WEBSERVER")

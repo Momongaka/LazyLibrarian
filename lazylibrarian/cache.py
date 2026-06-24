@@ -538,6 +538,7 @@ def clean_cache():
     db = database.DBConnection()
     result = []
     try:
+        logger.debug("Storing start time for CLEANCACHE")
         db.upsert("jobs", {'Start': time.time()}, {'Name': 'CLEANCACHE'})
         result = [
             # Remove files that are too old from cache directories
@@ -589,6 +590,7 @@ def clean_cache():
     except Exception as e:
         logger.error(str(e))
 
+    logger.debug("Storing finish time for CLEANCACHE")
     db.upsert("jobs", {'Finish': time.time()}, {'Name': 'CLEANCACHE'})
     db.close()
     thread_name(threadname)

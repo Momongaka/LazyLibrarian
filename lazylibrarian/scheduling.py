@@ -294,6 +294,7 @@ def author_update(restart=True, only_overdue=True):
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
+        logger.debug("Storing start time for AUTHORUPDATE")
         db.upsert("jobs", {"Start": time.time()}, {"Name": "AUTHORUPDATE"})
         if CONFIG.get_int('CACHE_AGE'):
             overdue, total, name, ident, days = is_overdue('author')
@@ -316,6 +317,7 @@ def author_update(restart=True, only_overdue=True):
         return "Unhandled exception in AuthorUpdate"
 
     finally:
+        logger.debug("Storing finish time for AUTHORUPDATE")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": "AUTHORUPDATE"})
         db.close()
 
@@ -327,6 +329,7 @@ def series_update(restart=True, only_overdue=True):
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
+        logger.debug("Storing start time for SERIESUPDATE")
         db.upsert("jobs", {"Start": time.time()}, {"Name": "SERIESUPDATE"})
         if CONFIG.get_int('CACHE_AGE'):
             overdue, total, name, ident, days = is_overdue('series')
@@ -348,6 +351,7 @@ def series_update(restart=True, only_overdue=True):
         return "Unhandled exception in series_update"
 
     finally:
+        logger.debug("Storing finish time for SERIESUPDATE")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": "SERIESUPDATE"})
         db.close()
 

@@ -2835,6 +2835,7 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
 
     db = database.DBConnection()
     try:
+        logger.debug(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
 
         # Now we will get a list of wanted books that are snatched and ready for processing
@@ -3059,6 +3060,7 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
         _manage_download_status(db, postprocesslogger)
 
         # Cleanup and scheduling
+        logger.debug(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         _check_and_schedule_next_run(db, logger, reset)
 

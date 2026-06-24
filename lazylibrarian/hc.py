@@ -1807,6 +1807,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
                 msg = f"No hc_id for user {ll_userid_context}, first sync?"
                 self.logger.warning(msg)
 
+            self.logger.debug("Storing start time for HCSYNC")
             db.upsert("jobs", {"Start": time.time()}, {"Name": "HCSYNC"})
 
             # Get all the user's reading lists
@@ -2123,6 +2124,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
             return f"User {ll_userid_context} HardCover sync failed: {str(e)}"
 
         finally:
+            self.logger.debug("Storing finish time for HCSYNC")
             db.upsert("jobs", {"Finish": time.time()}, {"Name": "HCSYNC"})
             db.close()
             self.logger.info(f"HCsync completed for {ll_userid_context}")

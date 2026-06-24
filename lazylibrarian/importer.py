@@ -415,6 +415,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
     current_author = {}
     # noinspection PyBroadException
     try:
+        logger.debug(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
         authorkeys = author_keys()
         new_author = True
@@ -687,6 +688,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
         logger.debug(msg)
         return None
     finally:
+        logger.debug(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         db.close()
 

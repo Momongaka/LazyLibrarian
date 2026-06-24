@@ -103,6 +103,7 @@ def search_book(books=None, library=None):
             else:
                 thread_name("SEARCHBOOKS")
 
+        logger.debug(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
         searchlist = []
         searchbooks = []
@@ -553,6 +554,7 @@ def search_book(books=None, library=None):
     except Exception:
         logger.error(f'Unhandled exception in search_book: {traceback.format_exc()}')
     finally:
+        logger.debug(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         db.close()
         thread_name("WEBSERVER")

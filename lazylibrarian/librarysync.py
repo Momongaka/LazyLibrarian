@@ -604,6 +604,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
         return 0
 
     db = database.DBConnection()
+    logger.debug(f"Storing start time for {thread_name()}")
     db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
     if startdir == destdir:
         lazylibrarian.AUTHORS_UPDATE = 1
@@ -1472,6 +1473,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
     finally:
         logger.debug(f"Processed folders: {len(processed_subdirectories)}, "
                      f"matched books: {len(rehit)}, unmatched: {len(remiss)}")
+        logger.debug(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         if '_SCAN' in thread_name():
             thread_name('WEBSERVER')

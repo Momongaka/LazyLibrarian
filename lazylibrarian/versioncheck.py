@@ -225,6 +225,7 @@ def check_for_updates():
     db = database.DBConnection()
     columns = db.match('PRAGMA table_info(jobs)')
     if columns:
+        logger.debug("Storing start time for VERSIONCHECK")
         db.upsert("jobs", {"Start": time.time()}, {"Name": "VERSIONCHECK"})
     db.close()
 
@@ -272,6 +273,7 @@ def check_for_updates():
     db = database.DBConnection()
     columns = db.match('PRAGMA table_info(jobs)')
     if columns:
+        logger.debug("Storing finish time for VERSIONCHECK")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": "VERSIONCHECK"})
     db.close()
 

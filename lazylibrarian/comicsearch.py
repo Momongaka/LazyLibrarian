@@ -223,6 +223,7 @@ def search_comics(comicid=None):
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
+        logger.debug(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
         cmd = "SELECT ComicID,Title, aka from comics WHERE Status='Active'"
         if comicid:
@@ -286,6 +287,7 @@ def search_comics(comicid=None):
 
             time.sleep(CONFIG.get_int('SEARCH_RATELIMIT'))
         logger.info("ComicSearch for Wanted items complete")
+        logger.debug(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
     except Exception:
         logger.error(f'Unhandled exception in search_comics: {traceback.format_exc()}')

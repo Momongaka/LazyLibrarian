@@ -275,6 +275,7 @@ def telemetry_send() -> str:
     logger = logging.getLogger(__name__)
     db = database.DBConnection()
     try:
+        logger.info(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
         TELEMETRY.set_install_data(CONFIG, testing=False)
         TELEMETRY.set_config_data(CONFIG)
@@ -289,6 +290,7 @@ def telemetry_send() -> str:
                 result = result.splitlines()[0]  # Return only the first line
         logger.debug(f'Telemetry data sending: {result}, {status}')
     finally:
+        logger.info(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         db.close()
         thread_name(threadname)

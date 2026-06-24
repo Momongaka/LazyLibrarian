@@ -486,6 +486,7 @@ def sync_to_gr():
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
+        logger.debug("Storing start time for GRSYNC")
         db.upsert("jobs", {"Start": time.time()}, {"Name": "GRSYNC"})
         if CONFIG.get_bool('GR_SYNCUSER'):
             user = db.match("SELECT * from users WHERE UserID=?", (CONFIG['GR_USER'],))
@@ -577,6 +578,7 @@ def sync_to_gr():
         return msg
 
     finally:
+        logger.debug("Storing finish time for GRSYNC")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": "GRSYNC"})
         db.close()
         if new_books:
