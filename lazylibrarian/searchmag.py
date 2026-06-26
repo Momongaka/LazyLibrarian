@@ -56,13 +56,13 @@ def search_magazines(mags=None, reset=False, backissues=False):
     TELEMETRY.record_usage_data('Search/Magazine')
     logger = logging.getLogger(__name__)
     searchinglogger = logging.getLogger('special.searching')
-    threadname = thread_name()
-    if "Thread" in threadname:
+
+    if "SEARCH" not in thread_name():
         if not mags:
             thread_name("SEARCHALLMAG")
-            threadname = "SEARCHALLMAG"
         else:
             thread_name("SEARCHMAG")
+
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
@@ -111,8 +111,8 @@ def search_magazines(mags=None, reset=False, backissues=False):
             logger.warning('There is nothing to search for.  Mark some magazines as active.')
 
         for book in searchlist:
-            if lazylibrarian.STOPTHREADS and threadname == "SEARCHALLMAG":
-                logger.debug(f"Aborting {threadname}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "SEARCHALLMAG":
+                logger.debug("STOPTHREADS Aborting SEARCHALLMAG")
                 break
 
             resultlist = []
@@ -548,8 +548,10 @@ def download_maglist(maglist, table='wanted'):
     logger = logging.getLogger(__name__)
     snatched = 0
     db = database.DBConnection()
+    logger.debug(f"Downloading {len(maglist)}")
     try:
         for magazine in maglist:
+            logger.debug(f"{magazine['nzbmode']}: {magazine['nzbtitle']}")
             if magazine['nzbmode'] in ["torznab", "torrent", "magnet"]:
                 snatch, res = tor_dl_method(
                     magazine['bookid'],
@@ -586,8 +588,8 @@ def download_maglist(maglist, table='wanted'):
             else:
                 db.action(f"UPDATE {table} SET status='Failed',DLResult=? WHERE NZBurl=?",
                           (res, magazine["nzburl"]))
-    except Exception as e:
-        logger.error(str(e))
+    except Exception:
+        logger.error(f"Error in download_maglist: {traceback.format_exc()}")
     finally:
         db.close()
         if snatched:

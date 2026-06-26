@@ -213,8 +213,8 @@ def search_comics(comicid=None):
     logger = logging.getLogger(__name__)
     searchinglogger = logging.getLogger('special.searching')
     TELEMETRY.record_usage_data('Search/Comics')
-    threadname = thread_name()
-    if "Thread" in threadname:
+
+    if 'SEARCH' not in thread_name():
         if not comicid:
             thread_name("SEARCHALLCOMICS")
         else:
@@ -236,8 +236,8 @@ def search_comics(comicid=None):
             logger.debug(f"Found {len(comics)} active comics")
 
         for comic in comics:
-            if lazylibrarian.STOPTHREADS and threadname == "SEARCHALLCOMICS":
-                logger.debug(f"Aborting {threadname}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "SEARCHALLCOMICS":
+                logger.debug("STOPTHREADS Aborting SEARCHALLCOMICS")
                 break
             comicid = comic['ComicID']
             aka = get_list(comic['aka'])

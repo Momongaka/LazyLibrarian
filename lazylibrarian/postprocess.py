@@ -2815,20 +2815,20 @@ def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None)
 
     # Thread safety check - prevent concurrent execution
     count = 0
-    logger.debug("Attempt to run POSTPROCESSOR")
+    logger.debug("Attempt to run POSTPROCESS")
     for name in [t.name for t in threading.enumerate()]:
-        if name == "POSTPROCESSOR":
+        if name == "POSTPROCESS":
             count += 1
 
     incoming_threadname = thread_name()
-    if incoming_threadname == "POSTPROCESSOR":
+    if incoming_threadname == "POSTPROCESS":
         count -= 1
 
     if count:
-        logger.debug("POSTPROCESSOR is already running")
+        logger.debug("POSTPROCESS is already running")
         return  # Exit early if already running
 
-    logger.debug("No concurrent POSTPROCESSOR threads detected")
+    logger.debug("No concurrent POSTPROCESS threads detected")
 
     # Set thread name for this execution
     thread_name("POSTPROCESS")

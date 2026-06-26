@@ -407,9 +407,8 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
         else:
             reason = "Unknown reason in add_author_to_db"
 
-    threadname = thread_name()
-    if "Thread" in threadname:
-        thread_name("AddAuthorToDB")
+    if "AUTHOR" not in thread_name().upper():
+        thread_name("ADDAUTHORTODB")
     db = database.DBConnection()
     ret_id = None
     current_author = {}
@@ -652,8 +651,8 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
                 de_duplicate(current_author['authorid'])
                 update_totals(current_author['authorid'])
 
-            if lazylibrarian.STOPTHREADS and threadname == "AUTHORUPDATE":
-                logger.debug(f"[{current_author['authorname']}] Author update aborted, status {entry_status}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "AUTHORUPDATE":
+                logger.debug(f"STOPTHREADS [{current_author['authorname']}] Author update aborted, status {entry_status}")
                 return ret_id
 
             if new_author and CONFIG['GR_FOLLOWNEW']:

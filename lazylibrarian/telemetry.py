@@ -269,9 +269,7 @@ def record_usage_data(counter: str | None = None):
 
 def telemetry_send() -> str:
     """ Routine called by scheduler, to regularly send telemetry data """
-    threadname = thread_name()
-    if "Thread" in threadname:
-        thread_name("TELEMETRYSEND")
+    thread_name("TELEMETRYSEND")
     logger = logging.getLogger(__name__)
     db = database.DBConnection()
     try:
@@ -293,5 +291,5 @@ def telemetry_send() -> str:
         logger.info(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         db.close()
-        thread_name(threadname)
+        thread_name("WEBSERVER")
     return result

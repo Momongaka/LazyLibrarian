@@ -459,8 +459,8 @@ def search_rss_book(books=None, library=None):
         logger.warning('rss search is disabled')
         schedule_job(action=SchedulerCommand.STOP, target='search_rss_book')
         return
-    threadname = thread_name()
-    if "Thread" in threadname:
+
+    if "SEARCH" not in thread_name():
         if not books:
             thread_name("SEARCHALLRSS")
         else:
@@ -500,8 +500,8 @@ def search_rss_book(books=None, library=None):
 
         searchlist = []
         for searchbook in searchbooks:
-            if lazylibrarian.STOPTHREADS and threadname == "SEARCHALLRSS":
-                logger.debug(f"Aborting {threadname}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "SEARCHALLRSS":
+                logger.debug("Aborting SEARCHALLRSS")
                 break
 
             # searchterm is only used for display purposes
@@ -543,8 +543,8 @@ def search_rss_book(books=None, library=None):
 
         rss_count = 0
         for book in searchlist:
-            if lazylibrarian.STOPTHREADS and threadname == "SEARCHALLRSS":
-                logger.debug(f"Aborting {threadname}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "SEARCHALLRSS":
+                logger.debug("Aborting SEARCHALLRSS")
                 break
             if book['library'] == 'AudioBook':
                 searchtype = 'audio'

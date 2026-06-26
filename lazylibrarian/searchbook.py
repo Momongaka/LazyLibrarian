@@ -91,17 +91,17 @@ def search_book(books=None, library=None):
     # noinspection PyBroadException
     try:
         threadname = thread_name()
-        if 'SEARCHALL' in threadname or 'API-SEARCH' in threadname or 'FORCE-SEARCH' in threadname:
-            force = True
-        else:
-            force = False
-
-        if "Thread" in threadname:
+        if "SEARCH" not in threadname:
             if not books:
                 thread_name("SEARCHALLBOOKS")
                 threadname = "SEARCHALLBOOKS"
             else:
                 thread_name("SEARCHBOOKS")
+
+        if 'SEARCHALL' in threadname or 'API-SEARCH' in threadname or 'FORCE-SEARCH' in threadname:
+            force = True
+        else:
+            force = False
 
         logger.debug(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
@@ -172,8 +172,8 @@ def search_book(books=None, library=None):
             f"{plural(BLOCKHANDLER.number_blocked(), 'entry')}")
 
         for searchbook in searchbooks:
-            if lazylibrarian.STOPTHREADS and threadname == "SEARCHALLBOOKS":
-                logger.debug(f"Aborting {threadname}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "SEARCHALLBOOKS":
+                logger.debug("STOPTHREADS Aborting SEARCHALLBOOKS")
                 break
 
             # searchterm is only used for display purposes
@@ -238,8 +238,8 @@ def search_book(books=None, library=None):
 
         book_count = 0
         for book in searchlist:
-            if lazylibrarian.STOPTHREADS and threadname == "SEARCHALLBOOKS":
-                logger.debug(f"Aborting {threadname}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "SEARCHALLBOOKS":
+                logger.debug("STOPTHREADS Aborting SEARCHALLBOOKS")
                 break
             do_search = True
             if CONFIG.get_bool('DELAYSEARCH') and not force:
