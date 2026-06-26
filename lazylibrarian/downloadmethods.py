@@ -16,6 +16,7 @@ import os
 import re
 import threading
 import time
+import traceback
 import unicodedata
 from base64 import b16encode, b32decode, b64encode
 from hashlib import sha1
@@ -173,8 +174,8 @@ def irc_dl_method(bookid=None, dl_title=None, dl_url=None, library='eBook', prov
         db.action(cmd, (source, download_id, msg, dl_url, dl_title))
         db.close()
         return False, msg
-    except Exception as e:
-        logger.debug(str(e))
+    except Exception:
+        logger.error(f"Error in irc_dl_method: {traceback.format_exc()}")
         db.close()
         return False, msg
 
@@ -317,7 +318,11 @@ def direct_dl_method(bookid=None, dl_title=None, dl_url=None, library='eBook', p
         wanted = [{'username': slsk_username, 'directory': directory}]
         hashid = sha1(bencode(dl_url)).hexdigest()
         db = database.DBConnection()
-        res = slsk.download(wanted)
+        try:
+            res = slsk.download(wanted)
+        except Exception as e:
+            logger.error(f"slsk download error: {e}")
+            res = None
         if res:
             if library == 'eBook':
                 db.action("UPDATE books SET status='Snatched' WHERE BookID=?", (bookid,))
@@ -361,7 +366,11 @@ def direct_dl_method(bookid=None, dl_title=None, dl_url=None, library='eBook', p
         res = db.match('SELECT bookname from books WHERE bookid=?', (bookid,))
         if res and res['bookname']:
             folder = res['bookname']
-        success, fname = annas_download(dl_url, folder, title, extn)
+        try:
+            success, fname = annas_download(dl_url, folder, title, extn)
+        except Exception as e:
+            logger.error(f"Annas download error: {e}")
+            success = False
 
         if success:
             if library == 'eBook':
@@ -416,7 +425,11 @@ def direct_dl_method(bookid=None, dl_title=None, dl_url=None, library='eBook', p
 
         hashid = sha1(bencode(dl_url)).hexdigest()
         db = database.DBConnection()
-        filename, filecontent = zlib.downloadBook({"id": zlib_bookid, "hash": zlib_hash})
+        try:
+            filename, filecontent = zlib.downloadBook({"id": zlib_bookid, "hash": zlib_hash})
+        except Exception as e:
+            logger.error(f"Zlib download error: {e}")
+            filename = None
         if not filename:
             logger.error(filecontent)
             if auxinfo:  # magazine issue
@@ -1027,8 +1040,8 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
             record_usage_data(f'Download/TOR/{source}/Success')
             db.close()
             return True, ''
-        except Exception as e:
-            logger.debug(str(e))
+        except Exception:
+            logger.error(f"Error in tor_dl_method: {traceback.format_exc()}")
             db.close()
 
     res = f"Failed to send torrent to {source}"
