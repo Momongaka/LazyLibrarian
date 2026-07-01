@@ -673,7 +673,6 @@ class WebInterface:
 
             cmd += " order by AuthorName COLLATE NOCASE"
             serversidelogger.debug(f"get_index {cmd}")
-            print(1, cmd)
 
             rowlist = db.select(cmd)
             # At his point we want to sort and filter _before_ adding the html as it's much quicker
@@ -2383,23 +2382,29 @@ class WebInterface:
                         passed += 1
                     elif action == "Delete":
                         logger.info(f"Deleting author and media files: {check['AuthorName']}")
-                        books = db.select("SELECT BookFile,AudioFile from books WHERE AuthorID=?", (authorid,))
-                        for book in books:
-                            for location in [book['BookFile'], book['AudioFile']]:
-                                if location and path_exists(location):
-                                    try:
-                                        foldername = os.path.dirname(location)
-                                        logger.debug(f"Deleting folder: {foldername}")
-                                        rmtree(foldername, ignore_errors=True)
-                                    except Exception as e:
-                                        logger.warning(f'rmtree failed on {location}, {type(e).__name__} {str(e)}')
-                        try:
-                            delete_empty_folders(CONFIG['EBOOK_DIR'])
-                            delete_empty_folders(CONFIG['AUDIO_DIR'])
-                        except Exception as e:
-                            logger.error(f"Error deleting: {e}")
-
+                        cmd = "SELECT BookFile,AudioFile from books WHERE AuthorID=? and "
+                        cmd += "((BookFile IS NOT NULL AND BookFile != '') or (AudioFile IS NOT NULL AND AudioFile != ''))"
+                        books = db.select(cmd, (authorid,))
+                        if books:
+                            logger.debug(f"Located {len(books)} books for author {authorid}")
+                            for book in books:
+                                for location in [book['BookFile'], book['AudioFile']]:
+                                    if location and path_exists(location):
+                                        try:
+                                            foldername = os.path.dirname(location)
+                                            logger.debug(f"Deleting folder: {foldername}")
+                                            rmtree(foldername, ignore_errors=True)
+                                        except Exception as e:
+                                            logger.warning(f'rmtree failed on {location}, {type(e).__name__} {str(e)}')
+                            try:
+                                logger.debug("Deleting empty folders")
+                                delete_empty_folders(CONFIG['EBOOK_DIR'])
+                                delete_empty_folders(CONFIG['AUDIO_DIR'])
+                            except Exception as e:
+                                logger.error(f"Error deleting: {e}")
+                        logger.debug(f"Deleting author {authorid}")
                         db.action('DELETE from authors WHERE AuthorID=?', (authorid,))
+                        logger.debug(f"Deletion complete for {authorid}")
                         passed += 1
                     elif action == "Remove":
                         logger.info(f"Removing author: {check['AuthorName']}")

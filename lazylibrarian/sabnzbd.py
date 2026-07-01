@@ -217,16 +217,13 @@ def sab_nzbd(title=None, nzburl=None, remove_data=False, search=None, nzo_ids=No
     if title and title.startswith('LL.('):
         return result, ''
 
-    if result['status'] is True:
+    if result.get('status') is True:
         logger.info(f"{title} sent to SAB successfully.")
         # sab versions earlier than 0.8.0 don't return nzo_ids
         if 'nzo_ids' in result and result['nzo_ids']:  # check its not empty
             return result['nzo_ids'][0], ''
         return 'unknown', ''
-    if result['status'] is False:
-        res = f"SAB returned Error: {result['error']}"
-        logger.error(res)
-        return False, res
-    res = f"Unknown error: {str(result)}"
+
+    res = f"Send to SAB failed: {str(result)}"
     logger.error(res)
     return False, res
