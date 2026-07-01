@@ -371,6 +371,7 @@ def direct_dl_method(bookid=None, dl_title=None, dl_url=None, library='eBook', p
         except Exception as e:
             logger.error(f"Annas download error: {e}")
             success = False
+            fname = ''
 
         if success:
             if library == 'eBook':
