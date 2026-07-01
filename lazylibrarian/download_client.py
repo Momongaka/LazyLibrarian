@@ -61,6 +61,7 @@ from lazylibrarian import (
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.filesystem import path_isfile
 from lazylibrarian.formatter import check_int, get_list, unaccented
+from lazylibrarian.processcontrol import get_info_on_caller
 from lazylibrarian.telemetry import TELEMETRY
 
 
@@ -445,6 +446,12 @@ def get_download_progress(source, downloadid):
     dlcommslogger = logging.getLogger("special.dlcomms")
     progress = 0
     finished = False
+    if not source or not downloadid:
+        program, method, lineno = get_info_on_caller(depth=1)
+        logger.error(
+            f"Unable to get download progress from {source} for {downloadid}: {program}:{method}:{lineno}"
+        )
+        return progress, finished
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
@@ -621,7 +628,7 @@ def get_download_progress(source, downloadid):
                 cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
                 db.action(cmd, (f"rTorrent returned {status}", downloadid, source))
 
-        elif source.startswith("SYNOLOGY"):
+        elif source and source.startswith("SYNOLOGY"):
             progress, status, finished = synology.get_progress(downloadid)
             if status == "finished":
                 progress = 100
