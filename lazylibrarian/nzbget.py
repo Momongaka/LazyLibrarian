@@ -127,9 +127,23 @@ def send_nzb(nzb=None, cmd=None, nzbid=None, library='eBook', label=''):
         return False, res
 
     if cmd == 'history':
-        return nzb_get_rpc.history(), ''
+        try:
+            res = nzb_get_rpc.history()
+            return res, ''
+        except Exception as e:
+            logger.error(f"NZBget history: {e}")
+            logger.error(f"NZBget url [{url}]")
+            return '' , str(e)
+
     if cmd == 'listgroups':
-        return nzb_get_rpc.listgroups(), ''
+        try:
+            res = nzb_get_rpc.listgroups()
+            return res, ''
+        except Exception as e:
+            logger.error(f"NZBget listgroups: {e}")
+            logger.error(f"NZBget url [{url}]")
+            return '' , str(e)
+
     if nzbid is not None:
         # its a command for an existing task
         id_array = [int(nzbid)]
