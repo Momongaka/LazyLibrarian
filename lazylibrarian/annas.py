@@ -26,6 +26,7 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 from requests import get
+from requests.exceptions import JSONDecodeError
 
 import lazylibrarian
 from lazylibrarian import database
@@ -361,7 +362,9 @@ def parse_result(raw_content: Tag) -> SearchResult | None:
 def annas_download(md5, folder, title, extn, domain_index=0):
     logger = logging.getLogger(__name__)
     downloadlogger = logging.getLogger('special.dlcomms')
-    params = {'md5': md5, 'key': CONFIG['ANNA_KEY'], 'domain_index': domain_index}
+    params = {'md5': md5, 'key': CONFIG['ANNA_KEY']}
+    if domain_index:
+        params['domain_index'] = domain_index
     annas_hosts = get_list(CONFIG['ANNA_HOST'])
     if not annas_hosts:
         return False, "No Annas hosts found"
@@ -372,13 +375,21 @@ def annas_download(md5, folder, title, extn, domain_index=0):
         if not host.startswith('http'):
             prefix = "https://"
         url = urljoin(prefix + host, '/dyn/api/fast_download.json')
-        response = get(url, params=params)
-        if str(response.status_code).startswith('2'):
+        try:
+            response = get(url, params=params)
+        except Exception as e:
+            downloadlogger.debug(f"Exception from {host}: {e}")
+            response = None
+        if response and str(response.status_code).startswith('2'):
+            downloadlogger.debug(f"Result {response.status_code} from {host}")
             annas_hosts_prefer(annas_hosts, host)
             break
-        downloadlogger.debug(f"Failed to download from {host}: {response.status_code}")
+        downloadlogger.debug(f"Failed to download from {host}: {response.status_code if response else 'No response'}")
 
-    if response and str(response.status_code).startswith('2'):
+    if not response:
+        return False, "No response from Annas"
+
+    if str(response.status_code).startswith('2'):
         max_domain_index = check_int(CONFIG['ANNA_MAX_SERVERS'], 0) - 1 # Server indexes are 0-based
         res = response.json()
         downloadlogger.debug(res)
@@ -434,8 +445,16 @@ def annas_download(md5, folder, title, extn, domain_index=0):
     else:
         downloadlogger.debug(url)
         downloadlogger.debug(str(params))
-        errmsg = (f"Error Status: {response.status_code} Check your ANNAS key, "
-                  f"and make sure you have a PAID subscription")
+        try:
+            data = response.json()
+        except JSONDecodeError:
+            data = None
+        if data and 'error' in data:
+            errmsg = f"Error Status: {response.status_code}: {data['error']}"
+        else:
+            errmsg = (f"Error Status: {response.status_code}: Check your ANNAS key, "
+                      f"and make sure you have a PAID subscription")
+
     logger.error(errmsg)
     return False, errmsg
 
