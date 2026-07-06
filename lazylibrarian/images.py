@@ -648,6 +648,8 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
         safeparams = authorname.replace('. ', ' ').replace(' ', '_')
         icrawlerdir = os.path.join(cachedir, 'icrawler', authorid)
         rmtree(icrawlerdir, ignore_errors=True)
+        if not os.path.isdir(icrawlerdir):
+            os.mkdir(icrawlerdir)
         crawler_name = 'wikipedia'
         got_images = 0
         try:
@@ -665,8 +667,6 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
                 img_data = requests.get(f"https:{img_name}", headers=headers)
                 if str(img_data.status_code).startswith('2'):
                     img_file = os.path.join(icrawlerdir, '000000.jpg')
-                    if not os.path.isdir(icrawlerdir):
-                        os.mkdir(icrawlerdir)
                     with open(img_file, 'wb') as f:
                         f.write(img_data.content)
                         got_images = 1
@@ -690,7 +690,7 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
                 # not enough results, try bing
                 logger.debug("No author image results from google")
                 crawler_name = 'bing'
-                safeparams = quote_plus(make_utf8bytes(f"{authorname}&safesearch=strict")[0])
+                safeparams = quote_plus(make_utf8bytes(f"{authorname.replace('. ', ' ')}")[0])
                 bc = BingImageCrawler(storage={'root_dir': icrawlerdir})
                 bc.crawl(keyword=safeparams, max_num=int(max_num - got_images))
                 if os.path.exists(icrawlerdir):
