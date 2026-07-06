@@ -3138,12 +3138,16 @@ class Api:
         TELEMETRY.record_usage_data()
         db = database.DBConnection()
         res = db.select('select distinct authorid from bookauthors except select authorid from books')
+        self.data = {}
         cnt = 0
         for item in res:
-            cnt += 1
             auth = db.match('select authorname from authors where authorid=?', (item['authorid'], ))
-            self.logger.debug(f"Deleting {item['authorid']}: {auth['authorname']}")
-            db.action('delete from authors where authorid=?', (item['authorid'], ))
+            if auth:
+                self.data[item['authorid']] = auth['authorname']
+        for key, value in self.data.items():
+            cnt += 1
+            self.logger.debug(f"Deleting {key}: {value}")
+            db.action('delete from authors where authorid=?', (key, ))
         db.action('vacuum')
         self.data = f"Removed {cnt} secondary authors"
 
