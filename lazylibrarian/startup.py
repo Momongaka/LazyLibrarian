@@ -278,11 +278,13 @@ class StartupLazyLibrarian:
         try:
             result = db.match('PRAGMA user_version')
             check = db.match('PRAGMA integrity_check')
+            dbfile = db.match('PRAGMA database_list')
             if result:
                 version = result[0]
             else:
                 version = 0
             self.logger.info(f"Database is v{version}, integrity check: {check[0]}")
+            self.logger.info(f"Database {dict(dbfile)}")
         except Exception as e:
             self.logger.error(f"Can't connect to the database: {type(e).__name__} {str(e)}")
             sys.exit(0)
@@ -536,16 +538,30 @@ class StartupLazyLibrarian:
                 with open(syspath(json_file)) as json_data:
                     table = json.load(json_data)
                 mlist = ''
-                # only print alternate entries as each language is in twice (long and short month names)
-                for item in table[0][::2]:
-                    mlist += f"{item} "
-                self.logger.debug(f'Loaded monthnames.json : {mlist}')
+                if len(table) != 13:
+                    self.logger.error('monthnames.json does not have enough months')
+                    table = []
+                length = len(table[0]) if table else 0
+                if length % 2:
+                    self.logger.error('monthnames.json should have an even number of entries per month')
+                    table = []
+                for item in table:
+                    if len(item) != length:
+                        self.logger.error('monthnames.json lengths are not consistent')
+                        table = []
+                        break
+                if table:
+                    # only print alternate entries as each language is in twice (long and short month names)
+                    for item in table[0][::2]:
+                        mlist += f"{item} "
+                    self.logger.debug(f'Loaded monthnames.json : {mlist}')
             except Exception as e:
                 self.logger.error(f'Failed to load monthnames.json, {type(e).__name__} {str(e)}')
 
         if not table:
             # Default Month names table to hold long/short month names for multiple languages
             # which we can match against magazine issues
+            self.logger.debug('Using default monthnames')
             table = [
                 ['en_GB.UTF-8', 'en_GB.UTF-8'],
                 ['January', 'Jan'],
