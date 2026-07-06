@@ -3141,7 +3141,10 @@ class Api:
         cnt = 0
         for item in res:
             cnt += 1
+            auth = db.match('select authorname from authors where authorid=?', (item['authorid'], ))
+            self.logger.debug(f"Deleting {item['authorid']}: {auth['authorname']}")
             db.action('delete from authors where authorid=?', (item['authorid'], ))
+        db.action('vacuum')
         self.data = f"Removed {cnt} secondary authors"
 
     def _cleanmaglibrary(self):
