@@ -24,10 +24,13 @@ from secrets import choice
 from shutil import rmtree
 from urllib.parse import quote_plus
 
+import requests
+
 import lazylibrarian
 from lazylibrarian import database
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.cache import ImageType, cache_img, fetch_url
+from lazylibrarian.common import get_user_agent
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.filesystem import (
     DIRS,
@@ -620,7 +623,6 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
     if not authorid:
         logger.error("get_author_image: No authorid")
         return None
-
     db = database.DBConnection()
     try:
         author = db.match('select AuthorName,AuthorIMG from authors where AuthorID=?', (authorid,))
@@ -643,23 +645,51 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
     lazylibrarian.CACHE_MISS = int(lazylibrarian.CACHE_MISS) + 1
     if PIL and author:
         authorname = safe_unicode(author['AuthorName'])
-        safeparams = quote_plus(make_utf8bytes(f"author {authorname}")[0])
+        safeparams = authorname.replace(' ', '_')
         icrawlerdir = os.path.join(cachedir, 'icrawler', authorid)
         rmtree(icrawlerdir, ignore_errors=True)
-        crawler_name = 'google'
-        gc = GoogleImageCrawler(storage={'root_dir': icrawlerdir})
-        gc.crawl(keyword=safeparams, max_num=int(max_num))
-        if os.path.exists(icrawlerdir):
-            res = len(os.listdir(icrawlerdir))
-        else:
-            # nothing from google, try bing
-            crawler_name = 'bing'
-            bc = BingImageCrawler(storage={'root_dir': icrawlerdir})
-            bc.crawl(keyword=safeparams, max_num=int(max_num))
+        crawler_name = 'wikipedia'
+        res = 0
+        try:
+            url = f"https://en.wikipedia.org/wiki/{safeparams}"
+            headers = {
+                'User-Agent': get_user_agent(),
+                'Accept': 'application/xml, text/xml',
+                'Accept-Language': 'en-US,en;q=0.9,de;q=0.8',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive'
+            }
+            response = requests.get(url, headers=headers)
+            if str(response.status_code).startswith('2'):
+                img_name = make_unicode(response.content.split(b"infobox-image")[1].split(b'src="')[1].split(b'"')[0])
+                img_data = requests.get(f"https:{img_name}", headers=headers)
+                if str(img_data.status_code).startswith('2'):
+                    img_file = os.path.join(icrawlerdir, '000000.jpg')
+                    if not os.path.isdir(icrawlerdir):
+                        os.mkdir(icrawlerdir)
+                    with open(img_file, 'wb') as f:
+                        f.write(img_data.content)
+                        res += 1
+        except Exception as e:
+            logger.debug(str(e))
+        if res < max_num:
+            safeparams = quote_plus(make_utf8bytes(f"author {authorname}")[0])
+            crawler_name = 'google'
+            gc = GoogleImageCrawler(storage={'root_dir': icrawlerdir})
+            gc.crawl(keyword=safeparams, max_num=int(max_num - res))
             if os.path.exists(icrawlerdir):
                 res = len(os.listdir(icrawlerdir))
             else:
-                res = 0
+                # nothing from google, try bing
+                logger.debug("No author image results from google")
+                crawler_name = 'bing'
+                safeparams = quote_plus(make_utf8bytes(f"{authorname}&safesearch=strict")[0])
+                bc = BingImageCrawler(storage={'root_dir': icrawlerdir}, filters={'people': 'face'})
+                bc.crawl(keyword=safeparams, max_num=int(max_num - res))
+                if os.path.exists(icrawlerdir):
+                    res = len(os.listdir(icrawlerdir))
+                else:
+                    res = 0
         logger.debug(f"{crawler_name} found {res} {plural(res, 'image')}")
         if max_num == 1:
             if res:
