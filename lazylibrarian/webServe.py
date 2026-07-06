@@ -2115,8 +2115,9 @@ class WebInterface:
         x = range(13)
         for month_num in x:
             key = f"month_{month_num}"
-            month_names = kwargs[key]
-            new_months.append(get_list(month_names))
+            month_names = kwargs.get(key, '')
+            if month_names:
+                new_months.append(get_list(month_names))
         if new_months != lazylibrarian.MONTHNAMES[0]:
             logger.debug("MONTHNAMES has changed")
             # validate the table looks correct, same number of entries per row
@@ -2381,12 +2382,12 @@ class WebInterface:
                         logger.info(f'Status set to "{action}" for "{check["AuthorName"]}"')
                         passed += 1
                     elif action == "Delete":
-                        logger.info(f"Deleting author and media files: {check['AuthorName']}")
+                        logger.info(f"Deleting author and media files for {check['AuthorName']}")
                         cmd = "SELECT BookFile,AudioFile from books WHERE AuthorID=? and "
                         cmd += "((BookFile IS NOT NULL AND BookFile != '') or (AudioFile IS NOT NULL AND AudioFile != ''))"
                         books = db.select(cmd, (authorid,))
+                        logger.debug(f"Located {len(books)} books for author {authorid}")
                         if books:
-                            logger.debug(f"Located {len(books)} books for author {authorid}")
                             for book in books:
                                 for location in [book['BookFile'], book['AudioFile']]:
                                     if location and path_exists(location):
@@ -2437,6 +2438,7 @@ class WebInterface:
                             logger.debug(f"Unsubscribe {userid} author {authorid}")
                             passed += 1
             finally:
+                logger.debug(f"Completed {action} for {len(args)}")
                 db.close()
 
         # Return JSON response instead of redirect

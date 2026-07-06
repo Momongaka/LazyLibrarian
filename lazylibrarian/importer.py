@@ -677,6 +677,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
             msg = (f"{current_author['authorid']} [{current_author['authorname']}] Author update complete, "
                    f"status {entry_status}")
             logger.info(msg)
+            db.commit()
             ret_id = current_author['authorid']
         else:
             logger.warning(f"Authorid {authorid} ({authorname}) not found in database")
