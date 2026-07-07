@@ -74,6 +74,7 @@ from lazylibrarian.common import (
     pwd_generator,
     run_script,
     set_readinglist,
+    validate_monthtable,
     zip_audio,
 )
 from lazylibrarian.config2 import CONFIG, wishlist_type
@@ -2117,21 +2118,10 @@ class WebInterface:
             key = f"month_{month_num}"
             month_names = kwargs.get(key, '')
             if month_names:
-                new_months.append(get_list(month_names))
+                new_months.append(get_list(month_names, ','))
         if new_months != lazylibrarian.MONTHNAMES[0]:
             logger.debug("MONTHNAMES has changed")
-            # validate the table looks correct, same number of entries per row
-            valid = True
-            length = len(new_months[0])  # number of language entries
-            if length % 2:  # must be even, short and long for each language
-                valid = False
-            if valid:
-                for itm in new_months:
-                    if len(itm) != length:
-                        valid = False
-                        break
-
-            if not valid:
+            if not validate_monthtable(new_months):
                 logger.debug("New MONTHNAMES is not valid, ignoring")
             else:
                 json_file = os.path.join(DIRS.DATADIR, 'monthnames.json')

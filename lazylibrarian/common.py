@@ -612,3 +612,18 @@ def delete_empty_folders(root):
             deleted.append(current_dir)
 
     logger.debug(f"Deleted {len(deleted)} empty folders: {deleted}")
+
+def validate_monthtable(table):
+    logger = logging.getLogger(__name__)
+    if len(table) != 13:
+        logger.error('monthnames.json does not have enough months')
+        return False
+    length = len(table[0]) if table else 0
+    if length % 2:
+        logger.error('monthnames.json should have an even number of entries per month')
+        return False
+    for item in table:
+        if len(item) != length:
+            logger.error('monthnames.json lengths are not consistent')
+            return False
+    return True

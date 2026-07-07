@@ -13,7 +13,6 @@
 # Purpose:
 #   Contains global startup and initialization code for LL
 
-import calendar
 import contextlib
 import json
 import locale
@@ -37,12 +36,12 @@ from lazylibrarian import database, dnb, gb, gr, hc, ol, versioncheck
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.cache import fetch_url, init_hex_caches
 from lazylibrarian.cleanup import UNBUNDLER
-from lazylibrarian.common import docker, log_header
+from lazylibrarian.common import docker, log_header, validate_monthtable
 from lazylibrarian.config2 import CONFIG, LLConfigHandler
 from lazylibrarian.configtypes import ConfigDict
 from lazylibrarian.dbupgrade import check_db, db_current_version, db_upgrade, upgrade_needed
 from lazylibrarian.filesystem import DIRS, path_isdir, path_isfile, remove_file, syspath
-from lazylibrarian.formatter import check_int, get_list, make_unicode, unaccented
+from lazylibrarian.formatter import check_int, make_unicode, unaccented
 from lazylibrarian.logconfig import LOGCONFIG
 from lazylibrarian.notifiers import APPRISE_VER
 from lazylibrarian.providers import get_capabilities
@@ -538,18 +537,9 @@ class StartupLazyLibrarian:
                 with open(syspath(json_file)) as json_data:
                     table = json.load(json_data)
                 mlist = ''
-                if len(table) != 13:
-                    self.logger.error('monthnames.json does not have enough months')
+                if not validate_monthtable(table):
+                    self.logger.error("monthnames.json is invalid")
                     table = []
-                length = len(table[0]) if table else 0
-                if length % 2:
-                    self.logger.error('monthnames.json should have an even number of entries per month')
-                    table = []
-                for item in table:
-                    if len(item) != length:
-                        self.logger.error('monthnames.json lengths are not consistent')
-                        table = []
-                        break
                 if table:
                     # only print alternate entries as each language is in twice (long and short month names)
                     for item in table[0][::2]:
@@ -577,72 +567,9 @@ class StartupLazyLibrarian:
                 ['November', 'Nov'],
                 ['December', 'Dec']
             ]
-        if len(get_list(config['IMP_MONTHLANG'])) > 0:  # any extra languages wanted?
-            try:
-                current_locale = locale.setlocale(locale.LC_ALL, '')  # read current state.
-                if 'LC_CTYPE' in current_locale:
-                    current_locale = locale.setlocale(locale.LC_CTYPE, '')
-                # getdefaultlocale() doesnt seem to work as expected on windows, returns 'None'
-                self.logger.debug(f'Current locale is {current_locale}')
-            except locale.Error as e:
-                self.logger.debug(f"Error getting current locale : {str(e)}")
-                return [table, table]
 
-            lang = str(current_locale)
-            # check not already loaded, also all english variants and 'C' use the same month names
-            if lang in table[0] or ((lang.startswith('en_') or lang == 'C') and 'en_' in str(table[0])):
-                self.logger.debug(f'Month names for {lang} already loaded')
-            else:
-                self.logger.debug(f'Loading month names for {lang}')
-                table[0].append(lang)
-                for f in range(1, 13):
-                    table[f].append(calendar.month_name[f])
-                table[0].append(lang)
-                for f in range(1, 13):
-                    table[f].append(calendar.month_abbr[f])
-                self.logger.info(
-                    f"Added month names for locale [{lang}], {table[1][len(table[1]) - 2]}, "
-                    f"{table[1][len(table[1]) - 1]} ...")
-
-            for lang in get_list(config['IMP_MONTHLANG']):
-                try:
-                    if lang in table[0] or ((lang.startswith('en_') or lang == 'C') and 'en_' in str(table[0])):
-                        self.logger.debug(f'Month names for {lang} already loaded')
-                    else:
-                        locale.setlocale(locale.LC_ALL, lang)
-                        self.logger.debug(f'Loading month names for {lang}')
-                        table[0].append(lang)
-                        for f in range(1, 13):
-                            table[f].append(calendar.month_name[f])
-                        table[0].append(lang)
-                        for f in range(1, 13):
-                            table[f].append(calendar.month_abbr[f])
-                        locale.setlocale(locale.LC_ALL, current_locale)  # restore entry state
-                        self.logger.info(
-                            f"Added month names for locale [{lang}], {table[1][len(table[1]) - 2]}, "
-                            f"{table[1][len(table[1]) - 1]} ...")
-                except Exception as e:
-                    locale.setlocale(locale.LC_ALL, current_locale)  # restore entry state
-                    self.logger.warning(f"Unable to load requested locale [{lang}] {type(e).__name__} {str(e)}")
-                    try:
-                        wanted_lang = lang.split('_')[0]
-                        params = ['locale', '-a']
-                        res = subprocess.check_output(params, stderr=subprocess.STDOUT)
-                        all_locales = make_unicode(res).split()
-                        locale_list = []
-                        for a_locale in all_locales:
-                            if a_locale.startswith(wanted_lang):
-                                locale_list.append(a_locale)
-                        if locale_list:
-                            self.logger.warning(f"Found these alternatives: {str(locale_list)}")
-                        else:
-                            self.logger.warning("Unable to find an alternative")
-                    except Exception as e:
-                        self.logger.warning(f"Unable to get a list of alternatives, {type(e).__name__} {str(e)}")
-                    self.logger.debug(f"Set locale back to entry state {current_locale}")
-
-                with open(json_file, 'w', encoding='utf-8') as f:
-                    json.dump(table, f, ensure_ascii=False)
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(table, f, ensure_ascii=False)
 
         adminlogger.debug(table)
         # Create a second copy of the monthnames without accents and lowercased to speed up matching
