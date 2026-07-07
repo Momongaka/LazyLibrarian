@@ -659,56 +659,29 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive'
         }
-        if got_images < max_num and author['hc_id']:
-            crawler_name = 'hardcover'
-            h_c = lazylibrarian.hc.HardCover()
-            img = h_c.get_author_image(authorname=authorname, authorid=author['hc_id'])
-            if img.startswith('http'):
-                img_data = requests.get(img, headers=headers)
-                if str(img_data.status_code).startswith('2'):
-                    img_file = os.path.join(icrawlerdir, 'hc.jpg')
-                    with open(img_file, 'wb') as f:
-                        f.write(img_data.content)
-                        got_images += 1
-                        logger.debug(f"{crawler_name} found an image")
-                else:
-                    logger.debug(f"Got {img_data.status_code} from {crawler_name} image {img}")
-            else:
-                logger.debug(f"No image from {crawler_name} for {author['hc_id']}")
 
-        if got_images < max_num and author['ol_id']:
-            crawler_name = 'openlibrary'
-            o_l = lazylibrarian.ol.OpenLibrary()
-            img = o_l.get_author_image(authorname=authorname, authorid=author['ol_id'])
-            if img.startswith('http'):
-                img_data = requests.get(img, headers=headers)
-                if str(img_data.status_code).startswith('2'):
-                    img_file = os.path.join(icrawlerdir, 'ol.jpg')
-                    with open(img_file, 'wb') as f:
-                        f.write(img_data.content)
-                        got_images += 1
-                        logger.debug(f"{crawler_name} found an image")
+        for api_source in lazylibrarian.INFOSOURCES.keys():
+            if got_images >= max_num:
+                break
+            this_source = lazylibrarian.INFOSOURCES[api_source]
+            # 2-letter_code, class, author_key, api_enabled
+            if this_source['author_key'] != 'authorid':
+                crawler_name = api_source
+                book_api = this_source['api']
+                book_api = book_api()
+                img = book_api.get_author_image(authorname=authorname, authorid=author[this_source['author_key']])
+                if img.startswith('http'):
+                    img_data = requests.get(img, headers=headers)
+                    if str(img_data.status_code).startswith('2'):
+                        img_file = os.path.join(icrawlerdir, f"{this_source['src']}.jpg")
+                        with open(img_file, 'wb') as f:
+                            f.write(img_data.content)
+                            got_images += 1
+                            logger.debug(f"{crawler_name} found an image")
+                    else:
+                        logger.debug(f"Got {img_data.status_code} from {crawler_name} image {img}")
                 else:
-                    logger.debug(f"Got {img_data.status_code} from {crawler_name} image {img}")
-            else:
-                logger.debug(f"No image from {crawler_name} for {author['ol_id']}")
-
-        if got_images < max_num and author['gr_id']:
-            crawler_name = 'goodreads'
-            g_r = lazylibrarian.gr.GoodReads()
-            img = g_r.get_author_image(authorname=authorname, authorid=author['gr_id'])
-            if img.startswith('http'):
-                img_data = requests.get(img, headers=headers)
-                if str(img_data.status_code).startswith('2'):
-                    img_file = os.path.join(icrawlerdir, 'gr.jpg')
-                    with open(img_file, 'wb') as f:
-                        f.write(img_data.content)
-                        got_images += 1
-                        logger.debug(f"{crawler_name} found an image")
-                else:
-                    logger.debug(f"Got {img_data.status_code} from {crawler_name} image {img}")
-            else:
-                logger.debug(f"No image from {crawler_name} for {author['gr_id']}")
+                    logger.debug(f"No image from {crawler_name} for {author[this_source['author_key']]}")
 
         if got_images < max_num:
             crawler_name = 'wikipedia'
