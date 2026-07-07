@@ -625,7 +625,7 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
         return None
     db = database.DBConnection()
     try:
-        author = db.match('select AuthorName,AuthorIMG from authors where AuthorID=?', (authorid,))
+        author = db.match('select AuthorName,AuthorIMG,hc_id,ol_id,gr_id from authors where AuthorID=?', (authorid,))
     finally:
         db.close()
 
@@ -650,49 +650,101 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
         rmtree(icrawlerdir, ignore_errors=True)
         if not os.path.isdir(icrawlerdir):
             os.mkdir(icrawlerdir)
-        crawler_name = 'wikipedia'
         got_images = 0
-        try:
-            url = f"https://en.wikipedia.org/wiki/{safeparams}"
-            headers = {
-                'User-Agent': get_user_agent(),
-                'Accept': 'application/xml, text/xml',
-                'Accept-Language': 'en-US,en;q=0.9,de;q=0.8',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive'
-            }
-            response = requests.get(url, headers=headers)
-            if str(response.status_code).startswith('2'):
-                img_name = make_unicode(response.content.split(b"infobox-image")[1].split(b'src="')[1].split(b'"')[0])
-                img_data = requests.get(f"https:{img_name}", headers=headers)
+        headers = {
+            'User-Agent': get_user_agent(),
+            'Accept': 'application/xml, text/xml',
+            'Accept-Language': 'en-US,en;q=0.9,de;q=0.8',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive'
+        }
+        if got_images < max_num and author['hc_id']:
+            crawler_name = 'hardcover'
+            h_c = lazylibrarian.hc.HardCover()
+            img = h_c.get_author_image(authorname=authorname, authorid=author['hc_id'])
+            if img.startswith('http'):
+                img_data = requests.get(img, headers=headers)
                 if str(img_data.status_code).startswith('2'):
-                    img_file = os.path.join(icrawlerdir, '000000.jpg')
+                    img_file = os.path.join(icrawlerdir, 'hc.jpg')
                     with open(img_file, 'wb') as f:
                         f.write(img_data.content)
-                        got_images = 1
+                        got_images += 1
                         logger.debug(f"{crawler_name} found an image")
                 else:
-                    logger.debug(f"Got a {response.status_code} from wikipedia image {img_name}")
+                    logger.debug(f"Got {img_data.status_code} from {crawler_name} image {img}")
             else:
-                logger.debug(f"Got a {response.status_code} from wikipedia search {url}")
-        except Exception as e:
-            logger.debug(str(e))
+                logger.debug(f"No image from {crawler_name} for {author['hc_id']}")
+
+        if got_images < max_num and author['ol_id']:
+            crawler_name = 'openlibrary'
+            o_l = lazylibrarian.ol.OpenLibrary()
+            img = o_l.get_author_image(authorname=authorname, authorid=author['ol_id'])
+            if img.startswith('http'):
+                img_data = requests.get(img, headers=headers)
+                if str(img_data.status_code).startswith('2'):
+                    img_file = os.path.join(icrawlerdir, 'ol.jpg')
+                    with open(img_file, 'wb') as f:
+                        f.write(img_data.content)
+                        got_images += 1
+                        logger.debug(f"{crawler_name} found an image")
+                else:
+                    logger.debug(f"Got {img_data.status_code} from {crawler_name} image {img}")
+            else:
+                logger.debug(f"No image from {crawler_name} for {author['ol_id']}")
+
+        if got_images < max_num and author['gr_id']:
+            crawler_name = 'goodreads'
+            g_r = lazylibrarian.gr.GoodReads()
+            img = g_r.get_author_image(authorname=authorname, authorid=author['gr_id'])
+            if img.startswith('http'):
+                img_data = requests.get(img, headers=headers)
+                if str(img_data.status_code).startswith('2'):
+                    img_file = os.path.join(icrawlerdir, 'gr.jpg')
+                    with open(img_file, 'wb') as f:
+                        f.write(img_data.content)
+                        got_images += 1
+                        logger.debug(f"{crawler_name} found an image")
+                else:
+                    logger.debug(f"Got {img_data.status_code} from {crawler_name} image {img}")
+            else:
+                logger.debug(f"No image from {crawler_name} for {author['gr_id']}")
+
+        if got_images < max_num:
+            crawler_name = 'wikipedia'
+            try:
+                url = f"https://en.wikipedia.org/wiki/{safeparams}"
+                response = requests.get(url, headers=headers)
+                if str(response.status_code).startswith('2'):
+                    img_name = make_unicode(response.content.split(b"infobox-image")[1].split(b'src="')[1].split(b'"')[0])
+                    img_data = requests.get(f"https:{img_name}", headers=headers)
+                    if str(img_data.status_code).startswith('2'):
+                        img_file = os.path.join(icrawlerdir, 'wiki.jpg')
+                        with open(img_file, 'wb') as f:
+                            f.write(img_data.content)
+                            got_images += 1
+                            logger.debug(f"{crawler_name} found an image")
+                    else:
+                        logger.debug(f"Got a {img_data.status_code} from {crawler_name} image {img_name}")
+                else:
+                    logger.debug(f"Got a {response.status_code} from {crawler_name} search {url}")
+            except Exception as e:
+                logger.debug(str(e))
+
         if got_images < max_num:
             safeparams = quote_plus(make_utf8bytes(f"author {authorname}")[0])
             crawler_name = 'google'
             gc = GoogleImageCrawler(storage={'root_dir': icrawlerdir})
-            gc.crawl(keyword=safeparams, max_num=int(max_num - got_images))
+            gc.crawl(keyword=safeparams, max_num=int(max_num - got_images), file_idx_offset='auto')
             if os.path.exists(icrawlerdir):
                 cnt = len(os.listdir(icrawlerdir))
                 logger.debug(f"{crawler_name} found {cnt - got_images} {plural(cnt - got_images, 'image')}")
             if cnt < max_num:
                 got_images = cnt
                 # not enough results, try bing
-                logger.debug("No author image results from google")
                 crawler_name = 'bing'
                 safeparams = quote_plus(make_utf8bytes(f"{authorname.replace('. ', ' ')}")[0])
                 bc = BingImageCrawler(storage={'root_dir': icrawlerdir})
-                bc.crawl(keyword=safeparams, max_num=int(max_num - got_images))
+                bc.crawl(keyword=safeparams, max_num=int(max_num - got_images), file_idx_offset='auto')
                 if os.path.exists(icrawlerdir):
                     cnt = len(os.listdir(icrawlerdir))
                     logger.debug(f"{crawler_name} found {cnt - got_images} {plural(cnt - got_images, 'image')}")

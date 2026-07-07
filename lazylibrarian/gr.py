@@ -337,6 +337,10 @@ class GoodReads:
             self.logger.debug(f"Fuzz failed: {round(match, 2)} [{author}][{authorname}]")
         return {}
 
+    def get_author_image(self, authorid=None, authorname=None):
+        res = self.get_author_info(authorid=authorid, authorname=authorname)
+        return res.get('authorimg', '')
+
     def get_author_info(self, authorid=None, authorname=None):
 
         url = '/'.join([CONFIG['GR_URL'],

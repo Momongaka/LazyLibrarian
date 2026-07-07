@@ -958,6 +958,10 @@ query FindAuthor { authors_by_pk(id: [authorid])
         self.logger.debug(f"No results. Used {api_hits} api hit")
         return {}
 
+    def get_author_image(self, authorid=None, authorname=None):
+        res = self.get_author_info(authorid=authorid, authorname=authorname)
+        return res.get('authorimg', '')
+
     def get_author_info(self, authorid=None, authorname=None, refresh=False):
         """Get detailed info for a HardCover author."""
         author_name = ''

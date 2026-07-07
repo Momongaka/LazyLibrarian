@@ -261,6 +261,10 @@ class OpenLibrary:
                     cnt += 1
         return {}
 
+    def get_author_image(self, authorid=None, authorname=None):
+        res = self.get_author_info(authorid=authorid, authorname=authorname)
+        return res.get('authorimg', '')
+
     def get_author_info(self, authorid=None, authorname=None, refresh=False):
         authorinfo = {}
         if authorid and not authorid.startswith('OL'):
