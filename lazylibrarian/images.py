@@ -651,6 +651,7 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
         if not os.path.isdir(icrawlerdir):
             os.mkdir(icrawlerdir)
         got_images = 0
+        cnt = 0
         headers = {
             'User-Agent': get_user_agent(),
             'Accept': 'application/xml, text/xml',
