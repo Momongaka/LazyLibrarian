@@ -611,30 +611,16 @@ def fetch_annas_archive_domains():
         logger.warning(f"Failed to fetch domains from Wikipedia: {e}")
         return []
 
-    pattern_table = re.compile(
-        r'<table[^>]*class="[^"]*infobox vcard[^"]*"[^>]*>(.*?)(?:<h2|</table)',
-        re.DOTALL | re.IGNORECASE
-    )
-    pattern_span = re.compile(
-        r'<span[^>]*class="[^"]*url[^"]*"[^>]*>(.*?)</span>',
-        re.DOTALL | re.IGNORECASE
-    )
-    pattern_link = re.compile(
-        r'<a[^>]*class="[^"]*external text[^"]*"[^>]*href="([^"]+)"',
-        re.IGNORECASE
-    )
-
-    table_match = pattern_table.search(response.text)
-    if not table_match:
-        logger.warning("Could not find infobox table in Wikipedia page")
-        return []
-
     domains = []
-    for span_html in pattern_span.findall(table_match.group(0)):
-        for href in pattern_link.findall(span_html):
+    soup = BeautifulSoup(response.content.decode('utf-8', 'ignore'), 'html5lib')
+    urls = soup.find_all('span', class_='url')
+    for url in urls:
+        try:
+            href = str(url).rsplit('href="')[1].split('"')[0]
             parsed = urlparse(href if '://' in href else 'https:' + href)
             if parsed.netloc:
                 domains.append(parsed.netloc)
-
+        except IndexError:
+            continue
     logger.info(f"Fetched {len(domains)} domain(s) from Wikipedia: {domains}")
     return domains
