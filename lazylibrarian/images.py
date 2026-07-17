@@ -87,6 +87,16 @@ GS = ''
 GS_VER = ''
 generator = ''
 
+# these are currently blocked, broken, or need api key
+# flickr needs an apikey and doesn't seem to have authors or book covers
+# baidu doesn't like bots, message: "Forbid spider access"
+# librarything currently gived 403 errors
+# googleimages and googleisbn now require a browser with javascript enabled
+# (both are switched off by googleapis)
+# bing gives seemingly random results, some NSFW, sometimes based on first word of
+# search query, eg "Michael Agnew" returns lots of pictures of Michael Jackson
+force_ignore = 'flikr, baidu, librarything, googleapis, bing'
+
 
 def img_id(length=10):
     return ''.join([choice(string.ascii_letters + string.digits) for _ in range(length)])
@@ -334,7 +344,7 @@ def get_book_cover(bookid=None, src=None, ignore=''):
             8. Google images search (if lazylibrarian config allows)
 
         src = cache, cover, goodreads, librarything, googleisbn, openlibrary, googleimage
-        ignore = list of sources to skip
+        ignore = csv of sources to skip
         Return None if no cover available. """
     logger = logging.getLogger(__name__)
     if not bookid:
@@ -347,7 +357,11 @@ def get_book_cover(bookid=None, src=None, ignore=''):
     else:
         imgid = None
 
-    logger.debug(f"Getting {src} cover for {bookid}, ignore [{ignore}]")
+    if ignore:
+        ignore += ', '
+    ignore += force_ignore
+
+    logger.debug(f"Getting cover for {bookid}, ignore [{ignore}], src {src}")
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
@@ -432,11 +446,14 @@ def get_book_cover(bookid=None, src=None, ignore=''):
             if item['hc_id']:
                 h_c = lazylibrarian.hc.HardCover()
                 bookdict, _ = h_c.get_bookdict_for_bookid(item['hc_id'])
-                img = bookdict.get('cover')
+                img = bookdict.get('bookimg')
                 if img:
                     coverlink = cache_bookimg(img, bookid, src, suffix='_hc', imgid=imgid)
                     if coverlink:
                         return coverlink, 'hardcover'
+                logger.debug(f"No img in hardcover bookdict {bookdict}")
+            else:
+                logger.debug(f"No hc_id in {item}")
             if src:
                 return None, src
 
@@ -552,11 +569,10 @@ def get_book_cover(bookid=None, src=None, ignore=''):
                 res, src = crawl_image('bing', src, cachedir, bookid, safeparams, imgid=imgid)
                 if res:
                     return res, src
-            # flikr now needs an api key
-            # if not src or src == 'flikr' and 'flikr' not in ignore:
-            #     res, src = crawl_image('flickr', src, cachedir, bookid, safeparams, imgid=imgid)
-            #     if res:
-            #         return res, src
+            if not src or src == 'flikr' and 'flikr' not in ignore:
+             res, src = crawl_image('flickr', src, cachedir, bookid, safeparams, imgid=imgid)
+             if res:
+                 return res, src
             if not src or src == 'googleimage' and 'googleapis' not in ignore:
                 res, src = crawl_image('google', src, cachedir, bookid, safeparams, imgid=imgid)
                 if res:
@@ -618,7 +634,7 @@ def crawl_image(crawler_name, src, cachedir, bookid, safeparams, imgid=None):
     return None, src
 
 
-def get_author_image(authorid=None, refresh=False, max_num=1):
+def get_author_image(authorid=None, refresh=False, max_num=1, ignore=''):
     logger = logging.getLogger(__name__)
     if not authorid:
         logger.error("get_author_image: No authorid")
@@ -629,29 +645,39 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
     finally:
         db.close()
 
+    if ignore:
+        ignore += ', '
+    ignore += force_ignore
+
     cachedir = DIRS.CACHEDIR
     datadir = DIRS.DATADIR
+    got_images = 0
+    cnt = 0
+
+    icrawlerdir = os.path.join(cachedir, 'icrawler', authorid)
+    rmtree(icrawlerdir, ignore_errors=True)
+    if not os.path.isdir(icrawlerdir):
+        os.mkdir(icrawlerdir)
+
     if author:
         coverfile = os.path.join(datadir, author['AuthorIMG'])
     else:
         coverfile = os.path.join(cachedir, "author", f"{authorid}.jpg")
 
-    if path_isfile(coverfile) and max_num == 1 and not refresh:  # use cached image if there is one
-        lazylibrarian.CACHE_HIT = int(lazylibrarian.CACHE_HIT) + 1
-        logger.debug(f"get_author_image: Returning Cached response for {coverfile}")
-        coverlink = coverfile.lstrip(datadir)
-        return coverlink
+    if path_isfile(coverfile):
+        if max_num == 1 and not refresh:  # use cached image if there is one
+            lazylibrarian.CACHE_HIT = int(lazylibrarian.CACHE_HIT) + 1
+            logger.debug(f"get_author_image: Returning Cached response for {coverfile}")
+            coverlink = coverfile.lstrip(datadir)
+            return coverlink
+        _ = safe_copy(coverfile, os.path.join(icrawlerdir, 'cover.jpg'))
+        got_images += 1
+    else:
+        lazylibrarian.CACHE_MISS = int(lazylibrarian.CACHE_MISS) + 1
 
-    lazylibrarian.CACHE_MISS = int(lazylibrarian.CACHE_MISS) + 1
     if PIL and author:
         authorname = safe_unicode(author['AuthorName'])
         safeparams = authorname.replace('. ', ' ').replace(' ', '_')
-        icrawlerdir = os.path.join(cachedir, 'icrawler', authorid)
-        rmtree(icrawlerdir, ignore_errors=True)
-        if not os.path.isdir(icrawlerdir):
-            os.mkdir(icrawlerdir)
-        got_images = 0
-        cnt = 0
         headers = {
             'User-Agent': get_user_agent(),
             'Accept': 'application/xml, text/xml',
@@ -665,7 +691,7 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
                 break
             this_source = lazylibrarian.INFOSOURCES[api_source]
             # 2-letter_code, class, author_key, api_enabled
-            if this_source['author_key'] != 'authorid':
+            if this_source['author_key'] != 'authorid' and CONFIG[this_source['enabled']] and api_source not in ignore:
                 crawler_name = api_source
                 book_api = this_source['api']
                 book_api = book_api()
@@ -673,7 +699,7 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
                 if img.startswith('http'):
                     img_data = requests.get(img, headers=headers)
                     if str(img_data.status_code).startswith('2'):
-                        img_file = os.path.join(icrawlerdir, f"{this_source['src']}.jpg")
+                        img_file = os.path.join(icrawlerdir, f"{api_source}.jpg")
                         with open(img_file, 'wb') as f:
                             f.write(img_data.content)
                             got_images += 1
@@ -685,45 +711,48 @@ def get_author_image(authorid=None, refresh=False, max_num=1):
 
         if got_images < max_num:
             crawler_name = 'wikipedia'
-            try:
-                url = f"https://en.wikipedia.org/wiki/{safeparams}"
-                response = requests.get(url, headers=headers)
-                if str(response.status_code).startswith('2'):
-                    img_name = make_unicode(response.content.split(b"infobox-image")[1].split(b'src="')[1].split(b'"')[0])
-                    img_data = requests.get(f"https:{img_name}", headers=headers)
-                    if str(img_data.status_code).startswith('2'):
-                        img_file = os.path.join(icrawlerdir, 'wiki.jpg')
-                        with open(img_file, 'wb') as f:
-                            f.write(img_data.content)
-                            got_images += 1
-                            logger.debug(f"{crawler_name} found an image")
+            if crawler_name not in ignore:
+                try:
+                    url = f"https://en.wikipedia.org/wiki/{safeparams}"
+                    response = requests.get(url, headers=headers)
+                    if str(response.status_code).startswith('2'):
+                        img_name = make_unicode(response.content.split(b"infobox-image")[1].split(b'src="')[1].split(b'"')[0])
+                        img_data = requests.get(f"https:{img_name}", headers=headers)
+                        if str(img_data.status_code).startswith('2'):
+                            img_file = os.path.join(icrawlerdir, f'{crawler_name}.jpg')
+                            with open(img_file, 'wb') as f:
+                                f.write(img_data.content)
+                                got_images += 1
+                                logger.debug(f"{crawler_name} found an image")
+                        else:
+                            logger.debug(f"Got a {img_data.status_code} from {crawler_name} image {img_name}")
                     else:
-                        logger.debug(f"Got a {img_data.status_code} from {crawler_name} image {img_name}")
-                else:
-                    logger.debug(f"Got a {response.status_code} from {crawler_name} search {url}")
-            except Exception as e:
-                logger.debug(str(e))
+                        logger.debug(f"Got a {response.status_code} from {crawler_name} search {url}")
+                except Exception as e:
+                    logger.debug(str(e))
 
         if got_images < max_num:
             safeparams = quote_plus(make_utf8bytes(f"author {authorname}")[0])
             crawler_name = 'google'
-            gc = GoogleImageCrawler(storage={'root_dir': icrawlerdir})
-            gc.crawl(keyword=safeparams, max_num=int(max_num - got_images), file_idx_offset='auto')
-            if os.path.exists(icrawlerdir):
-                cnt = len(os.listdir(icrawlerdir))
-                logger.debug(f"{crawler_name} found {cnt - got_images} {plural(cnt - got_images, 'image')}")
-            if cnt < max_num:
-                got_images = cnt
-                # not enough results, try bing
-                crawler_name = 'bing'
-                safeparams = quote_plus(make_utf8bytes(f"{authorname.replace('. ', ' ')}")[0])
-                bc = BingImageCrawler(storage={'root_dir': icrawlerdir})
-                bc.crawl(keyword=safeparams, max_num=int(max_num - got_images), file_idx_offset='auto')
+            if crawler_name not in ignore:
+                gc = GoogleImageCrawler(storage={'root_dir': icrawlerdir})
+                gc.crawl(keyword=safeparams, max_num=int(max_num - got_images), file_idx_offset='auto')
                 if os.path.exists(icrawlerdir):
                     cnt = len(os.listdir(icrawlerdir))
                     logger.debug(f"{crawler_name} found {cnt - got_images} {plural(cnt - got_images, 'image')}")
-                else:
-                    cnt = 0
+                if cnt < max_num:
+                    got_images = cnt
+                    # not enough results, try bing
+                    crawler_name = 'bing'
+                    if crawler_name not in ignore:
+                        safeparams = quote_plus(make_utf8bytes(f"{authorname.replace('. ', ' ')}")[0])
+                        bc = BingImageCrawler(storage={'root_dir': icrawlerdir})
+                        bc.crawl(keyword=safeparams, max_num=int(max_num - got_images), file_idx_offset='auto')
+                        if os.path.exists(icrawlerdir):
+                            cnt = len(os.listdir(icrawlerdir))
+                            logger.debug(f"{crawler_name} found {cnt - got_images} {plural(cnt - got_images, 'image')}")
+                        else:
+                            cnt = 0
         if max_num == 1:
             if cnt:
                 img = os.path.join(icrawlerdir, os.listdir(icrawlerdir)[0])

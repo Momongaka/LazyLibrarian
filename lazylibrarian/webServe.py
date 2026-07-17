@@ -4081,9 +4081,7 @@ class WebInterface:
                 bookdata.pop('Narrator', None)
             covers = []
             if images:
-                # flickr needs an apikey and doesn't seem to have authors or book covers
-                # baidu doesn't like bots, message: "Forbid spider access"
-                sources = ['current', 'cover', 'hardcover', 'goodreads', 'librarything', 'openlibrary',
+                sources = ['current', 'cover', 'goodreads', 'librarything', 'openlibrary',
                            'googleisbn', 'bing', 'googleimage']
                 if CONFIG['HC_API']:
                     sources.append('hardcover')
