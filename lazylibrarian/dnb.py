@@ -23,9 +23,9 @@ try:
 except (ImportError, ModuleNotFoundError):
     Lang = None
 try:
-    from iso639 import languages
+    from iso639 import languages as iso_langs
 except (ImportError, ModuleNotFoundError):
-    languages = None
+    iso_langs = None
 try:
     from lxml import etree
 except ImportError:
@@ -512,8 +512,8 @@ class DNB:
             isodata = None
             if Lang:
                 isodata = Lang(lang_code)
-            elif languages:
-                isodata = languages.get(alpha2=lang_code[:2])
+            elif iso_langs:
+                isodata = iso_langs.get(alpha2=lang_code[:2])
 
             if isodata and isodata.name:
                 language_name = isodata.name
@@ -832,7 +832,7 @@ class DNB:
         if not CONFIG['DNB_API']:
             self.logger.warning('DNB API not enabled, check config')
             return
-        if not etree or (not Lang and not languages):
+        if not etree or (not Lang and not iso_langs):
             self.logger.warning('Required modules missing, lxml and/or iso639')
             return
 
@@ -882,7 +882,7 @@ class DNB:
         if not CONFIG['DNB_API']:
             self.logger.warning('DNB API not enabled, check config')
             return False
-        if not etree or (not Lang and not languages):
+        if not etree or (not Lang and not iso_langs):
             self.logger.warning('Required modules missing, lxml and/or iso639')
             return False
         if not bookstatus:
@@ -942,7 +942,7 @@ class DNB:
         if not CONFIG['DNB_API']:
             self.logger.warning('DNB API not enabled, check config')
             return False
-        if not etree or (not Lang and not languages):
+        if not etree or (not Lang and not iso_langs):
             self.logger.warning('Required modules missing, lxml and/or iso639')
             return False
         try:
