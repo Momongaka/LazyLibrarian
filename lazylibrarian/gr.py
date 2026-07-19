@@ -1294,7 +1294,11 @@ class GoodReads:
             audiostatus = CONFIG['NEWAUDIO_STATUS']
             self.logger.debug(f"No audiostatus passed, using default {audiostatus}")
         self.logger.debug(f"bookstatus={bookstatus}, audiostatus={audiostatus}")
-        book_language = rootxml.find('./book/language_code').text
+        try:
+            book_language = rootxml.find('./book/language_code').text
+        except Exception as e:
+            self.logger.error(f"Error getting language_code from book xml: {str(e)}")
+
         bookname = rootxml.find('./book/title').text
 
         if not book_language:
