@@ -274,9 +274,13 @@ def add_file(data, hashid, title, provider_options):
     try:
         qbclient.download_from_file(data, **kwargs)
     except Exception as e:
-        dlcommslogger.error(f"Failed to download_from_file: {e}")
-        return False, str(e)
-
+        # qBittorrent >= 5.2 returns HTTP 409 Conflict when the torrent is
+        # already in the client. Not a failure: verify by hashid below.
+        if getattr(getattr(e, 'response', None), 'status_code', None) == 409:
+            dlcommslogger.debug('qBittorrent returned 409 (already present), verifying by hashid')
+        else:
+            dlcommslogger.error(f"Failed to download_from_file: {e}")
+            return False, str(e)
     count = 0
     while count < 10:
         count += 1
@@ -316,8 +320,13 @@ def add_torrent(link, hashid, provider_options):
     try:
         qbclient.download_from_link(link, **kwargs)
     except Exception as e:
-        dlcommslogger.error(f" Failed to download_from_link: {e}")
-        return False, str(e)
+        # qBittorrent >= 5.2 returns HTTP 409 Conflict when the torrent is
+        # already in the client. Not a failure: verify by hashid below.
+        if getattr(getattr(e, 'response', None), 'status_code', None) == 409:
+            dlcommslogger.debug('qBittorrent returned 409 (already present), verifying by hashid')
+        else:
+            dlcommslogger.error(f"Failed to download_from_file: {e}")
+            return False, str(e)
 
     count = 0
     while count < 10:
