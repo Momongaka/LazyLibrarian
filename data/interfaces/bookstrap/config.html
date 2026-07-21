@@ -633,13 +633,13 @@
                     dnb_selected = ''
                     if CONFIG['BOOK_API'] == "GoodReads":
                         gr_selected = 'selected="selected"'
-                    elif CONFIG['BOOK_API'] == "GoogleBooks":
+                    if CONFIG['BOOK_API'] == "GoogleBooks":
                         gb_selected = 'selected="selected"'
-                    elif CONFIG['BOOK_API'] == "OpenLibrary":
+                    if CONFIG['BOOK_API'] == "OpenLibrary":
                         ol_selected = 'selected="selected"'
-                    elif CONFIG['BOOK_API'] == "HardCover":
+                    if CONFIG['BOOK_API'] == "HardCover":
                         hc_selected = 'selected="selected"'
-                    elif CONFIG['BOOK_API'] == "DNB":
+                    if CONFIG['BOOK_API'] == "DNB":
                         dnb_selected = 'selected="selected"'
                     %>
                     <label for="book_api" class="control-label">Primary Information Source</label>
@@ -2581,6 +2581,14 @@
                       <input type="number" id="dload_ratio" name="dload_ratio" value="${CONFIG['DLOAD_RATIO']}" class="form-control" placeholder="Download Match Ratio (percent)">
                       <span class="input-group-addon">%</span>
                     </div>
+                  </div>
+                  <div class="form-group">
+                    <label for="dload_ratio">Provider Priority Weighting:</label>
+                    <div class="input-group">
+                      <input type="number" id="priority_weight" name="priority_weight" value="${CONFIG['PRIORITY_WEIGHT']}" class="form-control" placeholder="Priority weight">
+                      <span class="input-group-addon">Multiplier</span>
+                    </div>
+                      <span class="help-block">0 = prefer match percentage. Higher values make downloader priority more important when selecting "best" match</span>
                   </div>
                   <div class="form-group">
                     <label for="max_pages">Maximum Search Pages:</label>
