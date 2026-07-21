@@ -122,7 +122,7 @@
                             destination2 = "#"
                             but_class2 = "btn-info"
                         elif 'Skipped' in value2:
-                            destination2 = "add_book?library=eBook&bookid="+result['bookid']
+                            destination2 = "add_book?library=eBook&bookid="+result['bookid']+"&source="+result['source']
                             if result['authorid']:
                                 destination2 = destination2 + "&authorid="+result['authorid']
                             value2 = "Add Book"
@@ -141,7 +141,7 @@
                             destination3 = "#"
                             but_class3 = "btn-info"
                         elif 'Skipped' in value3:
-                            destination3 = "add_book?library=AudioBook&bookid="+result['bookid']
+                            destination3 = "add_book?library=AudioBook&bookid="+result['bookid']+"&source="+result['source']
                             if result['authorid']:
                                 destination3 = destination3 + "&authorid="+result['authorid']
                             value3 = "Add Audio"
@@ -150,13 +150,13 @@
                             destination3 = "#"
                             but_class3 = "btn-default"
                     else:
-                        destination2 = "add_book?library=eBook&bookid="+result['bookid']
+                        destination2 = "add_book?library=eBook&bookid="+result['bookid']+"&source="+result['source']
                         if result['authorid']:
                             destination2 = destination2 + "&authorid="+result['authorid']
                         value2 = "Add Book"
                         but_class2 = "btn-success"
 
-                        destination3 = "add_book?library=AudioBook&bookid="+result['bookid']
+                        destination3 = "add_book?library=AudioBook&bookid="+result['bookid']+"&source="+result['source']
                         if result['authorid']:
                             destination3 = destination3 + "&authorid="+result['authorid']
                         value3 = "Add Audio"

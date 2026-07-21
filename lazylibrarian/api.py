@@ -209,12 +209,12 @@ cmd_dict = {'help': (0, 'list available commands. Time consuming commands take a
             'findAuthorID': (0, '&name= [&source=] find AuthorID for named author'),
             'findMissingAuthorID': (0, '[&source=] find authorid from named source for any authors without id'),
             'findBook': (0, '&name= search goodreads/googlebooks for named book'),
-            'addBook': (1, '&id= [&wait] add one or more books to the database by bookid'),
-            'addBookByISBN': (1, '&isbn= [&wait] add one or more books to the database by isbn'),
+            'addBook': (1, '&id= [&wait][&source] add one or more books to the database by bookid'),
+            'addBookByISBN': (1, '&isbn= [&wait][&source] add one or more books to the database by isbn'),
             'moveBooks': (1, '&fromname= &toname= move all books from one author to another by AuthorName'),
             'moveBook': (1, '&id= &toid= move one book to new author by BookID and AuthorID'),
             'addAuthor': (1, '&name= [&books] add author to database by name, optionally add their books'),
-            'addAuthorID': (1, '&id= add author to database by AuthorID, optionally add their books'),
+            'addAuthorID': (1, '&id= [&refresh] add author to database by AuthorID, optionally add their books'),
             'removeAuthor': (1, '&id= remove author from database by AuthorID'),
             'addMagazine': (1, '&name= add magazine to database by name'),
             'removeMagazine': (1, '&name= remove magazine and all of its issues from database by name'),
@@ -807,11 +807,7 @@ class Api:
                         hit += arg
                 elif arg == 'ENABLED':
                     hit.append(arg)
-                    if kwargs[arg] in ['1', 1, True, 'True', 'true']:
-                        val = True
-                    else:
-                        val = False
-                    CONFIG.set_bool(name, val)
+                    CONFIG.set_bool(name, kwargs[arg] in ['1', 1, True, 'True', 'true'])
                 else:
                     miss.append(arg)
             CONFIG.save_config_and_backup_old(section=name)
@@ -2305,12 +2301,15 @@ class Api:
             return
 
         authorname = format_author_name(kwargs['name'], postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
-        this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
-        api = this_source['api']
+        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
+            source = kwargs['source']
+        else:
+            source = CONFIG.get_str('BOOK_API')
+        api = source['api']
         api = api()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
-                                      name=f"API-{this_source['src']}RESULTS",
+                                      name=f"API-{source['src']}RESULTS",
                                       args=[f"<ll>{authorname}", myqueue])
         search_api.start()
         search_api.join()
@@ -2322,12 +2321,15 @@ class Api:
             self.data = 'Missing parameter: name'
             return
 
-        this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
-        api = this_source['api']
+        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
+            source = kwargs['source']
+        else:
+            source = CONFIG.get_str('BOOK_API')
+        api = source['api']
         api = api()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
-                                      name=f"API-{this_source['src']}RESULTS",
+                                      name=f"API-{source['src']}RESULTS",
                                       args=[f"{kwargs['name']}<ll>", myqueue])
         search_api.start()
         search_api.join()
@@ -2379,14 +2381,17 @@ class Api:
         if 'id' not in kwargs:
             self.data = 'Missing parameter: id'
             return
-        this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
-        api = this_source['api']
+        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
+            source = kwargs['source']
+        else:
+            source = CONFIG.get_str('BOOK_API')
+        api = source['api']
         api = api()
         if 'wait' in kwargs:
             self.data = api.add_bookid_to_db(kwargs['id'], None, None, "Added by API")
         else:
             threading.Thread(target=api.add_bookid_to_db,
-                             name=f"API-{this_source['src']}RESULTS",
+                             name=f"API-{source['src']}RESULTS",
                              args=[kwargs['id'], None, None, "Added by API"]).start()
 
     def _movebook(self, **kwargs):
@@ -2478,7 +2483,7 @@ class Api:
         if not name:
             self.data = 'Missing parameter: name'
             return
-        books = bool(kwargs.get('books'))
+        books = bool(kwargs.get('books') in ['1', 1, True, 'True', 'true'])
         try:
             self.data = add_author_name_to_db(author=name, refresh=False, addbooks=books,
                                               reason=f"API add_author {name}")
@@ -2491,9 +2496,10 @@ class Api:
         if not self.id:
             self.data = 'Missing parameter: id'
             return
-        books = bool(kwargs.get('books'))
+        books = bool(kwargs.get('books') in ['1', 1, True, 'True', 'true'])
+        refresh = 'refresh' in kwargs
         try:
-            self.data = add_author_to_db(refresh=False, authorid=self.id, addbooks=books,
+            self.data = add_author_to_db(refresh=refresh, authorid=self.id, addbooks=books,
                                          reason=f"API add_author_id {self.id}")
         except Exception as e:
             self.data = f"{type(e).__name__} {str(e)}"
@@ -2627,10 +2633,18 @@ class Api:
             if item not in kwargs:
                 self.data = f"Missing parameter: {item}"
                 return
+        item = CONFIG.get_item(kwargs['name'])
+        value = CONFIG.get_item(kwargs['value'])
+        if item == 'BOOK_API':
+            if value not in lazylibrarian.INFOSOURCES.keys():
+                self.data = f"Invalid BOOK_API: {value}"
+                return
+            source = lazylibrarian.INFOSOURCES[value]
+            if not CONFIG.get_item(source['enabled']):
+                self.data = f"{value} is not enabled"
+                return
         try:
-            item = CONFIG.get_item(kwargs['name'])
-            if item:
-                item.set_from_ui(kwargs['value'])
+            item.set_from_ui(kwargs['value'])
             CONFIG.save_config_and_backup_old(save_all=False, section=kwargs['group'])
         except Exception as e:
             self.data = f"Unable to update CFG entry for {kwargs['group']}: {kwargs['name']}, {str(e)}"
