@@ -60,7 +60,7 @@ class ImageType(Enum):
     TEST = 'test'
 
 
-service_blocked = ['goodreads', 'librarything', 'googleapis', 'openlibrary', 'hardcover', 'dnb', 'ISBN']
+service_blocked = ['goodreads', 'librarything', 'googleapis', 'openlibrary', 'hardcover', 'dnb', 'ranobedb', 'ISBN']
 
 
 def gr_api_sleep():
@@ -457,7 +457,7 @@ class XMLCacheRequest(CacheRequest):
                         self.logger.error(f"Cached {len(result)} bytes {filename}.err")
                 except Exception as e:
                     self.logger.error(f"Exception {e} writing {filename}.err")
-            return '', False
+            return None, False
         return source, True
 
 
