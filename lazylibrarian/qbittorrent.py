@@ -14,8 +14,17 @@ import logging
 import os
 import time
 
+import requests
+
 from lazylibrarian.config2 import CONFIG
 from lib.qbittorrent import Client, WrongCredentialsError
+
+# qBittorrent Web API 2.14+ can accept a torrents/add request before it has
+# actually retrieved and parsed the url (pending_count > 0, HTTP 202). While
+# that is in progress, torrents/properties for the new hash legitimately 404,
+# so a short poll window isn't enough to tell a slow fetch from a real failure.
+QBIT_ADD_POLL_SECONDS = 10
+QBIT_ADD_PENDING_POLL_SECONDS = 60
 
 
 def get_client():
@@ -260,6 +269,89 @@ def check_link():
         return f"qBittorrent login FAILED: {type(err).__name__} {str(err)}"
 
 
+def classify_add_response(result):
+    """ Interpret the response from qBittorrent's torrents/add endpoint.
+
+    Pre-2.14 Web API responses (plain "Ok." text, or an empty body) carry no
+    structured info, so there's nothing to classify - treat as 'legacy' and
+    fall back to polling for the hash as before. Web API 2.14+ returns JSON
+    with success_count/pending_count/failure_count and added_torrent_ids.
+
+    :return: (state, added_ids) where state is one of
+             'legacy', 'accepted', 'pending', 'rejected'
+    """
+    if not isinstance(result, dict):
+        return 'legacy', []
+
+    added_ids = result.get('added_torrent_ids') or []
+    success_count = result.get('success_count', 0)
+    pending_count = result.get('pending_count', 0)
+    failure_count = result.get('failure_count', 0)
+
+    if failure_count and not (success_count or pending_count):
+        return 'rejected', added_ids
+    # Check pending ahead of success: if a batch response is ever a mix of
+    # the two, we still need the longer pending poll window, not the short
+    # one that's only safe when everything in the batch was already added.
+    if pending_count:
+        return 'pending', added_ids
+    if success_count:
+        return 'accepted', added_ids
+    return 'legacy', added_ids
+
+
+def wait_for_torrent(qbclient, dlcommslogger, hashid, result, label):
+    """ Poll qBittorrent until a just-added torrent shows up, or give up.
+
+    :param result: the response already returned by download_from_link/file
+    :param label: 'add_torrent' or 'add_file', used in the failure message
+    """
+    state, added_ids = classify_add_response(result)
+    dlcommslogger.debug(f"torrents/add response: {result} (state={state}, added_ids={added_ids})")
+
+    if state == 'rejected':
+        res = f"qBittorrent rejected the torrent: {result}"
+        dlcommslogger.error(res)
+        return False, res
+    if isinstance(result, dict) and result.get('failure_count'):
+        # Only reachable when success_count or pending_count is also set, ie a
+        # partial failure on a multi-url add. We only ever submit one url, so
+        # this shouldn't happen in practice, but don't discard it silently.
+        dlcommslogger.error(f"qBittorrent reported a partial add failure: {result}")
+
+    max_wait = QBIT_ADD_PENDING_POLL_SECONDS if state == 'pending' else QBIT_ADD_POLL_SECONDS
+    count = 0
+    while count < max_wait:
+        count += 1
+        time.sleep(1)
+        try:
+            torrent = qbclient.get_torrent(hashid)
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                # Not indexed yet, e.g. qBittorrent is still fetching a pending url
+                continue
+            dlcommslogger.error(f" Failed {label}: {e}")
+            return False, str(e)
+        except Exception as e:
+            dlcommslogger.error(f" Failed {label}: {e}")
+            return False, str(e)
+        if torrent:
+            # Add explicit pause as qbittorrent v5 seems to ignore start paused arg
+            if CONFIG.get_bool('TORRENT_PAUSED'):
+                try:
+                    paused = not qbclient.qbittorrent_version.startswith('v5')
+                    dlcommslogger.debug(f"Pausing torrent {hashid}")
+                    qbclient.pause(hashid, paused)
+                except Exception as e:
+                    dlcommslogger.error(f" Failed to pause torrent {hashid}: {e}")
+            if count > 1:
+                dlcommslogger.debug(f"hashid found in torrent list after {count} seconds")
+            return True, ''
+    res = f"hashid not found in torrent list, {label} failed"
+    dlcommslogger.debug(res)
+    return False, res
+
+
 def add_file(data, hashid, title, provider_options):
     dlcommslogger = logging.getLogger('special.dlcomms')
 
@@ -272,33 +364,12 @@ def add_file(data, hashid, title, provider_options):
     kwargs = get_args(provider_options)
     dlcommslogger.debug(f'{kwargs}')
     try:
-        qbclient.download_from_file(data, **kwargs)
+        result = qbclient.download_from_file(data, **kwargs)
     except Exception as e:
         dlcommslogger.error(f"Failed to download_from_file: {e}")
         return False, str(e)
 
-    count = 0
-    while count < 10:
-        count += 1
-        time.sleep(1)
-        # noinspection PyProtectedMember
-        try:
-            torrent = qbclient.get_torrent(hashid)
-        except Exception as e:
-            dlcommslogger.error(f"Failed to add torrent file: {e}")
-            return False, str(e)
-        if torrent:
-            # Add explicit pause as qbittorrent v5 seems to ignore start paused arg
-            if CONFIG.get_bool('TORRENT_PAUSED'):
-                paused = not qbclient.qbittorrent_version.startswith('v5')
-                dlcommslogger.debug(f"Pausing torrent {hashid}")
-                qbclient.pause(hashid, paused)
-            if count > 1:
-                dlcommslogger.debug(f"hashid found in torrent list after {count} seconds")
-            return True, ''
-    res = "hashid not found in torrent list, add_file failed"
-    dlcommslogger.debug(res)
-    return False, res
+    return wait_for_torrent(qbclient, dlcommslogger, hashid, result, 'add_file')
 
 
 def add_torrent(link, hashid, provider_options):
@@ -314,33 +385,12 @@ def add_torrent(link, hashid, provider_options):
     kwargs = get_args(provider_options)
     dlcommslogger.debug(f'{kwargs}')
     try:
-        qbclient.download_from_link(link, **kwargs)
+        result = qbclient.download_from_link(link, **kwargs)
     except Exception as e:
         dlcommslogger.error(f" Failed to download_from_link: {e}")
         return False, str(e)
 
-    count = 0
-    while count < 10:
-        count += 1
-        time.sleep(1)
-        # noinspection PyProtectedMember
-        try:
-            torrent = qbclient.get_torrent(hashid)
-        except Exception as e:
-            dlcommslogger.error(f" Failed to add torrent: {e}")
-            return False, str(e)
-        if torrent:
-            # Add explicit pause as qbittorrent v5 seems to ignore start paused arg
-            if CONFIG.get_bool('TORRENT_PAUSED'):
-                paused = not qbclient.qbittorrent_version.startswith('v5')
-                dlcommslogger.debug(f"Pausing torrent {hashid}")
-                qbclient.pause(hashid, paused)
-            if count > 1:
-                dlcommslogger.debug(f"hashid found in torrent list after {count} seconds")
-            return True, ''
-    res = "hashid not found in torrent list, add_torrent failed"
-    dlcommslogger.debug(res)
-    return False, res
+    return wait_for_torrent(qbclient, dlcommslogger, hashid, result, 'add_torrent')
 
 
 def get_args(provider_options):
