@@ -3,7 +3,6 @@ import enum
 import http.client
 import json
 import logging
-import os
 import platform
 import threading
 import time
@@ -25,18 +24,18 @@ from lazylibrarian.bookdict import (
 )
 from lazylibrarian.common import get_readinglist, set_readinglist
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, path_isfile, syspath
+from lazylibrarian.filesystem import DIRS, syspath
 from lazylibrarian.formatter import (
     check_int,
     date_format,
     format_author_name,
     get_list,
     is_valid_isbn,
-    md5_utf8,
     now,
     plural,
     thread_name,
 )
+from lazylibrarian.provider_utils import get_hashed_filename, is_in_cache, read_from_cache
 
 
 class ReadStatus(enum.Enum):
@@ -501,33 +500,6 @@ query FindAuthor { authors_by_pk(id: [authorid])
     mutation DelUserBook { delete_user_book (id: [bookid]) { id }}
 '''
 
-    def is_in_cache(self, expiry: int, hashfilename: str, myhash: str) -> bool:
-        """Check if a cache file is valid."""
-        if path_isfile(hashfilename):
-            cache_modified_time = os.stat(hashfilename).st_mtime
-            time_now = time.time()
-            if expiry and cache_modified_time < time_now - expiry:
-                # Cache entry is too old, delete it
-                self.cachelogger.debug(f"Expiring {myhash}")
-                os.remove(syspath(hashfilename))
-                return False
-            return True
-        return False
-
-    @staticmethod
-    def read_from_cache(hashfilename: str) -> (str, bool):
-        """Read a cached API response from disk."""
-        with open(syspath(hashfilename), "rb") as cachefile:
-            source = cachefile.read()
-        return source, True
-
-    @staticmethod
-    def get_hashed_filename(cache_location: str, url: str) -> (str, str):
-        """Generate a hashed filename for caching."""
-        myhash = md5_utf8(url)
-        hashfilename = os.path.join(cache_location, myhash[0], myhash[1], f"{myhash}.json")
-        return hashfilename, myhash
-
     def result_from_cache(self, searchcmd: str, refresh=False) -> (str, bool):
         """Get API result from cache or fetch if needed."""
         headers = {'Content-Type': 'application/json',
@@ -537,14 +509,14 @@ query FindAuthor { authors_by_pk(id: [authorid])
         query = {'query': searchcmd}
         cache_location = DIRS.get_cachedir('JSONCache')
         filename = f"{self.graphql_url}/{str(query)}"
-        hashfilename, myhash = self.get_hashed_filename(cache_location, filename)
+        hashfilename, myhash = get_hashed_filename(cache_location, filename)
         # CACHE_AGE is in days, so get it to seconds
         expire_older_than = CONFIG.get_int('CACHE_AGE') * 24 * 60 * 60
-        valid_cache = self.is_in_cache(expire_older_than, hashfilename, myhash)
+        valid_cache = is_in_cache(expire_older_than, hashfilename, myhash)
         if valid_cache and not refresh:
             lazylibrarian.CACHE_HIT += 1
             self.cachelogger.debug(f"CacheHandler: Returning CACHED response {hashfilename}")
-            source, ok = self.read_from_cache(hashfilename)
+            source, ok = read_from_cache(hashfilename)
             if ok:
                 res = json.loads(source)
             else:
@@ -1277,6 +1249,9 @@ query FindAuthor { authors_by_pk(id: [authorid])
         """Import a single book from HardCover by ID."""
         if not bookdict:
             bookdict, _ = self.get_bookdict_for_bookid(bookid)
+        if not bookdict:
+            self.logger.warning(f"No HardCover metadata for {bookid}, unable to add book")
+            return False
         if not bookstatus:
             bookstatus = CONFIG['NEWBOOK_STATUS']
             self.logger.debug(f"No bookstatus passed, using default {bookstatus}")

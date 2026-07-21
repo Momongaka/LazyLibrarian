@@ -6,9 +6,7 @@
 
 import datetime
 import logging
-import os
 import re
-import time
 import traceback
 from queue import Queue
 from urllib.parse import quote
@@ -46,17 +44,17 @@ from lazylibrarian.bookdict import (
 )
 from lazylibrarian.common import get_user_agent
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, path_isfile, syspath
+from lazylibrarian.filesystem import DIRS, syspath
 from lazylibrarian.formatter import (
     get_list,
     is_valid_isbn,
-    md5_utf8,
     plural,
     replace_all,
     strip_quotes,
     thread_name,
     unaccented,
 )
+from lazylibrarian.provider_utils import get_hashed_filename, is_in_cache, read_from_cache
 
 
 class DNB:
@@ -93,7 +91,7 @@ class DNB:
                 '&operation=searchRetrieve&recordSchema=MARC21-xml&query=%s')
     COVERURL = 'https://portal.dnb.de/opac/mvb/cover?isbn=%s'
 
-    def search(self, query: str, generic_cover: str = "", start=0, limit=10) -> list | None:
+    def _search(self, query: str, generic_cover: str = "", start=0, limit=10) -> list | None:
         try:
             if not self.active:
                 return []
@@ -216,15 +214,15 @@ class DNB:
         try:
             cache_location = DIRS.get_cachedir('XMLCache')
             filename = query_url
-            hashfilename, myhash = self._get_hashed_filename(cache_location, filename)
+            hashfilename, myhash = get_hashed_filename(cache_location, filename)
             # CACHE_AGE is in days, so get it to seconds
             expire_older_than = CONFIG.get_int('CACHE_AGE') * 24 * 60 * 60
-            valid_cache = self.is_in_cache(expire_older_than, hashfilename, myhash)
+            valid_cache = is_in_cache(expire_older_than, hashfilename, myhash)
             refresh = False
             if valid_cache and not refresh:
                 lazylibrarian.CACHE_HIT += 1
                 self.logger.debug(f"CacheHandler: Returning CACHED response {hashfilename}")
-                source, ok = self._read_from_cache(hashfilename)
+                source, ok = read_from_cache(hashfilename)
                 if ok:
                     xml_data = etree.XML(source)
                 else:
@@ -263,34 +261,6 @@ class DNB:
             self.logger.error(f'DNB query error: {e}')
             self.logger.error(f'{traceback.format_exc()}')
             return [], False  # Return empty list, not None
-
-    def is_in_cache(self, expiry: int, hashfilename: str, myhash: str) -> bool:
-        """Check if a cache file is valid."""
-        if path_isfile(hashfilename):
-            cache_modified_time = os.stat(hashfilename).st_mtime
-            time_now = time.time()
-            if expiry and cache_modified_time < time_now - expiry:
-                # Cache entry is too old, delete it
-                self.logger.debug(f"Expiring {myhash}")
-                os.remove(syspath(hashfilename))
-                return False
-            return True
-        return False
-
-    @staticmethod
-    def _read_from_cache(hashfilename: str) -> (str, bool):
-        """Read a cached API response from disk."""
-        source = ''
-        with open(syspath(hashfilename), "rb") as cachefile:
-            source = cachefile.read()
-        return source, True
-
-    @staticmethod
-    def _get_hashed_filename(cache_location: str, url: str) -> (str, str):
-        """Generate a hashed filename for caching."""
-        myhash = md5_utf8(url)
-        hashfilename = os.path.join(cache_location, myhash[0], myhash[1], f"{myhash}.xml")
-        return hashfilename, myhash
 
     def _parse_marc21_record(self, record):
         """Parse MARC21 XML record into book data"""
@@ -867,11 +837,11 @@ class DNB:
             db.close()
 
     def get_bookdict_for_bookid(self, bookid=None):
-        results, in_cache = self.search(f"dnb-idn:{bookid}", start=0, limit=5)
+        results, in_cache = self._search(f"dnb-idn:{bookid}", start=0, limit=5)
         # shouldn't need many results as based on bookid
         bookdict = None
         for bk in results:
-            bookdict = self.dnb_book_dict(bk)
+            bookdict = self._book_dict(bk)
             if bookdict and bookdict['bookid'] == bookid:
                 break
         return bookdict, in_cache
@@ -969,10 +939,10 @@ class DNB:
             limit = 100
             next_page = True
             while next_page:
-                results, in_cache = self.search(searchterm, start=start, limit=limit)
+                results, in_cache = self._search(searchterm, start=start, limit=limit)
                 self.logger.debug(f"Search {start}:{limit} returned {len(results)}")
                 for item in results:
-                    book = self.dnb_book_dict(item)
+                    book = self._book_dict(item)
                     if not book['authorname']:
                         self.logger.debug('Skipped a result without authorfield.')
                         no_author_count += 1
@@ -1079,7 +1049,7 @@ class DNB:
             self.logger.error(f'Unhandled exception in DNB.find_results: {traceback.format_exc()}')
 
     @staticmethod
-    def dnb_book_dict(item):
+    def _book_dict(item):
         """ Return all the book info we need as a dictionary or default value if no key """
         mydict = {}
         for val, idx, default in [
