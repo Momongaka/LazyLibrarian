@@ -1337,7 +1337,8 @@ def isbnlang(isbn):
 
 
 def language_from_words(words):
-    if not Translator:
+    # couldn't be loaded, or configured off
+    if not Translator or not CONFIG.get_bool('GOOGLE_TRANS_ID'):
         return 0, 0
     logger = logging.getLogger(__name__)
     logging.getLogger('googletrans').setLevel(logging.CRITICAL)
@@ -1348,11 +1349,12 @@ def language_from_words(words):
         async with Translator() as translator:
             result = await translator.detect(s)
             return result
+
     try:
-        res = asyncio.run(lang_detect(words))
+        res = asyncio.run(asyncio.wait_for(lang_detect(words), timeout=10))
         logger.debug(f"Detected {res.lang}:{res.confidence} for {words}")
         return res.lang, res.confidence
-    except Exception as e:
+    except (asyncio.TimeoutError, Exception) as e:
         logger.debug(str(e))
         return 0, 0
 
