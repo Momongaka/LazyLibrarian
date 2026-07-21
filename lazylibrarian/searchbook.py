@@ -524,7 +524,7 @@ def search_book(books=None, library=None):
 
             if matches:
                 try:
-                    highest = max(matches, key=lambda s: (s[0], s[3]))  # sort on percentage and priority
+                    highest = max(matches, key=lambda s: (weighted_score(s), check_int(s[3], 0)))
                 except TypeError:
                     highest = max(matches, key=lambda s: (str(s[0]), str(s[3])))
 
@@ -558,3 +558,8 @@ def search_book(books=None, library=None):
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         db.close()
         thread_name("WEBSERVER")
+
+    def weighted_score(s):
+        # priority is already 0-100-ish per provider; normalize it down to a modest bonus
+        priority_bonus = (check_int(s[3], 0) / 100) * CONFIG.get_int('PRIORITY_WEIGHT')
+        return check_int(s[0], 0) + priority_bonus

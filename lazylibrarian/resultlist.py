@@ -294,7 +294,7 @@ def find_best_result(resultlist, book, searchtype, source):
                 matches.append([score, new_value_dict, control_value_dict, res['priority']])
 
         if matches:
-            highest = max(matches, key=lambda s: (s[0], s[3]))
+            highest = max(matches, key=lambda s: (weighted_score(s), check_int(s[3], 0)))
             score = highest[0]
             new_value_dict = highest[1]
             # controlValueDict = highest[2]
@@ -315,6 +315,12 @@ def find_best_result(resultlist, book, searchtype, source):
 
     db.close()
     return highest
+
+
+def weighted_score(s):
+    # priority is already 0-100-ish per provider; normalize it down to a modest bonus
+    priority_bonus = (check_int(s[3], 0) / 100) * CONFIG.get_int('PRIORITY_WEIGHT')
+    return check_int(s[0], 0) + priority_bonus
 
 
 def download_result(match, book):
