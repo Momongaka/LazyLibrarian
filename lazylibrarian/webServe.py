@@ -3356,9 +3356,11 @@ class WebInterface:
         sort_key = get_alphanum_key_func(key)
         lst.sort(key=sort_key, reverse=reverse)
 
+
     @cherrypy.expose
     @require_auth()
-    def add_book(self, bookid=None, authorid=None, library=None):
+    def add_book(self, bookid=None, authorid=None, library=None, source=None):
+        logger = logging.getLogger(__name__)
         self.check_permitted(lazylibrarian.perm_search)
         TELEMETRY.record_usage_data()
         if library == 'eBook':
@@ -3392,7 +3394,15 @@ class WebInterface:
             author_id = match['AuthorID']
             update_totals(author_id)
         else:
-            this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
+            if source:
+                if source in lazylibrarian.INFOSOURCES:
+                    this_source = lazylibrarian.INFOSOURCES[source]
+                else:
+                    logger.error(f"Invalid source {source} in add_book")
+                    source = CONFIG['BOOK_API']
+            else:
+                source = CONFIG['BOOK_API']
+            this_source = lazylibrarian.INFOSOURCES[source]
             api = this_source['api']
             api = api()
             t = threading.Thread(target=api.add_bookid_to_db,
@@ -3413,6 +3423,7 @@ class WebInterface:
         if audio_status == 'Wanted':
             raise cherrypy.HTTPRedirect("audio")
         raise cherrypy.HTTPRedirect("authors")
+
 
     @cherrypy.expose
     @require_auth()
