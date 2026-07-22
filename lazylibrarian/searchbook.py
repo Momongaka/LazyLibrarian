@@ -559,7 +559,7 @@ def search_book(books=None, library=None):
         db.close()
         thread_name("WEBSERVER")
 
-    def weighted_score(s):
-        # priority is already 0-100-ish per provider; normalize it down to a modest bonus
-        priority_bonus = (check_int(s[3], 0) / 100) * CONFIG.get_int('PRIORITY_WEIGHT')
-        return check_int(s[0], 0) + priority_bonus
+def weighted_score(s):
+    # priority is already 0-100-ish per provider; normalize it down to a modest bonus
+    priority_bonus = (check_int(s[3], 0) / 100) * CONFIG.get_int('PRIORITY_WEIGHT')
+    return check_int(s[0], 0) + priority_bonus
