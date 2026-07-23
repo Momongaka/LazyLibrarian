@@ -737,8 +737,13 @@ def process_alternate(source_dir=None, library="eBook"):
             return process_book(source_dir, bookid, library=library)
 
         logger.warning(f"{library} {new_book} has no metadata")
+
         db = database.DBConnection()
-        res = _process_ll_bookid_folders_from_list(source_dir, db, logger)
+        if path_isdir(source_dir):
+            all_downloads = [(source_dir, f) for f in os.listdir(source_dir)]
+        else:
+            all_downloads = [(os.path.dirname(source_dir), os.path.basename(source_dir))]
+        res = _process_ll_bookid_folders_from_list(all_downloads, db, logger)
         db.close()
         if not res:
             logger.warning(f"{source_dir} has no book with LL.number")
