@@ -342,7 +342,8 @@ class GoodReads:
         return res.get('authorimg', '')
 
     def get_author_info(self, authorid=None, authorname=None):
-
+        if not authorid:
+            return {}
         url = '/'.join([CONFIG['GR_URL'],
                         f"author/show/{authorid}.xml?{urlencode(self.params)}"])
 
@@ -918,7 +919,7 @@ class GoodReads:
                                 try:
                                     pubdate = result.split(b"publicationInfo")[1].split(b"<")[0]
                                     pubdate = make_unicode(pubdate)
-                                except IndexError:
+                                except (IndexError, AttributeError):
                                     pubdate = ''
 
                                 # Expected publication November 17, 2026

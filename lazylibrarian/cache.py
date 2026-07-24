@@ -60,7 +60,7 @@ class ImageType(Enum):
     TEST = 'test'
 
 
-service_blocked = ['goodreads', 'librarything', 'googleapis', 'openlibrary', 'hardcover', 'dnb', 'ranobedb', 'ISBN']
+service_blocked = ['GoodReads', 'LibraryThing', 'Google', 'OpenLibrary', 'HardCover', 'DNB', 'RanobeDB', 'ISBN']
 
 
 def gr_api_sleep():
@@ -170,7 +170,12 @@ def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
     except Exception as e:
         return f"Exception {type(e).__name__}: {str(e)}", False
 
-    if str(r.status_code).startswith('2'):  # (200 OK etc)
+    if r.status_code == 202:
+        h = r.headers
+        logger.debug(f"{r.status_code} {len(r.content)}, {h.get('X-Cache')}")
+        r = requests.get(url, verify=verify, params=payload, headers=headers)
+        logger.debug(f"{r.status_code} {len(r.content)}, {h.get('X-Cache')}")
+    if r.status_code == 200:
         if raw:
             return r.content, True
         return r.text, True
@@ -348,7 +353,7 @@ class CacheRequest(ABC):
                 self.logger.debug(msg)
                 to_block = ''
                 for blk in service_blocked:
-                    if blk in self.url:
+                    if blk.lower() in self.url:
                         to_block = blk
                         break
                 if to_block:
@@ -360,10 +365,11 @@ class CacheRequest(ABC):
 
     def is_in_cache(self, expiry: int, hashfilename: str, myhash: str) -> bool:
         if self.use_cache and path_isfile(hashfilename):
+            file_size = os.stat(hashfilename).st_size
             cache_modified_time = os.stat(hashfilename).st_mtime
             time_now = time.time()
-            if self.expire and cache_modified_time < time_now - expiry:
-                # Cache entry is too old, delete it
+            if not file_size or (self.expire and cache_modified_time < time_now - expiry):
+                # Cache entry is empty or too old, delete it
                 cachelogger = logging.getLogger('special.cache')
                 cachelogger.debug(f"Expiring {myhash}")
                 os.remove(syspath(hashfilename))
@@ -415,7 +421,9 @@ class XMLCacheRequest(CacheRequest):
     def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> (str, bool):
         source = None
         result = make_bytestr(result)
-        if result:
+        if not result:
+            self.cachelogger.debug("No result returned")
+        else:
             if not result.startswith(b'<?xml'):
                 self.cachelogger.debug(f"{len(result)} bytes is not xml")
             else:

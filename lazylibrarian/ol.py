@@ -1414,6 +1414,9 @@ class OpenLibrary:
     def add_bookid_to_db(self, bookid=None, bookstatus=None, audiostatus=None, reason='ol.add_bookid'):
 
         bookdict, _ = self.get_bookdict_for_bookid(bookid)
+        if not bookdict:
+            self.logger.warning(f"No OpenLibrary metadata for {bookid}, unable to add book")
+            return False
         authorname = bookdict.get('authorname')
         if not authorname:
             self.logger.warning(f"No AuthorName for {bookid}, unable to add book")

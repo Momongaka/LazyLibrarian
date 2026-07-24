@@ -453,7 +453,7 @@ def get_book_cover(bookid=None, src=None, ignore=''):
                         return coverlink, 'hardcover'
                 logger.debug(f"No img in hardcover bookdict {bookdict}")
             else:
-                logger.debug(f"No hc_id in {item}")
+                logger.debug(f"No hc_id in {dict(item)}")
             if src:
                 return None, src
 
@@ -716,16 +716,21 @@ def get_author_image(authorid=None, refresh=False, max_num=1, ignore=''):
                     url = f"https://en.wikipedia.org/wiki/{safeparams}"
                     response = requests.get(url, headers=headers)
                     if str(response.status_code).startswith('2'):
-                        img_name = make_unicode(response.content.split(b"infobox-image")[1].split(b'src="')[1].split(b'"')[0])
-                        img_data = requests.get(f"https:{img_name}", headers=headers)
-                        if str(img_data.status_code).startswith('2'):
-                            img_file = os.path.join(icrawlerdir, f'{crawler_name}.jpg')
-                            with open(img_file, 'wb') as f:
-                                f.write(img_data.content)
-                                got_images += 1
-                                logger.debug(f"{crawler_name} found an image")
-                        else:
-                            logger.debug(f"Got a {img_data.status_code} from {crawler_name} image {img_name}")
+                        try:
+                            img_name = make_unicode(response.content.split(b"infobox-image")[1].split(b'src="')[1].split(b'"')[0])
+                        except IndexError:
+                            logger.debug(f"No image from wikipedia for {safeparams}")
+                            img_name = None
+                        if img_name:
+                            img_data = requests.get(f"https:{img_name}", headers=headers)
+                            if str(img_data.status_code).startswith('2'):
+                                img_file = os.path.join(icrawlerdir, f'{crawler_name}.jpg')
+                                with open(img_file, 'wb') as f:
+                                    f.write(img_data.content)
+                                    got_images += 1
+                                    logger.debug(f"{crawler_name} found an image")
+                            else:
+                                logger.debug(f"Got a {img_data.status_code} from {crawler_name} image {img_name}")
                     else:
                         logger.debug(f"Got a {response.status_code} from {crawler_name} search {url}")
                 except Exception as e:

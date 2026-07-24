@@ -455,7 +455,7 @@ class ConfigBool(ConfigInt):
         return self._on_type_mismatch(value, 'bool/str')
 
     def set_from_ui(self, value: bool) -> bool:
-        if bool(value) != self.value:
+        if bool(value in ['1', 1, True, 'True', 'true']) != self.value:
             # Don't trigger a change if it's the same
             return self.set_bool(bool(value))
         return False

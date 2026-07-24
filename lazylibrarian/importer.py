@@ -26,6 +26,7 @@ from rapidfuzz import fuzz
 
 import lazylibrarian
 from lazylibrarian import database
+from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.cache import ImageType, cache_img
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.formatter import (
@@ -108,11 +109,13 @@ def available_author_sources():
     author_sources = []
     source_dict = {}
     pref = ''
+    # only return enabled and not-blocked sources
     for item in lazylibrarian.INFOSOURCES.keys():
         # fullname, 2-letter_code, class, author_key, api_enabled
         this_source = lazylibrarian.INFOSOURCES[item]
-        source_dict[item] = [this_source['src'], this_source['api'],
-                             this_source['author_key'], this_source['enabled']]
+        if CONFIG[this_source['enabled']] and not BLOCKHANDLER.is_blocked(item):
+            source_dict[item] = [this_source['src'], this_source['api'],
+                                 this_source['author_key'], this_source['enabled']]
     # GB/DNB don't have authorid so we use one of the others...
     # prefer CONFIG['BOOK_API'] if it has authorid
     # 2nd choice, one that's enabled with an apikey
@@ -210,7 +213,10 @@ def add_author_name_to_db(author=None, refresh=False, addbooks=None, reason=None
                     logger.debug(
                         f"Failed to match author [{author}] to authorname [{match_name}] fuzz [{match_fuzz}]")
 
-            if not author_info:
+            if not api_sources:
+                # no available non-blocked author sources
+                match_fuzz = 0
+            elif not author_info:
                 # not found at any enabled provider. Fake it, generate our own ID...
                 author_info['authorname'] = author
                 author_info['authorid'] = f'LL{sha1(make_bytestr(author)).hexdigest()}'

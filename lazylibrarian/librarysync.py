@@ -27,6 +27,7 @@ from rapidfuzz import fuzz
 
 import lazylibrarian
 from lazylibrarian import ROLE, database
+from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.bookrename import audio_rename, book_rename, delete_empty_folders, id3read
 from lazylibrarian.cache import ImageType, cache_img
 from lazylibrarian.config2 import CONFIG
@@ -58,6 +59,7 @@ from lazylibrarian.formatter import (
 from lazylibrarian.images import img_id
 from lazylibrarian.importer import (
     add_author_name_to_db,
+    book_keys,
     collate_nopunctuation,
     search_for,
     title_translates,
@@ -125,6 +127,7 @@ def get_book_info(fname):
     # only handles epub, mobi, azw, azw3 and opf for now,
     # for pdf see notes below
     logger = logging.getLogger(__name__)
+    searchinglogger = logging.getLogger('special.searching')
     fname = make_unicode(fname)
     res = {}
     extn = splitext(fname)[1]
@@ -144,6 +147,7 @@ def get_book_info(fname):
         res['title'] = make_unicode(book.title())
         res['language'] = make_unicode(book.language())
         res['isbn'] = make_unicode(book.isbn())
+        searchinglogger.debug(f"{res}")
         return res
 
         # noinspection PyUnreachableCode
@@ -250,10 +254,13 @@ def get_book_info(fname):
                             res['gb_id'] = txt
                         elif attrib[k] == 'DNB':
                             res['dnb_id'] = txt
+                        elif attrib[k] == 'RANOBEDB':
+                            res['ran_id'] = txt
         n += 1
     if len(authors):
         res['creator'] = authors[0]
         res['authors'] = authors
+    searchinglogger.debug(f"{res}")
     return res
 
 
@@ -604,8 +611,9 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
         return 0
 
     db = database.DBConnection()
-    logger.debug(f"Storing start time for {thread_name()}")
-    db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
+    my_thread = thread_name()
+    logger.debug(f"Storing start time for {my_thread}")
+    db.upsert("jobs", {"Start": time.time()}, {"Name": my_thread})
     if startdir == destdir:
         lazylibrarian.AUTHORS_UPDATE = 1
     logger.debug(f"Counting directories: {startdir}")
@@ -631,7 +639,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
 
     processed_subdirectories = []
     rehit = []
-    remiss = []
+    remiss = {}
     # noinspection PyBroadException
     try:
         # keep statistics of full library scans
@@ -819,12 +827,14 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                         extn = splitext(files)[1]
                         bookid = None
                         forced_bookid = ''
+                        ident = ''
 
                         # if it's an epub or a mobi we can try to read metadata from it
                         res = {}
                         if extn.lower() in [".epub", ".mobi", ".azw", ".azw3"]:
                             book_filename = os.path.join(rootdir, files)
                             try:
+                                logger.debug(f"Reading info from {book_filename}")
                                 res = get_book_info(book_filename)
                             except Exception as e:
                                 logger.error(f'get_book_info failed for {book_filename}, {type(e).__name__} {str(e)}')
@@ -851,6 +861,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                         try:
                             metafile = opf_file(rootdir)
                             if metafile:
+                                logger.debug(f"Reading info from {metafile}")
                                 res2 = get_book_info(metafile)
                                 for item in res2:
                                     res[item] = res2[item]
@@ -871,22 +882,15 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 publisher = res['publisher']
                             if 'narrator' in res:
                                 narrator = res['narrator']
+
                             ident = ''
-                            if 'gr_id' in res:
-                                gr_id = res['gr_id']
-                                ident = f"GR: {gr_id}"
-                            if 'gb_id' in res:
-                                gb_id = res['gb_id']
-                                ident = f"GB: {gb_id}"
-                            if 'ol_id' in res:
-                                ol_id = res['ol_id']
-                                ident = f"OL: {ol_id}"
-                            if 'hc_id' in res:
-                                hc_id = res['hc_id']
-                                ident = f"HC: {hc_id}"
-                            if 'dnb_id' in res:
-                                dnb_id = res['dnb_id']
-                                ident = f"DN: {dnb_id}"
+                            for k in book_keys():
+                                if k in res:
+                                    i = k.split('_')[0].upper()
+                                    # "GR: {res['gr_id']}""
+                                    ident = f"{i}: {res[k]}"
+                                    break
+
                             logger.debug(
                                 f"file meta [{isbn}] [{language}] [{author}] [{book}] [{ident}] [{publisher}] "
                                 f"[{narrator}]")
@@ -971,7 +975,6 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
 
                             newauthorname, authorid, new_author = add_author_name_to_db(
                                 author, addbooks=None, reason=f"Add author of {book}", title=book)
-
                             if last_authorid and last_authorid != authorid:
                                 update_totals(last_authorid)
                             last_authorid = authorid
@@ -993,13 +996,17 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 # If we have a valid ID, use that
                                 mtype = ''
                                 match = None
-                                this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
-                                try:
-                                    bookid = eval(this_source['book_key'])
-                                except NameError:
-                                    bookid = None
-                                if bookid:
-                                    match = db.match('SELECT AuthorID,Status FROM books where BookID=?', (bookid,))
+                                bookid = None
+                                key = None
+                                if ident:
+                                    try:
+                                        key, bookid = ident.split(':')
+                                        bookid = bookid.strip()
+                                        key = f"{key.lower()}_id"
+                                    except (ValueError, IndexError):
+                                        bookid = None
+                                if bookid and key:
+                                    match = db.match(f'SELECT AuthorID,Status,BookID FROM books where {key}=?', (bookid, ))
                                     if match:
                                         mtype = match['Status']
                                         if authorid != match['AuthorID']:
@@ -1027,29 +1034,10 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                     # which might have several bookid/isbn for the same book
                                     reason = f'Author exists for {book}'
                                     logger.debug(reason)
-                                    oldbookid = bookid
                                     bookid, mtype = find_book_in_db(author, book, reason=reason)
+                                    logger.debug(f"Found {bookid} in database for {author}:{book}")
                                     if bookid:
-                                        if oldbookid:
-                                            logger.warning(
-                                                f"Metadata bookid [{oldbookid}] not found in database, using {bookid}")
-                                        else:
-                                            logger.debug(f"Found bookid {bookid} for {book}")
-                                    elif oldbookid:
-                                        bookid = oldbookid
-                                        logger.warning(
-                                            f"Metadata bookid [{bookid}] not found in database, trying to add...")
-
-                                        this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
-                                        api = this_source['api']
-                                        api = api()
-                                        book_id = eval(this_source['book_key'])
-                                        if book_id:
-                                            src = this_source['src']
-                                            _ = api.add_bookid_to_db(book_id, None, None, f"Added by {src}"
-                                                                     f" librarysync")
-                                    if bookid:
-                                        # see if it's there now...
+                                        logger.debug(f"Found bookid {bookid} for {book}")
                                         match = db.match('SELECT AuthorID,BookName,Status from books where BookID=?',
                                                          (bookid,))
                                         if match:
@@ -1109,15 +1097,20 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 # at this point if we still have no bookid, it looks like we
                                 # have author and book title but no database entry for it
                                 if not bookid:
-                                    sources = [CONFIG['BOOK_API']]
+                                    sources = []
+                                    if not BLOCKHANDLER.is_blocked(CONFIG['BOOK_API']):
+                                        sources.append(CONFIG['BOOK_API'])
                                     if CONFIG.get_bool('MULTI_SOURCE'):
                                         # Either original source doesn't have the book, or it didn't match language
                                         # prefs, or it's under another author (pseudonym, series continuation author)
                                         # Since we have the book anyway, try and reload it
                                         for source in lazylibrarian.INFOSOURCES.keys():
                                             this_source = lazylibrarian.INFOSOURCES[source]
-                                            if source not in sources and CONFIG[this_source['enabled']]:
+                                            if source not in sources and CONFIG[this_source['enabled']] and not BLOCKHANDLER.is_blocked(source):
                                                 sources.append(source)
+                                    if not sources:
+                                        # no available info sources (all blocked?)
+                                        libsynclogger.debug("No infosources available")
 
                                     searchresults = []
                                     for source in sources:
@@ -1173,8 +1166,9 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                                 cmd = "UPDATE books SET BookLang=? WHERE BookID=?"
                                                 db.action(cmd, (language, bookid))
                                     else:
-                                        logger.warning(f"Rescan no match for {book}, closest {round(closest, 2)}%")
-                                        remiss.append(f"{book}:{author} ({round(closest, 2)}%)")
+                                        logger.warning(f"Rescan no match for {book}  from {len(sources)} "
+                                                        f"{plural(len(sources), 'source')}, closest {round(closest, 2)}%")
+                                        remiss[book] = f"{book}:{author} ({round(closest, 2)}%)"
 
                                 # see if it's there now...
                                 if bookid:
@@ -1182,7 +1176,6 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                            "AuthorName, BookName, BookID, BookDesc, BookGenre,Narrator from "
                                            "books,authors where books.AuthorID = authors.AuthorID and BookID=?")
                                     check_status = db.match(cmd, (bookid,))
-
                                     if not check_status:
                                         logger.debug(f'Unable to find bookid {bookid} in database')
                                     else:
@@ -1390,8 +1383,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
             logger.debug(f"Rescan {rescan_hits} {plural(rescan_hits, 'hit')}, {rescan_count - rescan_hits} miss")
             for bk in rehit:
                 logger.debug(f"HIT: {bk}")
-            for bk in remiss:
-                logger.debug(f"MISS: {bk}")
+            for bk in remiss.keys():
+                logger.debug(f"MISS: {remiss[bk]}")
             logger.debug(
                 f"Cache {lazylibrarian.CACHE_HIT} {plural(lazylibrarian.CACHE_HIT, 'hit')}, "
                 f"{lazylibrarian.CACHE_MISS} miss")
@@ -1473,8 +1466,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
     finally:
         logger.debug(f"Processed folders: {len(processed_subdirectories)}, "
                      f"matched books: {len(rehit)}, unmatched: {len(remiss)}")
-        logger.debug(f"Storing finish time for {thread_name()}")
-        db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
-        if '_SCAN' in thread_name():
+        logger.debug(f"Storing finish time for {my_thread}")
+        db.upsert("jobs", {"Finish": time.time()}, {"Name": my_thread})
+        if '_SCAN' in my_thread:
             thread_name('WEBSERVER')
         db.close()
