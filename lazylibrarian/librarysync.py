@@ -640,6 +640,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
     processed_subdirectories = []
     rehit = []
     remiss = {}
+    warn_incomplete = False
     # noinspection PyBroadException
     try:
         # keep statistics of full library scans
@@ -1111,7 +1112,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                     if not sources:
                                         # no available info sources (all blocked?)
                                         libsynclogger.debug("No infosources available")
-
+                                        warn_incomplete = True
                                     searchresults = []
                                     for source in sources:
                                         searchresults += search_for(f"{book}<ll>{author}", source)
@@ -1177,6 +1178,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                            "books,authors where books.AuthorID = authors.AuthorID and BookID=?")
                                     check_status = db.match(cmd, (bookid,))
                                     if not check_status:
+                                        warn_incomplete = True
                                         logger.debug(f'Unable to find bookid {bookid} in database')
                                     else:
                                         if CONFIG['CONTRIBUTING_AUTHORS'] and res and 'authors' in res:
@@ -1381,7 +1383,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                 f"Unable to cache language for {st['uncached']} {plural(st['uncached'], 'book')} with missing ISBN")
             logger.debug(f"Found {st['duplicates']} duplicate {plural(st['duplicates'], 'book')}")
             logger.debug(f"Rescan {rescan_hits} {plural(rescan_hits, 'hit')}, {rescan_count - rescan_hits} miss")
-            for bk in rehit:
+            for bk in set(rehit):
                 logger.debug(f"HIT: {bk}")
             for bk in remiss.keys():
                 logger.debug(f"MISS: {remiss[bk]}")
@@ -1466,6 +1468,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
     finally:
         logger.debug(f"Processed folders: {len(processed_subdirectories)}, "
                      f"matched books: {len(rehit)}, unmatched: {len(remiss)}")
+        if warn_incomplete:
+            logger.warning("Library scan is incomplete due to provider errors. Some authors/books may be missing.")
         logger.debug(f"Storing finish time for {my_thread}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": my_thread})
         if '_SCAN' in my_thread:

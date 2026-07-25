@@ -120,7 +120,7 @@ def available_author_sources():
     # prefer CONFIG['BOOK_API'] if it has authorid
     # 2nd choice, one that's enabled with an apikey
     # 3rd choice, openlibrary if enabled (doesn't need apikey)
-    if source_dict[CONFIG['BOOK_API']][3] and source_dict[CONFIG['BOOK_API']][2] != 'authorid':
+    if CONFIG['BOOK_API'] in source_dict and source_dict[CONFIG['BOOK_API']][3] and source_dict[CONFIG['BOOK_API']][2] != 'authorid':
         pref = CONFIG['BOOK_API']
     else:
         for item in source_dict:
@@ -129,12 +129,12 @@ def available_author_sources():
                     source_dict[CONFIG['BOOK_API']][0] != 'OL'):
                 pref = item
                 break
-        if not pref and source_dict['OpenLibrary'][3]:
+        if not pref and 'OpenLibrary' in source_dict and source_dict['OpenLibrary'][3]:
             pref = 'OpenLibrary'
     if not pref:
         logger = logging.getLogger(__name__)
-        logger.warning("No suitable source for authorid, using OpenLibrary")
-        pref = 'OpenLibrary'
+        logger.warning("No suitable source for authorid")
+        return []
 
     author_sources.append(source_dict[pref])
     if CONFIG.get_bool('MULTI_SOURCE'):

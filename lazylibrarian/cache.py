@@ -104,6 +104,7 @@ def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
         Default to unicode, need to set raw=True for images/data
         Allow one retry on timeout by default """
     logger = logging.getLogger(__name__)
+    cachelogger = logging.getLogger('special.cache')
     http.client.HTTPConnection.debuglevel = 1 if lazylibrarian.REQUESTSLOG else 0
     # for key in logging.Logger.manager.loggerDict:
     #     print(key)
@@ -172,9 +173,10 @@ def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
 
     if r.status_code == 202:
         h = r.headers
+        cachelogger.debug(f"{h}")
         logger.debug(f"{r.status_code} {len(r.content)}, {h.get('X-Cache')}")
         r = requests.get(url, verify=verify, params=payload, headers=headers)
-        logger.debug(f"{r.status_code} {len(r.content)}, {h.get('X-Cache')}")
+        logger.debug(f"Retry: {r.status_code} {len(r.content)}, {h.get('X-Cache')}")
     if r.status_code == 200:
         if raw:
             return r.content, True
@@ -346,7 +348,7 @@ class CacheRequest(ABC):
                 self.cachelogger.debug(f"CacheHandler: Storing {self.name()} {myhash} {len(result)} bytes for {self.url}")
                 source, result = self.load_from_result_and_cache(result, hashfilename, expire_older_than)
                 self.cachelogger.debug(result)
-            elif '404' in result:  # don't block on "not found"
+            elif '404' in result or '202' in result:  # don't block on "not found" or "accepted"
                 return None, False
             else:
                 msg = f"Got error response for {self.url}: {result.split('<')[0]}"
