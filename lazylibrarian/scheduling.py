@@ -741,6 +741,8 @@ def show_stats(json=False):
         author_stats.append(['Blank', res['counter']])
         overdue = is_overdue('author')[0]
         author_stats.append(['Overdue', overdue])
+        res = db.select('select distinct authorid from bookauthors except select authorid from books')
+        author_stats.append(['Secondary', len(res)])
         authorstats = {}
         for item in author_stats:
             authorstats[item[0]] = item[1]
