@@ -419,7 +419,7 @@ class XMLCacheRequest(CacheRequest):
     def fetch_data(self) -> (str, bool):
         gr_api_sleep()
         headers = {'User-Agent': get_user_agent()}
-        headers['Accept'] =  'application/xml',
+        headers['Accept'] = 'application/xml'
         headers['Accept-Language'] = 'en-US,en;q=0.5'
         return fetch_url(self.url, raw=True, headers=headers)
 

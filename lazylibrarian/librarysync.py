@@ -955,7 +955,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                             logger.debug(f"No valid {library} found in {subdirectory}")
                         else:
                             # flag that we found a book in this subdirectory
-                            if subdirectory:
+                            if subdirectory and subdirectory not in processed_subdirectories:
                                 processed_subdirectories.append(subdirectory)
 
                             # If we have a valid looking isbn, and language != "Unknown", add it to cache

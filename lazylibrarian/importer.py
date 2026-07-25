@@ -124,9 +124,9 @@ def available_author_sources():
         pref = CONFIG['BOOK_API']
     else:
         for item in source_dict:
-            if (source_dict[CONFIG['BOOK_API']][3] and
-                source_dict[CONFIG['BOOK_API']][2] != 'authorid' and
-                    source_dict[CONFIG['BOOK_API']][0] != 'OL'):
+            if (source_dict[item][3] and
+                source_dict[item][2] != 'authorid' and
+                    source_dict[item][0] != 'OL'):
                 pref = item
                 break
         if not pref and 'OpenLibrary' in source_dict and source_dict['OpenLibrary'][3]:
