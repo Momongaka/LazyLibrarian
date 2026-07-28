@@ -190,6 +190,8 @@ def add_author_name_to_db(author=None, refresh=False, addbooks=None, reason=None
                 book_api = api_source[1]
                 book_api = book_api()
                 author_info = book_api.find_author_id(authorname=author, title=title, refresh=True)
+                if not author_info:
+                    author_info = book_api.find_author_id(authorname=author, refresh=True)
                 if author_info:
                     # only try to add if data matches found author data
                     authorname = author_info['authorname']

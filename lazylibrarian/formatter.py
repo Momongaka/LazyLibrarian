@@ -865,7 +865,7 @@ def format_author_name(author: str, postfix: list[str]) -> str:
                 fuzzlogger.debug(f'Formatted authorname [{author}] to [{forename} {surname}]')
                 author = f"{forename} {surname}"
     # ensure initials have a '.' on the end
-    words = author.split()
+    words = author.replace('.', ' ').split()
     author = ''
     for word in words:
         if len(word) == 1 and word.isalpha():

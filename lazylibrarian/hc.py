@@ -850,7 +850,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
                         altnames = item['document']['alternate_names']
                         books_count = item['document']['books_count']
                         author_id = item['document']['id']
-                        if authorname == name or authorname in altnames:
+                        if fuzz.ratio(authorname, name) >= CONFIG.get_int('NAME_RATIO') or authorname in altnames:
                             matches.append([books_count, author_id, name, altnames])
                     matches = sorted(matches, reverse=True)
                     authorid = matches[0][1]

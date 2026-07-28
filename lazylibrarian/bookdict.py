@@ -324,6 +324,19 @@ def add_bookdict_to_db(book):
         db.close()
         return False
 
+    _, auth_id = lazylibrarian.importer.get_preferred_author(book['authorid'])
+    if not auth_id:
+        auth_id = lazylibrarian.importer.add_author_to_db(authorname=None, refresh=False,
+                                                          authorid=book['authorid'], addbooks=False,
+                                                          reason=f"Bookdict author of {book['bookname']}")
+    if not auth_id:
+        logger.error[f"AuthorID {book['authorid']} not found, Unable to add {book['bookname']}"]
+        return False
+
+    if auth_id != book['authorid']:
+        logger.warning(f"AuthorID changed from bookdict {book['authorid']} to {auth_id}")
+        book['authorid'] = auth_id
+
     if book['bookimg'] and book['bookimg'].startswith('http'):
         book['bookimg'] = cache_bookimg(book['bookimg'], book['bookid'], book['source'].lower())
     if not book['bookimg']:  # no results or failed to cache it
