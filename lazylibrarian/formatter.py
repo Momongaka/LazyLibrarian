@@ -201,6 +201,37 @@ def url_fix(s, charset='utf-8'):
     return urlunsplit((scheme, netloc, path, qs, anchor))
 
 
+# Query parameters that carry a credential of some sort. Private trackers and
+# indexers put passkeys and api keys straight in the download url, so a url
+# can't be logged as-is.
+CREDENTIAL_PARAMS = ('apikey', 'api_key', 'auth', 'authkey', 'key', 'passkey', 'passwd', 'password',
+                     'rss_key', 'rsskey', 'secret', 'session', 'sessionid', 'token', 'torrent_pass')
+
+# A credential can turn up percent encoded inside another url, which is how a
+# private tracker's announce url reaches us in a magnet's tr= parameter, so
+# match an encoded separator as well as a literal one. Anything up to the next
+# separator goes, and over-redacting a log line is the safe way to be wrong.
+CREDENTIAL_RE = re.compile(
+    r'(?:(?<![A-Za-z0-9_])|(?<=%3F)|(?<=%26))(' + '|'.join(CREDENTIAL_PARAMS) + r')(=|%3D)[^&;#\s]*',
+    re.IGNORECASE)
+USERINFO_RE = re.compile(r'(?<=//)[^/@\s]+@')
+
+
+def redact_url(url):
+    """
+    Mask any credentials in a url so it is safe to log.
+    Strips userinfo and the value of any known credential parameter, whether it
+    is in the url itself or percent encoded inside one.
+    """
+    if not url:
+        return ''
+    url = make_unicode(url)
+    if not isinstance(url, str):
+        return '[unprintable url]'
+    url = USERINFO_RE.sub('[redacted]@', url, count=1)
+    return CREDENTIAL_RE.sub(r'\1\2[redacted]', url)
+
+
 def book_series(bookname):
     """
     Try to get a book series/seriesnum from a bookname, or return empty string

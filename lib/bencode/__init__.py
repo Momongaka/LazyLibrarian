@@ -114,22 +114,28 @@ def decode_dict(x, f, force_sort=True):
         strings, not alphanumerics)
     - http://www.bittorrent.org/beps/bep_0003.html
 
-    Therefore, this function will force the keys to be strings (decoded
-    from utf-8), and by default the keys are (re)sorted after reading.
-    Set force_sort to False to keep the order of the dictionary as
-    represented in x, as many other encoders and decoders do not force this
-    property.
+    Keys are decoded from utf-8 where they are text. BitTorrent v2 keys the
+    top level "piece layers" dictionary by raw 32 byte merkle roots
+    (BEP 52), so a key that isn't utf-8 is kept as bytes rather than
+    rejected. By default the keys are (re)sorted after reading, as raw
+    bytes, which is the order the standard asks for. Set force_sort to False
+    to keep the order of the dictionary as represented in x, as many other
+    encoders and decoders do not force this property.
     """
     r, f = OrderedDict(), f + 1
 
     while x[f:f + 1] != b'e':
-        k, f = decode_string(x, f, force_decode_utf8=True)
+        k, f = decode_string(x, f)
         r[k], f = decode_func[x[f:f + 1]](x, f)
 
     if force_sort:
-        r = OrderedDict(sorted(r.items()))
+        r = OrderedDict(sorted(r.items(), key=lambda item: _key_bytes(item[0])))
 
     return r, f + 1
+
+
+def _key_bytes(key):
+    return key if isinstance(key, bytes) else key.encode('utf-8')
 
 
 # noinspection PyDictCreation
@@ -220,11 +226,10 @@ def encode_list(x, r):
 
 def encode_dict(x, r):
     r.append(b'd')
-    ilist = list(x.items())
-    ilist.sort()
+    ilist = sorted(x.items(), key=lambda item: _key_bytes(item[0]))
 
     for k, v in ilist:
-        k = k.encode('utf-8')
+        k = _key_bytes(k)
         r.extend((str(len(k)).encode('utf-8'), b':', k))
         encode_func[type(v)](v, r)
 

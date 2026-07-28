@@ -19,7 +19,8 @@ import time
 import traceback
 import unicodedata
 from base64 import b16encode, b32decode, b64encode
-from hashlib import sha1
+from hashlib import sha1, sha256
+from urllib.parse import urlsplit
 
 # noinspection PyBroadException
 try:
@@ -67,15 +68,17 @@ from lazylibrarian.filesystem import (
 from lazylibrarian.formatter import (
     clean_name,
     get_list,
+    make_bytestr,
     make_unicode,
     md5_utf8,
+    redact_url,
     sanitize,
     unaccented,
 )
 from lazylibrarian.ircbot import irc_query
 from lazylibrarian.soulseek import SLSKD
 from lazylibrarian.telemetry import record_usage_data
-from lib.bencode import bdecode, bencode
+from lib.bencode import BencodeDecodeError, bdecode, bencode
 
 from .magnet2torrent import magnet2torrent
 
@@ -693,9 +696,10 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
 
         headers = {'Accept-encoding': 'gzip', 'User-Agent': get_user_agent()}
         proxies = proxy_list()
+        safe_url = redact_url(tor_url)
 
         try:
-            logger.debug(f"Fetching {tor_url}")
+            logger.debug(f"Fetching {safe_url}")
             if tor_url.startswith('https') and CONFIG.get_bool('SSL_VERIFY'):
                 r = requests.get(tor_url, headers=headers, timeout=90, proxies=proxies,
                                  verify=CONFIG['SSL_CERTS']
@@ -704,37 +708,59 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
                 r = requests.get(tor_url, headers=headers, timeout=90, proxies=proxies, verify=False)
             if str(r.status_code).startswith('2'):
                 torrent = r.content
+                content_type = r.headers.get('Content-Type', 'unknown')
                 if not len(torrent):
-                    res = f"Got empty response for {tor_url}"
+                    res = f"Provider returned invalid torrent data for {safe_url}: empty response"
                     logger.warning(res)
                     return False, res
                 if len(torrent) < 100:
-                    res = f"Only got {len(torrent)} bytes for {tor_url}"
+                    res = (f"Provider returned invalid torrent data for {safe_url}: "
+                           f"only got {len(torrent)} bytes")
                     logger.warning(res)
                     return False, res
-                logger.debug(f"Got {len(torrent)} bytes for {tor_url}")
+                logger.debug(f"Got {len(torrent)} bytes ({content_type}) for {safe_url}")
             else:
-                res = f"Got a {r.status_code} response for {tor_url}"
+                res = f"Got a {r.status_code} response for {safe_url}"
                 logger.warning(res)
                 return False, res
 
         except requests.exceptions.Timeout:
-            res = f"Timeout fetching file from url: {tor_url}"
+            res = f"Timeout fetching file from url: {safe_url}"
             logger.warning(res)
             return False, res
         except Exception as e:
             # some jackett providers redirect internally using http 301 to a magnet link
             # which requests can't handle, so throws an exception
-            logger.debug(f"Requests exception: {e}")
+            logger.debug(f"Requests exception: {redact_url(str(e))}")
             if "magnet:?" in str(e):
                 tor_url = 'magnet:?' + str(e).split('magnet:?')[1].strip("'")
-                logger.debug(f"Redirecting to {tor_url}")
+                logger.debug("Redirecting to magnet link")
             else:
-                res = f"{type(e).__name__} fetching file from url: {tor_url}, {e}"
+                res = f"{type(e).__name__} fetching file from url: {safe_url}, {redact_url(str(e))}"
                 logger.warning(res)
                 return False, res
 
-    if not torrent and not tor_url.startswith('magnet:?'):
+    # A provider that hands back an error page, an interstitial, or a
+    # truncated file gives us something that looks like data but isn't a
+    # torrent. Say so here rather than reporting it as a hashing failure, and
+    # never pass it on to a downloader.
+    cache_hash = ''
+    if torrent:
+        invalid = torrent_data_error(torrent)
+        if invalid:
+            res = f"Provider returned invalid torrent data for {tor_title}: {invalid}"
+            logger.warning(res)
+            logger.debug(f"url: {redact_url(tor_url)}, {len(torrent)} bytes")
+            torrent = ''
+            if not CONFIG.get_bool('TOR_DOWNLOADER_BLACKHOLE'):
+                # the downloader may have better luck fetching it than we did,
+                # but only if we can tell which torrent it should end up with
+                cache_hash = hash_from_cache_url(tor_url)
+            if not cache_hash:
+                return False, res
+            logger.debug(f"Sending url to the downloader, expecting hash {cache_hash}")
+
+    if not torrent and not cache_hash and not tor_url.startswith('magnet:?'):
         res = "No magnet or data, cannot continue"
         logger.warning(res)
         return False, res
@@ -798,11 +824,11 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
                 return False, res
 
     else:
-        hashid = calculate_torrent_hash(tor_url, torrent)
+        hashid = cache_hash or calculate_torrent_hash(tor_url, torrent)
         if not hashid:
             res = "Unable to calculate torrent hash from url/data"
             logger.error(res)
-            logger.debug(f"url: {tor_url}")
+            logger.debug(f"url: {redact_url(tor_url)}")
             logger.debug(f"data: {make_unicode(str(torrent[:50]))}")
             return False, res
 
@@ -856,14 +882,14 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
             source = "QBITTORRENT"
             if torrent:
                 logger.debug(f"Sending {tor_title} data to qBittorrent")
-                status, res = qbittorrent.add_file(torrent, hashid, tor_title, provider_options)
-                # returns True or False
+                download_id, res = qbittorrent.add_file(torrent, hashid, tor_title, provider_options)
             else:
                 logger.debug(f"Sending {tor_title} url to qBittorrent")
-                status, res = qbittorrent.add_torrent(tor_url, hashid, provider_options)  # returns True or False
-            if status:
-                download_id = hashid
-                tor_title = qbittorrent.get_name(hashid)
+                download_id, res = qbittorrent.add_torrent(tor_url, hashid, provider_options)
+            # qBittorrent files v2 and hybrid torrents under their truncated v2
+            # hash, so the id it returns is not always the hash we calculated
+            if download_id:
+                tor_title = qbittorrent.get_name(download_id)
 
         if CONFIG.get_bool('TOR_DOWNLOADER_TRANSMISSION') and CONFIG['TRANSMISSION_HOST']:
             source = "TRANSMISSION"
@@ -1051,28 +1077,142 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
     return False, res
 
 
+def torrent_data_error(data):
+    """
+    Check that a provider response really is a torrent file before we do
+    anything with it. Providers hand back error pages, empty bodies and
+    interstitial html often enough that "couldn't hash it" is a misleading
+    thing to report.
+    Returns an empty string if the data is a torrent, else a short reason. The
+    reason is logged and kept in the history table, so it describes the shape
+    of the response and never quotes it: an error body can carry an api key.
+    """
+    if not data:
+        return "empty response"
+    if isinstance(data, str):
+        data = make_bytestr(data)
+    if not data.startswith(b'd'):
+        return f"not a bencoded dictionary ({len(data)} bytes)"
+    try:
+        decoded = bdecode(data)
+    except (BencodeDecodeError, ValueError, IndexError, KeyError, RecursionError) as e:
+        return f"invalid bencode, {type(e).__name__}"
+    if not isinstance(decoded, dict):
+        return f"bencoded {type(decoded).__name__}, not a torrent dictionary"
+
+    info = decoded.get('info')
+    if not isinstance(info, dict):
+        return "no info dictionary"
+    if 'name' not in info:
+        return "info dictionary has no name"
+    # v1 keeps its piece hashes in "pieces", v2 in a "file tree" (BEP 52), and
+    # a hybrid torrent carries both. Anything with neither is not a torrent.
+    if 'pieces' not in info and 'file tree' not in info:
+        return "info dictionary has no pieces or file tree"
+    return ''
+
+
+# Caches that name the torrent file after its infohash. The hash in one of
+# these urls is worth having as a fallback, but only for hosts we recognise:
+# any other 40 character string in a url is just a 40 character string.
+TORRENT_CACHE_HOSTS = ('btcache.me', 'itorrents.net', 'itorrents.org',
+                       'torcache.net', 'torrage.info')
+
+
+def hash_from_cache_url(url):
+    """
+    Return the v1 infohash a recognised torrent cache url is named after, or an
+    empty string. Only used when the cache serves us something that isn't a
+    torrent, so the downloader can be asked to fetch the url itself.
+    """
+    if not url:
+        return ''
+    url = make_unicode(url)
+    if not isinstance(url, str):
+        return ''
+    parts = urlsplit(url)
+    if parts.scheme not in ('http', 'https'):
+        return ''
+    if (parts.hostname or '').lower() not in TORRENT_CACHE_HOSTS:
+        return ''
+    name = parts.path.rsplit('/', 1)[-1]
+    if not name.lower().endswith('.torrent'):
+        return ''
+    candidate = name[:-len('.torrent')]
+    if not re.fullmatch(r'[0-9a-fA-F]{40}', candidate):
+        return ''
+    return candidate.lower()
+
+
+MAGNET_BTIH = re.compile(r"urn:btih:([0-9a-fA-F]{40}|[A-Za-z2-7]{32})")
+# A v2 magnet carries a multihash rather than a bare hash: 1220 is the prefix
+# for sha256 (function 0x12) of length 32 (0x20), then the hash itself.
+MAGNET_BTMH = re.compile(r"urn:btmh:1220([0-9a-fA-F]{64})")
+
+# Clients identify a v2 torrent by the first 40 hex characters of its sha256
+# infohash, so a v2 id is the same width as a v1 one.
+V2_ID_LENGTH = 40
+
+
+def torrent_info_hashes(data):
+    """
+    Return the (v1, v2) infohashes of torrent data, either of which may be ''.
+
+    A v1 torrent has only the sha1 hash, a v2 torrent (BEP 52) only the
+    sha256, and a hybrid torrent carries both over the same info dictionary.
+    """
+    info = bdecode(data)["info"]
+    # noinspection PyTypeChecker
+    encoded = bencode(info)
+    is_v2 = info.get('meta version') == 2
+    # a hybrid torrent is a v2 torrent that also keeps the v1 piece list
+    v1 = sha1(encoded).hexdigest() if not is_v2 or 'pieces' in info else ''
+    v2 = sha256(encoded).hexdigest() if is_v2 else ''
+    return v1, v2
+
+
 def calculate_torrent_hash(link, data=None):
     """
     Calculate the torrent hash from a magnet link or data. Returns empty string
     when it cannot create a torrent hash given the input data.
+
+    Prefers the v1 hash where a torrent has one, including hybrid torrents:
+    it is what most downloaders key on. Only a v2 only torrent, which has no
+    v1 hash at all, gets the truncated sha256 that clients use as its id.
     """
     logger = logging.getLogger(__name__)
-    try:
-        torrent_hash = re.findall(r"urn:btih:(\w{32,40})", link)[0]
+    link = make_unicode(link) if link else ''
+    magnet = MAGNET_BTIH.search(link)
+    if magnet:
+        torrent_hash = magnet.group(1)
         if len(torrent_hash) == 32:
-            torrent_hash = b16encode(b32decode(torrent_hash)).lower()
-    except (re.error, IndexError, TypeError):
-        if data:
-            try:
-                # noinspection PyUnresolvedReferences
-                info = bdecode(data)["info"]
-                # noinspection PyTypeChecker
-                torrent_hash = sha1(bencode(info)).hexdigest()
-            except Exception as e:
-                logger.error(f"Error calculating hash: {e}")
-                return ''
-        else:
-            logger.error("Cannot calculate torrent hash without magnet link or data")
-            return ''
+            # some indexers use the base32 form of the infohash
+            torrent_hash = make_unicode(b16encode(b32decode(torrent_hash.upper())))
+        torrent_hash = torrent_hash.lower()
+        logger.debug(f"Torrent Hash: {torrent_hash}")
+        return torrent_hash
+
+    magnet = MAGNET_BTMH.search(link)
+    if magnet:
+        torrent_hash = magnet.group(1).lower()[:V2_ID_LENGTH]
+        logger.debug(f"Torrent Hash (v2): {torrent_hash}")
+        return torrent_hash
+
+    if not data:
+        logger.error("Cannot calculate torrent hash without magnet link or data")
+        return ''
+
+    invalid = torrent_data_error(data)
+    if invalid:
+        logger.error(f"Provider returned invalid torrent data: {invalid}")
+        return ''
+
+    try:
+        v1, v2 = torrent_info_hashes(data)
+    except (BencodeDecodeError, KeyError, TypeError, ValueError, RecursionError) as e:
+        logger.error(f"Error calculating hash: {type(e).__name__} {e}")
+        return ''
+
+    torrent_hash = v1 or v2[:V2_ID_LENGTH]
     logger.debug(f"Torrent Hash: {torrent_hash}")
     return torrent_hash

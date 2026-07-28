@@ -688,3 +688,30 @@ class FormatterTest(LLTestCaseWithStartup):
         # Should restore to WEBSERVER (default)
 
         self.assertEqual(thread_name(), 'WEBSERVER')
+
+    def test_redact_url(self):
+        data = [
+            ("", ""),
+            (None, ""),
+            ("https://indexer.example/api?t=get&id=42",
+             "https://indexer.example/api?t=get&id=42"),
+            ("https://indexer.example/api?t=get&apikey=deadbeef&id=42",
+             "https://indexer.example/api?t=get&apikey=[redacted]&id=42"),
+            ("https://tracker.example/download/123/book.torrent?passkey=s3cr3t",
+             "https://tracker.example/download/123/book.torrent?passkey=[redacted]"),
+            ("https://tracker.example/get?TOKEN=s3cr3t&title=book",
+             "https://tracker.example/get?TOKEN=[redacted]&title=book"),
+            ("https://user:hunter2@tracker.example/get?id=1",
+             "https://[redacted]@tracker.example/get?id=1"),
+            ("https://tracker.example/get?monkeykey=notasecret",
+             "https://tracker.example/get?monkeykey=notasecret"),
+            # a private tracker's announce url arrives percent encoded inside a magnet
+            ("magnet:?xt=urn:btih:aaaa&tr=http%3A%2F%2Ftr.example%2Fannounce%3Fpasskey%3Ds3cr3t",
+             "magnet:?xt=urn:btih:aaaa&tr=http%3A%2F%2Ftr.example%2Fannounce%3Fpasskey%3D[redacted]"),
+            # and a downloader can hand back a bare fragment rather than a url
+            ("passkey=s3cr3t", "passkey=[redacted]"),
+            ("Unable to add torrent from http://tr.example/get?passkey=s3cr3t",
+             "Unable to add torrent from http://tr.example/get?passkey=[redacted]"),
+        ]
+        for url, expected in data:
+            self.assertEqual(formatter.redact_url(url), expected)
