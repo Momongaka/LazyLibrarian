@@ -3356,7 +3356,6 @@ class WebInterface:
         sort_key = get_alphanum_key_func(key)
         lst.sort(key=sort_key, reverse=reverse)
 
-
     @cherrypy.expose
     @require_auth()
     def add_book(self, bookid=None, authorid=None, library=None, source=None):
@@ -3423,7 +3422,6 @@ class WebInterface:
         if audio_status == 'Wanted':
             raise cherrypy.HTTPRedirect("audio")
         raise cherrypy.HTTPRedirect("authors")
-
 
     @cherrypy.expose
     @require_auth()
@@ -4537,7 +4535,7 @@ class WebInterface:
                         bookname = bookdata['BookName']
                         if authorid not in check_totals:
                             check_totals.append(authorid)
-                        if (action == "Wanted" and library == "eBook") or action in ["WantEbook", "WantBoth"]:
+                        if (action == "Wanted" and "eBook" in library) or action in ["WantEbook", "WantBoth"]:
                             if bookdata['Status'] in ["Open", "Have"]:
                                 logger.debug(f'eBook "{bookname}" is already marked Open')
                                 failed += 1
@@ -4546,7 +4544,7 @@ class WebInterface:
                                 logger.debug(f'Status set to "Wanted" for "{bookname}"')
                                 wantedbooks.append({"bookid": bookid})
                                 passed += 1
-                        if (action == "Wanted" and library == "AudioBook") or action in ["WantAudio", "WantBoth"]:
+                        if (action == "Wanted" and "AudioBook" in library) or action in ["WantAudio", "WantBoth"]:
                             if bookdata['AudioStatus'] in ["Open", "Have"]:
                                 logger.debug(f'AudioBook "{bookname}" is already marked Open')
                                 failed += 1
@@ -4555,23 +4553,23 @@ class WebInterface:
                                 logger.debug(f'AudioStatus set to "Wanted" for "{bookname}"')
                                 wantedaudio.append({"bookid": bookid})
                                 passed += 1
-                        if (action == "Ignored" and library == 'eBook') or action == "IgnoreBoth":
+                        if (action == "Ignored" and 'eBook' in library) or action == "IgnoreBoth":
                             db.upsert("books", {'Status': "Ignored", 'ScanResult': f'User {action}'},
                                       {'BookID': bookid})
                             logger.debug(f'Status set to "Ignored" for "{bookname}"')
                             passed += 1
-                        if (action == "Ignored" and library == 'AudioBook') or action == "IgnoreBoth":
+                        if (action == "Ignored" and 'AudioBook' in library) or action == "IgnoreBoth":
                             db.upsert("books", {'AudioStatus': "Ignored", 'ScanResult': f'User {action}'},
                                       {'BookID': bookid})
                             logger.debug(f'AudioStatus set to "Ignored" for "{bookname}"')
                             passed += 1
                         if action in ["Skipped", "Have"]:
-                            if library == 'eBook':
+                            if 'eBook' in library:
                                 db.upsert("books", {'Status': action, 'ScanResult': f'User {action}'},
                                           {'BookID': bookid})
                                 logger.debug(f'Status set to "{action}" for "{bookname}"')
                                 passed += 1
-                            if library == 'AudioBook':
+                            if 'AudioBook' in library:
                                 db.upsert("books", {'AudioStatus': action, 'ScanResult': f'User {action}'},
                                           {'BookID': bookid})
                                 logger.debug(f'AudioStatus set to "{action}" for "{bookname}"')
@@ -4580,7 +4578,10 @@ class WebInterface:
                         logger.warning(f"Unable to set status {action} for {bookid}")
                         failed += 1
                 elif action == "NoDelay":
-                    db.action("delete from failedsearch WHERE BookID=? AND Library=?", (bookid, library))
+                    if 'eBook' in library:
+                        db.action("delete from failedsearch WHERE BookID=? AND Library=?", (bookid, 'eBook'))
+                    if 'AudioBook' in library:
+                        db.action("delete from failedsearch WHERE BookID=? AND Library=?", (bookid, 'AudioBook'))
                     logger.debug(f'{library} delay set to zero for {bookid}')
                     passed += 1
                 elif action in ["Remove", "Delete"]:
@@ -4593,7 +4594,7 @@ class WebInterface:
                         if authorid not in check_totals:
                             check_totals.append(authorid)
                         if action == "Delete":
-                            if 'Audio' in library:
+                            if 'AudioBook' in library:
                                 bookfile = bookdata['AudioFile']
                                 if bookfile and path_isfile(bookfile):
                                     try:
@@ -4634,7 +4635,7 @@ class WebInterface:
                                           {"BookID": bookid})
                                 logger.debug(f'Status set to Ignored for "{bookname}"')
                                 passed += 1
-                            elif 'Audio' in library:
+                            elif 'AudioBook' in library:
                                 db.upsert("books", {"AudioStatus": "Ignored", "ScanResult": "User deleted"},
                                           {"BookID": bookid})
                                 logger.debug(f'AudioStatus set to Ignored for "{bookname}"')
@@ -4670,13 +4671,13 @@ class WebInterface:
         if redirect == "author":
             if 'eBook' in library:
                 redirect = f"author_page?authorid={authorid}&library=eBook"
-            if 'Audio' in library:
+            if 'AudioBook' in library:
                 redirect = f"author_page?authorid={authorid}&library=AudioBook"
         elif redirect in ["books", "audio"]:
             redirect = redirect
         elif redirect == "members":
             redirect = f"series_members?seriesid={seriesid}&ignored=False"
-        elif 'Audio' in library:
+        elif 'AudioBook' in library:
             redirect = "manage?library=AudioBook"
         else:
             redirect = "manage?library=eBook"
@@ -7708,12 +7709,15 @@ class WebInterface:
         # ol_api is true/false, not an api key
         if kwargs['status']:
             CONFIG.set_bool('OL_API', True)
+            CONFIG.set_str('BOOK_API', 'OpenLibrary')
         else:
             CONFIG.set_bool('OL_API', False)
         if (not CONFIG.get_bool('HC_API') and not bool(CONFIG.get_str('GR_API'))
-                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')):
+                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')
+                and not CONFIG.get_bool('RAN_API')):
             # ensure at least one option is available
             CONFIG.set_bool('OL_API', True)
+            CONFIG.set_str('BOOK_API', 'OpenLibrary')
         return kwargs['status']
 
     @cherrypy.expose
@@ -7722,12 +7726,32 @@ class WebInterface:
         # dnb_api is true/false, not an api key
         if kwargs['status']:
             CONFIG.set_bool('DNB_API', True)
+            CONFIG.set_str('BOOK_API', 'DNB')
         else:
             CONFIG.set_bool('DNB_API', False)
         if (not CONFIG.get_bool('HC_API') and not bool(CONFIG.get_str('GR_API'))
-                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')):
+                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')
+                and not CONFIG.get_bool('RAN_API')):
             # ensure at least one option is available
             CONFIG.set_bool('OL_API', True)
+            CONFIG.set_str('BOOK_API', 'OpenLibrary')
+        return kwargs['status']
+
+    @cherrypy.expose
+    @require_auth()
+    def ran_api_changed(self, **kwargs):
+        # ran_api is true/false, not an api key
+        if kwargs['status']:
+            CONFIG.set_bool('RAN_API', True)
+            CONFIG.set_str('BOOK_API', 'RanobeDB')
+        else:
+            CONFIG.set_bool('RAN_API', False)
+        if (not CONFIG.get_bool('HC_API') and not bool(CONFIG.get_str('GR_API'))
+                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')
+                and not CONFIG.get_bool('RAN_API')):
+            # ensure at least one option is available
+            CONFIG.set_bool('OL_API', True)
+            CONFIG.set_str('BOOK_API', 'OpenLibrary')
         return kwargs['status']
 
     @cherrypy.expose
@@ -7736,12 +7760,15 @@ class WebInterface:
         # hc_api is true/false, not an api key
         if kwargs['status']:
             CONFIG.set_bool('HC_API', True)
+            CONFIG.set_str('BOOK_API', 'HardCover')
         else:
             CONFIG.set_bool('HC_API', False)
         if (not CONFIG.get_bool('HC_API') and not bool(CONFIG.get_str('GR_API'))
-                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')):
+                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')
+                and not CONFIG.get_bool('RAN_API')):
             # ensure at least one option is available
             CONFIG.set_bool('OL_API', True)
+            CONFIG.set_str('BOOK_API', 'OpenLibrary')
         return kwargs['status']
 
     @cherrypy.expose
@@ -7749,10 +7776,14 @@ class WebInterface:
     def gr_api_changed(self, **kwargs):
         self.validate_param("goodreads api", kwargs['gr_api'], ['<', '>', '='], 404)
         CONFIG.set_str('GR_API', kwargs['gr_api'])
+        if kwargs['gr_api']:
+            CONFIG.set_str('BOOK_API', 'GoodReads')
         if (not CONFIG.get_bool('HC_API') and not bool(CONFIG.get_str('GR_API'))
-                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')):
+                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')
+                and not CONFIG.get_bool('RAN_API')):
             # ensure at least one option is available
             CONFIG.set_bool('OL_API', True)
+            CONFIG.set_str('BOOK_API', 'OpenLibrary')
         return kwargs['gr_api']
 
     @cherrypy.expose
@@ -7760,11 +7791,21 @@ class WebInterface:
     def gb_api_changed(self, **kwargs):
         self.validate_param("googlebooks api", kwargs['gb_api'], ['<', '>', '='], 404)
         CONFIG.set_str('GB_API', kwargs['gb_api'])
+        if kwargs['gb_api']:
+            CONFIG.set_str('BOOK_API', 'GoogleBooks')
         if (not CONFIG.get_bool('HC_API') and not bool(CONFIG.get_str('GR_API'))
-                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')):
+                and not bool(CONFIG.get_str('GB_API')) and not CONFIG.get_bool('DNB_API')
+                and not CONFIG.get_bool('RAN_API')):
             # ensure at least one option is available
             CONFIG.set_bool('OL_API', True)
+            CONFIG.set_str('BOOK_API', 'OpenLibrary')
         return kwargs['gb_api']
+
+    @cherrypy.expose
+    @require_auth()
+    def book_api_changed(self, **kwargs):
+        CONFIG.set_str('BOOK_API', kwargs['book_api'])
+        return kwargs['book_api']
 
     @cherrypy.expose
     @require_auth()
