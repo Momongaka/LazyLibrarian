@@ -156,13 +156,22 @@ def get_torrent_files(torrentid):  # uses hashid
     retries = 3
     while retries:
         response, _ = torrent_action(method, arguments)  # type: dict
-        if response:
-            if len(response['arguments']['torrents'][0]['files']):
-                dlcommslogger.debug(f"get_torrent_files: {str(response['arguments']['torrents'][0]['files'])}")
-                return response['arguments']['torrents'][0]['files']
-        else:
+        if not response:
             logger.debug('get_torrent_files: No response from transmission')
             return []
+
+        torrents = response['arguments']['torrents']
+        if not torrents:
+            # transmission answers with an empty list for an id it doesn't
+            # hold, eg the torrent was removed while we were processing it
+            logger.debug(f'get_torrent_files: {torrentid} not found at transmission')
+            return []
+
+        # an empty file list is worth another look: the metadata for a magnet
+        # may not have arrived yet
+        if len(torrents[0]['files']):
+            dlcommslogger.debug(f"get_torrent_files: {str(torrents[0]['files'])}")
+            return torrents[0]['files']
 
         retries -= 1
         if retries:

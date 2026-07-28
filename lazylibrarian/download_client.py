@@ -64,6 +64,27 @@ from lazylibrarian.formatter import check_int, get_list, unaccented
 from lazylibrarian.processcontrol import get_info_on_caller
 from lazylibrarian.telemetry import TELEMETRY
 
+# Files that ride along with a release: notes, adverts, checksums, artwork.
+# Their names describe the release, not its format, so an ebook torrent that
+# ships "free audiobook version.txt" is still an ebook torrent.
+ANCILLARY_EXTENSIONS = ('diz', 'gif', 'jpeg', 'jpg', 'log', 'md5', 'nfo',
+                        'png', 'sfv', 'srr', 'txt', 'url')
+
+
+def is_ancillary_file(fname, wanted_types):
+    """Return True if a file is packaging rather than content.
+
+    A file we would actually process is never ancillary, however it is named,
+    so a configuration that treats txt as a book type still gets txt checked.
+    """
+    basename = os.path.basename(fname.replace("\\", "/")).lower()
+    extn = os.path.splitext(basename)[1].lstrip(".")
+    if extn and extn in get_list(wanted_types):
+        return False
+    if extn:
+        return extn in ANCILLARY_EXTENSIONS
+    return basename.startswith("readme")
+
 
 def check_contents(source, downloadid, booktype, title):
     """Check contents list of a download against various reject criteria
@@ -135,7 +156,7 @@ def check_contents(source, downloadid, booktype, title):
                 logger.warning(f"{rejected}. Rejecting download")
                 break
 
-            if not rejected and banlist:
+            if not rejected and banlist and not is_ancillary_file(fname, filetypes):
                 wordlist = get_list(
                     fname.lower().replace(os.sep, " ").replace(".", " ")
                 )
