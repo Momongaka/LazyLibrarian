@@ -666,6 +666,9 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
     download_id = False
     source = ''
     torrent = ''
+    # a torrent the client already held before we asked for it is not ours to
+    # delete, however this request turns out
+    adopted = False
 
     full_url = tor_url  # keep the url as stored in "wanted" table
     tor_url = make_unicode(tor_url)
@@ -882,10 +885,11 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
             source = "QBITTORRENT"
             if torrent:
                 logger.debug(f"Sending {tor_title} data to qBittorrent")
-                download_id, res = qbittorrent.add_file(torrent, hashid, tor_title, provider_options)
+                download_id, res, adopted = qbittorrent.add_file(torrent, hashid, tor_title,
+                                                                 provider_options)
             else:
                 logger.debug(f"Sending {tor_title} url to qBittorrent")
-                download_id, res = qbittorrent.add_torrent(tor_url, hashid, provider_options)
+                download_id, res, adopted = qbittorrent.add_torrent(tor_url, hashid, provider_options)
             # qBittorrent files v2 and hybrid torrents under their truncated v2
             # hash, so the id it returns is not always the hash we calculated
             if download_id:
@@ -902,17 +906,18 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
             if torrent:
                 logger.debug(f"Sending {tor_title} data to Transmission:{directory}")
                 # transmission needs b64encoded metainfo to be unicode, not bytes
-                download_id, res = transmission.add_torrent(None, directory=directory,
-                                                            metainfo=make_unicode(b64encode(torrent)),
-                                                            provider_options=provider_options)
+                download_id, res, adopted = transmission.add_torrent(
+                    None, directory=directory, metainfo=make_unicode(b64encode(torrent)),
+                    provider_options=provider_options)
             else:
                 logger.debug(f"Sending {tor_title} url to Transmission:{directory}")
-                download_id, res = transmission.add_torrent(tor_url, directory=directory,
-                                                            provider_options=provider_options)  # returns id or False
+                download_id, res, adopted = transmission.add_torrent(
+                    tor_url, directory=directory,
+                    provider_options=provider_options)  # returns id or False
             if download_id:
                 # transmission returns its own int, but we store hashid instead
                 download_id = hashid
-                if label:
+                if label and not adopted:
                     transmission.set_label(download_id, label)
                 tor_title = transmission.get_torrent_name(download_id)
                 tor_folder = transmission.get_torrent_folder(download_id)
@@ -928,9 +933,13 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
                         in_subdir = False
                         break
                 if filenames and not in_subdir:
-                    directory = os.path.join(tor_folder, tor_title)
-                    logger.debug(f"{tor_title}: Moving torrent to {directory}")
-                    transmission.move_torrent(download_id, directory)
+                    if adopted:
+                        # someone else is seeding this from where it already is
+                        logger.debug(f"{tor_title}: existing torrent, leaving it in {tor_folder}")
+                    else:
+                        directory = os.path.join(tor_folder, tor_title)
+                        logger.debug(f"{tor_title}: Moving torrent to {directory}")
+                        transmission.move_torrent(download_id, directory)
 
         if CONFIG.get_bool('TOR_DOWNLOADER_SYNOLOGY') and CONFIG.get_bool('USE_SYNOLOGY') and \
                 CONFIG['SYNOLOGY_HOST']:
@@ -1019,6 +1028,9 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
 
     if download_id:
         db = database.DBConnection()
+        # record how we got the torrent before anything can reject it, so that
+        # delete_task knows whose data it would be deleting
+        origin = 'adopted' if adopted else 'new'
         try:
             if tor_title:
                 if make_unicode(download_id).upper() in make_unicode(tor_title).upper():
@@ -1050,8 +1062,12 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
                     if not rejected:
                         rejected = check_contents(source, download_id, library, tor_title)
                     if rejected:
-                        db.action("UPDATE wanted SET status='Failed',DLResult=? WHERE NZBurl=?",
-                                  (rejected, full_url))
+                        # Source and DownloadID go in even though this failed:
+                        # delete_task looks the row up by them to find out
+                        # whether the torrent was ours to delete
+                        db.action("UPDATE wanted SET status='Failed',DLResult=?,Source=?,DownloadID=?,"
+                                  "Origin=? WHERE NZBurl=?",
+                                  (rejected, source, download_id, origin, full_url))
                         if CONFIG.get_bool('DEL_FAILED'):
                             delete_task(source, download_id, True)
                         return False, rejected
@@ -1062,8 +1078,8 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
                 db.action("UPDATE books SET status='Snatched' WHERE BookID=?", (bookid,))
             elif library == 'AudioBook':
                 db.action("UPDATE books SET audiostatus='Snatched' WHERE BookID=?", (bookid,))
-            db.action("UPDATE wanted SET status='Snatched', Source=?, DownloadID=? WHERE NZBurl=?",
-                      (source, download_id, full_url))
+            db.action("UPDATE wanted SET status='Snatched', Source=?, DownloadID=?, Origin=? WHERE NZBurl=?",
+                      (source, download_id, origin, full_url))
             record_usage_data(f'Download/TOR/{source}/Success')
             db.close()
             return True, ''

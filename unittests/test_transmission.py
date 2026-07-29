@@ -62,5 +62,49 @@ class GetTorrentFilesTest(LLTestCase):
         self.assertEqual(self.action.call_count, 3)
 
 
+class AddTorrentTest(LLTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.set_loglevel(50)
+        self.action = mock.patch.object(transmission, 'torrent_action').start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_a_new_torrent_is_ours(self):
+        self.action.return_value = ({'result': 'success',
+                                     'arguments': {'torrent-added': {'id': 7}}}, '')
+
+        torrentid, res, adopted = transmission.add_torrent('http://x/t.torrent',
+                                                           provider_options={})
+
+        self.assertEqual(torrentid, 7)
+        self.assertEqual(res, '')
+        self.assertFalse(adopted)
+
+    def test_a_duplicate_is_still_usable_but_not_ours(self):
+        # Transmission resolves the duplicate itself and hands back the torrent
+        # it already holds, which someone else added
+        self.action.return_value = ({'result': 'success',
+                                     'arguments': {'torrent-duplicate': {'id': 7}}}, '')
+
+        torrentid, res, adopted = transmission.add_torrent('http://x/t.torrent',
+                                                           provider_options={})
+
+        self.assertEqual(torrentid, 7)
+        self.assertEqual(res, '')
+        self.assertTrue(adopted)
+
+    def test_a_failure_is_not_adopted(self):
+        self.action.return_value = ({'result': 'invalid or corrupt torrent file',
+                                     'arguments': {}}, '')
+
+        torrentid, res, adopted = transmission.add_torrent('http://x/t.torrent',
+                                                           provider_options={})
+
+        self.assertFalse(torrentid)
+        self.assertIn('invalid', res)
+        self.assertFalse(adopted)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -41,6 +41,7 @@ Key Functions:
 
 import logging
 import os
+import re
 import time
 import traceback
 
@@ -64,26 +65,19 @@ from lazylibrarian.formatter import check_int, get_list, unaccented
 from lazylibrarian.processcontrol import get_info_on_caller
 from lazylibrarian.telemetry import TELEMETRY
 
-# Files that ride along with a release: notes, adverts, checksums, artwork.
-# Their names describe the release, not its format, so an ebook torrent that
-# ships "free audiobook version.txt" is still an ebook torrent.
-ANCILLARY_EXTENSIONS = ('diz', 'gif', 'jpeg', 'jpg', 'log', 'md5', 'nfo',
-                        'png', 'sfv', 'srr', 'txt', 'url')
+# A release that ships its content inside an archive says nothing about the
+# format until it is unpacked, so we cannot judge it from the file list.
+ARCHIVE_EXTENSIONS = ('7z', 'bz2', 'gz', 'rar', 'tar', 'tgz', 'xz', 'zip')
+# multipart archives: name.r00, name.z01, name.7z.001
+ARCHIVE_PART_RE = re.compile(r'^(r\d{2}|z\d{2}|\d{3})$')
 
 
-def is_ancillary_file(fname, wanted_types):
-    """Return True if a file is packaging rather than content.
-
-    A file we would actually process is never ancillary, however it is named,
-    so a configuration that treats txt as a book type still gets txt checked.
-    """
-    basename = os.path.basename(fname.replace("\\", "/")).lower()
-    extn = os.path.splitext(basename)[1].lstrip(".")
-    if extn and extn in get_list(wanted_types):
+def is_archive_file(fname):
+    """Return True if a file needs unpacking before we know what is in it."""
+    extn = os.path.splitext(fname)[1].lstrip(".").lower()
+    if not extn:
         return False
-    if extn:
-        return extn in ANCILLARY_EXTENSIONS
-    return basename.startswith("readme")
+    return extn in ARCHIVE_EXTENSIONS or bool(ARCHIVE_PART_RE.match(extn))
 
 
 def check_contents(source, downloadid, booktype, title):
@@ -123,6 +117,9 @@ def check_contents(source, downloadid, booktype, title):
     else:
         banlist = []
 
+    wanted_types = get_list(filetypes)
+    unknown_contents = False  # an archive we cannot see inside
+    seen_extensions = []
     downloadfiles = get_download_files(source, downloadid)
 
     # Downloaders return varying amounts of info using varying names
@@ -156,7 +153,22 @@ def check_contents(source, downloadid, booktype, title):
                 logger.warning(f"{rejected}. Rejecting download")
                 break
 
-            if not rejected and banlist and not is_ancillary_file(fname, filetypes):
+            if extn and extn not in seen_extensions:
+                seen_extensions.append(extn)
+            is_wanted = extn in wanted_types
+            is_archive = not is_wanted and is_archive_file(fname)
+            if is_wanted:
+                matched = True
+            elif is_archive:
+                unknown_contents = True
+
+            # Reject words describe a release, so only the files that make it
+            # the release we asked for get a say. A note or a cover that
+            # mentions the audiobook edition doesn't make an epub an audiobook,
+            # and an m4b sitting alongside an epub doesn't stop it being one.
+            # An archive is named after the release and hides what is inside,
+            # so it gets checked too.
+            if not rejected and banlist and (is_wanted or is_archive):
                 wordlist = get_list(
                     fname.lower().replace(os.sep, " ").replace(".", " ")
                 )
@@ -170,14 +182,14 @@ def check_contents(source, downloadid, booktype, title):
             # e.g. don't reject cos jpg is smaller than min file size for a book
             # need to check if we have a size in K M G or just a number. If K M G could be a float.
             unit = ""
-            if not rejected and filetypes and extn in filetypes and fsize:
+            if not rejected and is_wanted and fsize:
                 try:
                     if "G" in str(fsize):
                         fsize = int(float(fsize.split("G")[0].strip()) * 1073741824)
                     elif "M" in str(fsize):
                         fsize = int(float(fsize.split("M")[0].strip()) * 1048576)
                     elif "K" in str(fsize):
-                        fsize = int(float(fsize.split("K")[0].strip() * 1024))
+                        fsize = int(float(fsize.split("K")[0].strip()) * 1024)
                     fsize = round(
                         check_int(fsize, 0) / 1048576.0, 2
                     )  # float to 2dp in Mb
@@ -195,7 +207,16 @@ def check_contents(source, downloadid, booktype, title):
                         break
                 if not rejected:
                     logger.debug(f"{fname}: ({fsize}{unit}) is wanted")
-                    matched = True
+
+        if not rejected and not matched and wanted_types and not unknown_contents:
+            # the downloader gave us a full file list and nothing in it is a
+            # file we could process for this library. Catching it here keeps a
+            # wrong format release out of the library instead of leaving it to
+            # fail at postprocessing time.
+            rejected = f"{title} has no {booktype} files"
+            if seen_extensions:
+                rejected = f"{rejected} ({', '.join(seen_extensions[:5])})"
+            logger.warning(f"{rejected}. Rejecting download")
     if matched and not rejected:
         logger.debug(f"{title} accepted")
     else:
@@ -734,8 +755,39 @@ def get_download_progress(source, downloadid):
     return progress, finished
 
 
+def was_adopted(source, download_id):
+    """Return True if the client already held this download before we asked.
+
+    A torrent recognised by infohash was added by someone else, so both the
+    torrent and its data belong to them whatever we decide about our own
+    request. Anything we don't have a record for counts as ours, which is what
+    entries from before this was recorded are.
+    """
+    if not download_id:
+        return False
+    db = database.DBConnection()
+    try:
+        # one torrent can serve more than one request, so any request that had
+        # to take on an existing torrent settles it for all of them
+        entries = db.select(
+            "SELECT Origin from wanted WHERE DownloadID=? and Source=?",
+            (download_id, source),
+        )
+    finally:
+        db.close()
+    return any(entry["Origin"] == "adopted" for entry in entries)
+
+
 def delete_task(source, download_id, remove_data):
     logger = logging.getLogger(__name__)
+    if was_adopted(source, download_id):
+        # Removing the torrent would stop someone else's seed, and removing the
+        # data would take files we never downloaded. Our own request has already
+        # been marked failed or processed by the caller.
+        logger.info(
+            f"Not deleting {download_id} from {source}: it was already there before we asked for it"
+        )
+        return True
     try:
         if source == "BLACKHOLE":
             logger.warning(

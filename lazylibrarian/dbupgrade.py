@@ -124,8 +124,9 @@ from lazylibrarian.scheduling import SchedulerCommand, restart_jobs
 # 87 add hc_token to users table
 # 88 add bookauthors table
 # 89 add dnb_id to book table
+# 90 add Origin to wanted table
 
-db_current_version = 89
+db_current_version = 90
 
 
 def upgrade_needed():
@@ -1511,6 +1512,13 @@ def update_schema(db, upgradelog):
         lazylibrarian.UPDATE_MSG = 'Adding dnb_id column to books table'
         upgradelog.write(f"{time.ctime()} v89: {lazylibrarian.UPDATE_MSG}\n")
         db.action('ALTER TABLE books ADD COLUMN dnb_id TEXT')
+
+    if not has_column(db, "wanted", "Origin"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding Origin column to wanted table'
+        upgradelog.write(f"{time.ctime()} v90: {lazylibrarian.UPDATE_MSG}\n")
+        # 'new' or 'adopted', empty for anything snatched before we recorded it
+        db.action('ALTER TABLE wanted ADD COLUMN Origin TEXT')
 
     if changes:
         upgradelog.write(f"{time.ctime()} Changed: {changes}\n")
