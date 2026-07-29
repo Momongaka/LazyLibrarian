@@ -39,6 +39,13 @@ def move_torrent(torrentid, directory):
 
 
 def add_torrent(link, directory=None, metainfo=None, provider_options=None):
+    """ Send a url, magnet or metainfo to Transmission.
+
+    :return: (torrent id, '', adopted) on success, or (False, message, False).
+             Transmission answers torrent-duplicate when it already holds the
+             torrent, and adopted is True for that, as the torrent and its data
+             belong to whoever added it first.
+    """
     logger = logging.getLogger(__name__)
     method = 'torrent-add'
     if metainfo:
@@ -55,26 +62,31 @@ def add_torrent(link, directory=None, metainfo=None, provider_options=None):
     response, res = torrent_action(method, arguments)  # type: dict
 
     if not response:
-        return False, res
+        return False, res, False
 
     if response['result'] == 'success':
+        adopted = False
         if 'torrent-added' in response['arguments']:
             retid = response['arguments']['torrent-added']['id']
         elif 'torrent-duplicate' in response['arguments']:
             retid = response['arguments']['torrent-duplicate']['id']
+            adopted = True
         else:
             retid = False
         if retid:
-            logger.debug("Torrent sent to Transmission successfully")
+            if adopted:
+                logger.info("Torrent already exists in Transmission; using the existing torrent")
+            else:
+                logger.debug("Torrent sent to Transmission successfully")
 
             if "seed_ratio" in provider_options:
                 set_seed_ratio(retid, provider_options["seed_ratio"])
 
-            return retid, ''
+            return retid, '', adopted
 
     res = f"Transmission returned {response['result']}"
     logger.debug(res)
-    return False, res
+    return False, res, False
 
 
 def get_torrent_name(torrentid):  # uses hashid

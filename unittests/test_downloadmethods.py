@@ -284,7 +284,7 @@ class TorDlMethodInvalidDataTest(LLTestCase):
         self.qbittorrent.add_file.assert_not_called()
 
     def test_valid_torrent_data_still_reaches_the_downloader(self):
-        self.qbittorrent.add_file.return_value = (False, 'downloader said no')
+        self.qbittorrent.add_file.return_value = (False, 'downloader said no', False)
         with self.fetch(TORRENT_DATA, content_type='application/x-bittorrent'):
             downloadmethods.tor_dl_method(
                 bookid='1', tor_title='a book', tor_url='https://provider.example/get/1.torrent')
@@ -296,7 +296,7 @@ class TorDlMethodInvalidDataTest(LLTestCase):
         # the cache serves us an error page but names its files after the
         # infohash, so the downloader can be asked to fetch it instead
         url = "https://itorrents.net/torrent/FE5ABFBAD81412F477A3C0E7D979415EAC27C545.torrent"
-        self.qbittorrent.add_torrent.return_value = (False, 'downloader could not fetch it either')
+        self.qbittorrent.add_torrent.return_value = (False, 'downloader could not fetch it either', False)
         with self.fetch(HTML_RESPONSE):
             status, res = downloadmethods.tor_dl_method(
                 bookid='1', tor_title='a book', tor_url=url)
@@ -318,6 +318,66 @@ class TorDlMethodInvalidDataTest(LLTestCase):
 
         self.assertFalse(status)
         self.assertIn('Provider returned invalid torrent data', res)
+
+
+class TorDlMethodRejectionTest(LLTestCase):
+    """ A torrent we had to take on from the client has to be recorded as such
+    before anything is allowed to reject it. """
+
+    def setUp(self):
+        super().setUp()
+        self.set_loglevel(50)
+        self.qbittorrent = mock.patch.object(downloadmethods, 'qbittorrent').start()
+        self.qbittorrent.get_name.return_value = 'The Book'
+        mock.patch.object(downloadmethods, 'record_usage_data').start()
+        mock.patch.object(downloadmethods, 'CONFIG', FakeConfig(DEL_FAILED=True)).start()
+        self.check_contents = mock.patch.object(downloadmethods, 'check_contents',
+                                                return_value='The Book has no ebook files').start()
+        self.delete_task = mock.patch.object(downloadmethods, 'delete_task').start()
+        self.db = mock.Mock()
+        mock.patch.object(downloadmethods.database, 'DBConnection', return_value=self.db).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def fetch(self, content):
+        response = mock.Mock()
+        response.status_code = 200
+        response.content = content
+        response.headers = {'Content-Type': 'application/x-bittorrent'}
+        return mock.patch.object(downloadmethods.requests, 'get', return_value=response)
+
+    def snatch(self):
+        with self.fetch(TORRENT_DATA):
+            return downloadmethods.tor_dl_method(
+                bookid='1', tor_title='The Book',
+                tor_url='https://provider.example/get/1.torrent')
+
+    def failed_row_update(self):
+        for call in self.db.action.call_args_list:
+            if "status='Failed'" in call.args[0]:
+                return call.args[1]
+        return None
+
+    def test_a_rejected_adopted_torrent_is_recorded_as_adopted(self):
+        # delete_task looks the row up by DownloadID and Source, so a failed
+        # row that carries neither reads as a torrent we added ourselves and
+        # its data gets deleted
+        self.qbittorrent.add_file.return_value = (TORRENT_HASH, '', True)
+
+        status, res = self.snatch()
+
+        self.assertFalse(status)
+        args = self.failed_row_update()
+        self.assertIn(TORRENT_HASH, args)
+        self.assertIn('QBITTORRENT', args)
+        self.assertIn('adopted', args)
+        self.delete_task.assert_called_once()
+
+    def test_a_rejected_new_torrent_is_recorded_as_ours(self):
+        self.qbittorrent.add_file.return_value = (TORRENT_HASH, '', False)
+
+        self.snatch()
+
+        self.assertIn('new', self.failed_row_update())
 
 
 if __name__ == '__main__':

@@ -49,7 +49,7 @@ class DatabaseTest(LLTestCaseWithConfigandDIRS):
     def test_version_and_integrity(self):
         db = DBConnection()
         result = db.match('PRAGMA user_version')
-        self.assertEqual(result[0], 89, 'Unit tests developed for v89; please upgrade')
+        self.assertEqual(result[0], 90, 'Unit tests developed for v90; please upgrade')
         check = db.match('PRAGMA integrity_check')
         self.assertEqual('ok', check[0], 'Database integrity check failed')
         db.close()

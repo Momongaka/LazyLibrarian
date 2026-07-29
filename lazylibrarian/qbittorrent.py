@@ -385,7 +385,8 @@ def wait_for_torrent(qbclient, dlcommslogger, hashid, result, label):
                    tell us which id it gave the torrent
     :param result: the response already returned by download_from_link/file
     :param label: 'add_torrent' or 'add_file', used in the failure message
-    :return: (torrent id, '') once it appears, or (False, message)
+    :return: (torrent id, '', False) once it appears, or (False, message, False).
+             The third value says the torrent was not already in qBittorrent.
     """
     state, added_ids = classify_add_response(result)
     dlcommslogger.debug(f"torrents/add response: {result} (state={state}, added_ids={added_ids})")
@@ -393,7 +394,7 @@ def wait_for_torrent(qbclient, dlcommslogger, hashid, result, label):
     if state == 'rejected':
         res = f"qBittorrent rejected the torrent: {result}"
         dlcommslogger.error(res)
-        return False, res
+        return False, res, False
     if isinstance(result, dict) and result.get('failure_count'):
         # Only reachable when success_count or pending_count is also set, ie a
         # partial failure on a multi-url add. We only ever submit one url, so
@@ -420,15 +421,15 @@ def wait_for_torrent(qbclient, dlcommslogger, hashid, result, label):
                 # Not indexed yet, e.g. qBittorrent is still fetching a pending url
                 continue
             dlcommslogger.error(f" Failed {label}: {e}")
-            return False, str(e)
+            return False, str(e), False
         except Exception as e:
             dlcommslogger.error(f" Failed {label}: {e}")
-            return False, str(e)
+            return False, str(e), False
         if torrent:
             pause_torrent(qbclient, dlcommslogger, hashid)
             if count > 1:
                 dlcommslogger.debug(f"hashid found in torrent list after {count} seconds")
-            return hashid, ''
+            return hashid, '', False
 
     # One last look at the whole list before giving up: a torrent fetched from
     # a url can turn out to be v2 or hybrid, and then the id qBittorrent filed
@@ -437,16 +438,16 @@ def wait_for_torrent(qbclient, dlcommslogger, hashid, result, label):
         torrent = find_torrent(qbclient, hashid, full_scan=True)
     except Exception as e:
         dlcommslogger.error(f" Failed {label}: {e}")
-        return False, str(e)
+        return False, str(e), False
     if torrent:
         found = torrent_id(torrent, hashid)
         dlcommslogger.debug(f"Found {hashid} in the torrent list under id {found}")
         pause_torrent(qbclient, dlcommslogger, found)
-        return found, ''
+        return found, '', False
 
     res = f"hashid not found in torrent list, {label} failed"
     dlcommslogger.debug(res)
-    return False, res
+    return False, res, False
 
 
 def handle_add_http_error(qbclient, dlcommslogger, err, hashid, label):
@@ -458,14 +459,17 @@ def handle_add_http_error(qbclient, dlcommslogger, err, hashid, label):
     existing torrent is downloading, seeding or paused. It's only a success if
     the exact infohash we wanted is really there, so ask rather than assume.
 
-    :return: (torrent id, '') for a duplicate we can use, else (False, message)
+    :return: (torrent id, '', True) for a duplicate we can use, else
+             (False, message, False). The third value marks a torrent that was
+             already in qBittorrent before we asked for it, which makes it
+             someone else's to delete.
     """
     logger = logging.getLogger(__name__)
     response = getattr(err, 'response', None)
     status_code = getattr(response, 'status_code', None)
     if status_code != QBIT_DUPLICATE_STATUS:
         dlcommslogger.error(f"Failed {label}: {err}")
-        return False, str(err)
+        return False, str(err), False
 
     reason = getattr(response, 'text', '')
     if not isinstance(reason, str):
@@ -477,14 +481,14 @@ def handle_add_http_error(qbclient, dlcommslogger, err, hashid, label):
     if not valid_infohash(hashid):
         res = f"qBittorrent refused {label} with {status_code} and [{hashid}] is not a usable infohash"
         logger.error(res)
-        return False, res
+        return False, res, False
 
     try:
         torrent = find_torrent(qbclient, hashid, full_scan=True)
     except Exception as e:
         res = f"qBittorrent returned {status_code} for {label}, and the hash lookup failed: {e}"
         logger.error(res)
-        return False, res
+        return False, res, False
 
     if torrent:
         found = torrent_id(torrent, hashid)
@@ -497,20 +501,21 @@ def handle_add_http_error(qbclient, dlcommslogger, err, hashid, label):
                         f"not [{CONFIG['QBITTORRENT_LABEL']}]")
         dlcommslogger.debug(f"Existing torrent: name=[{torrent.get('name')}] state={torrent.get('state')} "
                             f"category=[{category}] progress={torrent.get('progress')}")
-        return found, ''
+        return found, '', True
 
     res = f"qBittorrent refused {label} with {status_code} and has no torrent with hash {hashid}"
     if reason:
         res = f"{res}: {reason}"
     logger.error(res)
-    return False, res
+    return False, res, False
 
 
 def add_file(data, hashid, title, provider_options):
     """ Send torrent data to qBittorrent.
 
-    :return: (torrent id, '') on success, or (False, message). The id is
-             qBittorrent's own, which is not always the hash we calculated.
+    :return: (torrent id, '', adopted) on success, or (False, message, False).
+             The id is qBittorrent's own, which is not always the hash we
+             calculated, and adopted is True when the torrent was already there.
     """
     dlcommslogger = logging.getLogger('special.dlcomms')
 
@@ -518,7 +523,7 @@ def add_file(data, hashid, title, provider_options):
     hashid = hashid.lower()
     qbclient = get_client()
     if not qbclient:
-        return False, "Failed to login to qbittorrent"
+        return False, "Failed to login to qbittorrent", False
 
     kwargs = get_args(provider_options)
     dlcommslogger.debug(f'{kwargs}')
@@ -528,7 +533,7 @@ def add_file(data, hashid, title, provider_options):
         return handle_add_http_error(qbclient, dlcommslogger, e, hashid, 'add_file')
     except Exception as e:
         dlcommslogger.error(f"Failed to download_from_file: {e}")
-        return False, str(e)
+        return False, str(e), False
 
     return wait_for_torrent(qbclient, dlcommslogger, hashid, result, 'add_file')
 
@@ -536,8 +541,9 @@ def add_file(data, hashid, title, provider_options):
 def add_torrent(link, hashid, provider_options):
     """ Send a url or magnet to qBittorrent.
 
-    :return: (torrent id, '') on success, or (False, message). The id is
-             qBittorrent's own, which is not always the hash we calculated.
+    :return: (torrent id, '', adopted) on success, or (False, message, False).
+             The id is qBittorrent's own, which is not always the hash we
+             calculated, and adopted is True when the torrent was already there.
     """
     dlcommslogger = logging.getLogger('special.dlcomms')
 
@@ -545,7 +551,7 @@ def add_torrent(link, hashid, provider_options):
 
     qbclient = get_client()
     if not qbclient:
-        return False, "Failed to login to qbittorrent"
+        return False, "Failed to login to qbittorrent", False
 
     hashid = hashid.lower()
     kwargs = get_args(provider_options)
@@ -556,7 +562,7 @@ def add_torrent(link, hashid, provider_options):
         return handle_add_http_error(qbclient, dlcommslogger, e, hashid, 'add_torrent')
     except Exception as e:
         dlcommslogger.error(f" Failed to download_from_link: {e}")
-        return False, str(e)
+        return False, str(e), False
 
     return wait_for_torrent(qbclient, dlcommslogger, hashid, result, 'add_torrent')
 

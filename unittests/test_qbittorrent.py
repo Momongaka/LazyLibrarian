@@ -106,7 +106,7 @@ class WaitForTorrentTest(LLTestCase):
         qbclient = mock.Mock()
         result = {"failure_count": 1, "pending_count": 0, "success_count": 0}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, 'deadbeef', result, 'add_torrent')
 
         self.assertFalse(status)
@@ -124,7 +124,7 @@ class WaitForTorrentTest(LLTestCase):
         result = {"added_torrent_ids": ["deadbeef"], "failure_count": 1,
                    "pending_count": 0, "success_count": 1}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, dlcommslogger, 'deadbeef', result, 'add_torrent')
 
         self.assertTrue(status)
@@ -136,7 +136,7 @@ class WaitForTorrentTest(LLTestCase):
         qbclient.get_torrent.side_effect = [_http_error(404), {'hash': 'deadbeef'}]
         qbclient.qbittorrent_version = 'v4.6.0'
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, 'deadbeef', "Ok.", 'add_torrent')
 
         self.assertTrue(status)
@@ -150,7 +150,7 @@ class WaitForTorrentTest(LLTestCase):
         qbclient.pause.side_effect = requests.ConnectionError('dropped')
 
         with mock.patch.object(qbittorrent.CONFIG, 'get_bool', return_value=True):
-            status, res = qbittorrent.wait_for_torrent(
+            status, res, adopted = qbittorrent.wait_for_torrent(
                 qbclient, self.dlcommslogger, 'deadbeef', "Ok.", 'add_torrent')
 
         self.assertTrue(status)
@@ -165,7 +165,7 @@ class WaitForTorrentTest(LLTestCase):
         result = {"added_torrent_ids": [], "failure_count": 0,
                    "pending_count": 1, "success_count": 0}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, 'deadbeef', result, 'add_torrent')
 
         self.assertTrue(status)
@@ -178,7 +178,7 @@ class WaitForTorrentTest(LLTestCase):
         result = {"added_torrent_ids": [], "failure_count": 0,
                    "pending_count": 1, "success_count": 0}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, 'deadbeef', result, 'add_torrent')
 
         self.assertFalse(status)
@@ -191,7 +191,7 @@ class WaitForTorrentTest(LLTestCase):
         result = {"added_torrent_ids": [], "failure_count": 0,
                    "pending_count": 1, "success_count": 0}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, 'deadbeef', result, 'add_torrent')
 
         self.assertFalse(status)
@@ -204,7 +204,7 @@ class WaitForTorrentTest(LLTestCase):
         result = {"added_torrent_ids": [EXISTING_HASH], "failure_count": 0,
                    "pending_count": 0, "success_count": 1}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, EXISTING_HASH, result, 'add_file')
 
         self.assertEqual(status, EXISTING_HASH)
@@ -218,7 +218,7 @@ class WaitForTorrentTest(LLTestCase):
         result = {"added_torrent_ids": [HYBRID_ID], "failure_count": 0,
                    "pending_count": 0, "success_count": 1}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, HYBRID_V1, result, 'add_file')
 
         self.assertEqual(status, HYBRID_ID)
@@ -231,7 +231,7 @@ class WaitForTorrentTest(LLTestCase):
         result = {"added_torrent_ids": ["not a hash"], "failure_count": 0,
                    "pending_count": 0, "success_count": 1}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, EXISTING_HASH, result, 'add_file')
 
         self.assertEqual(status, EXISTING_HASH)
@@ -246,7 +246,7 @@ class WaitForTorrentTest(LLTestCase):
         result = {"added_torrent_ids": [HYBRID_ID, EXISTING_HASH], "failure_count": 0,
                    "pending_count": 0, "success_count": 2}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, EXISTING_HASH, result, 'add_file')
 
         self.assertEqual(status, EXISTING_HASH)
@@ -262,7 +262,7 @@ class WaitForTorrentTest(LLTestCase):
         result = {"added_torrent_ids": [], "failure_count": 0,
                    "pending_count": 1, "success_count": 0}
 
-        status, res = qbittorrent.wait_for_torrent(
+        status, res, adopted = qbittorrent.wait_for_torrent(
             qbclient, self.dlcommslogger, HYBRID_V1, result, 'add_torrent')
 
         self.assertEqual(status, HYBRID_ID)
@@ -445,19 +445,22 @@ class AddDuplicateTest(LLTestCase):
             "pending_count": 0, "success_count": 1}
         self.qbclient.get_torrent.return_value = {'hash': EXISTING_HASH}
 
-        status, res = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
+        status, res, adopted = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
 
         self.assertTrue(status)
         self.assertEqual(res, '')
+        self.assertFalse(adopted)
 
     def test_duplicate_data_add_uses_existing_hash(self):
         self.qbclient.download_from_file.side_effect = _http_error(409)
         self.qbclient.torrents.return_value = [_torrent(state='downloading', progress=0.4)]
 
-        status, res = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
+        status, res, adopted = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
 
         self.assertEqual(status, EXISTING_HASH)
         self.assertEqual(res, '')
+        # the torrent was already there, so it is not ours to delete later
+        self.assertTrue(adopted)
 
     def test_duplicate_hybrid_torrent_returns_the_id_qbittorrent_uses(self):
         # the v1 hash we submitted is not the id it is filed under, so the
@@ -466,7 +469,7 @@ class AddDuplicateTest(LLTestCase):
         self.qbclient.torrents.side_effect = [[], [_torrent(hashid=HYBRID_ID, infohash_v1=HYBRID_V1,
                                                             infohash_v2=HYBRID_V2)]]
 
-        status, res = qbittorrent.add_file(b'data', HYBRID_V1, 'a title', {})
+        status, res, adopted = qbittorrent.add_file(b'data', HYBRID_V1, 'a title', {})
 
         self.assertEqual(status, HYBRID_ID)
         self.assertEqual(res, '')
@@ -478,7 +481,7 @@ class AddDuplicateTest(LLTestCase):
             409, 'Trackers cannot be merged because it is a private torrent')
         self.qbclient.torrents.return_value = [_torrent(state='pausedUP')]
 
-        status, res = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
+        status, res, adopted = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
 
         self.assertTrue(status)
         self.assertEqual(res, '')
@@ -488,7 +491,7 @@ class AddDuplicateTest(LLTestCase):
             409, 'Trackers are merged from new source')
         self.qbclient.torrents.return_value = [_torrent(hashid='b2f98397ebee101bdbbb9c371252116d06736577')]
 
-        status, res = qbittorrent.add_torrent('http://tracker.example/t.torrent',
+        status, res, adopted = qbittorrent.add_torrent('http://tracker.example/t.torrent',
                                               'b2f98397ebee101bdbbb9c371252116d06736577', {})
 
         self.assertTrue(status)
@@ -500,7 +503,7 @@ class AddDuplicateTest(LLTestCase):
                                                         category='lectures',
                                                         content_path='/elsewhere/lectures')]
 
-        status, res = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
+        status, res, adopted = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
 
         self.assertTrue(status)
 
@@ -508,9 +511,10 @@ class AddDuplicateTest(LLTestCase):
         self.qbclient.download_from_file.side_effect = _http_error(409, 'Unable to add torrent')
         self.qbclient.torrents.return_value = []
 
-        status, res = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
+        status, res, adopted = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
 
         self.assertFalse(status)
+        self.assertFalse(adopted)
         self.assertIn('409', res)
         self.assertIn(EXISTING_HASH, res)
         self.assertIn('Unable to add torrent', res)
@@ -519,7 +523,7 @@ class AddDuplicateTest(LLTestCase):
         self.qbclient.download_from_file.side_effect = _http_error(409)
         self.qbclient.torrents.side_effect = requests.ConnectionError('dropped')
 
-        status, res = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
+        status, res, adopted = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
 
         self.assertFalse(status)
         self.assertIn('lookup failed', res)
@@ -527,7 +531,7 @@ class AddDuplicateTest(LLTestCase):
     def test_other_http_errors_are_not_treated_as_duplicates(self):
         self.qbclient.download_from_file.side_effect = _http_error(415, 'Torrent file is not valid')
 
-        status, res = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
+        status, res, adopted = qbittorrent.add_file(b'data', EXISTING_HASH, 'a title', {})
 
         self.assertFalse(status)
         self.qbclient.torrents.assert_not_called()
@@ -539,7 +543,7 @@ class AddDuplicateTest(LLTestCase):
             409, 'Unable to add torrent from http://tracker.example/get.torrent?passkey=s3cr3t')
         self.qbclient.torrents.return_value = []
 
-        status, res = qbittorrent.add_torrent('http://tracker.example/get.torrent?passkey=s3cr3t',
+        status, res, adopted = qbittorrent.add_torrent('http://tracker.example/get.torrent?passkey=s3cr3t',
                                               EXISTING_HASH, {})
 
         self.assertFalse(status)
@@ -549,7 +553,7 @@ class AddDuplicateTest(LLTestCase):
     def test_conflict_with_unusable_hash_stays_failed(self):
         self.qbclient.download_from_link.side_effect = _http_error(409)
 
-        status, res = qbittorrent.add_torrent('http://tracker.example/t.torrent', 'not-a-hash', {})
+        status, res, adopted = qbittorrent.add_torrent('http://tracker.example/t.torrent', 'not-a-hash', {})
 
         self.assertFalse(status)
         self.assertIn('not a usable infohash', res)
