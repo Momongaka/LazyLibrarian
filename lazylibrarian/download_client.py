@@ -169,9 +169,7 @@ def check_contents(source, downloadid, booktype, title):
             # An archive is named after the release and hides what is inside,
             # so it gets checked too.
             if not rejected and banlist and (is_wanted or is_archive):
-                wordlist = get_list(
-                    fname.lower().replace(os.sep, " ").replace(".", " ")
-                )
+                wordlist = get_list(fname.lower().replace("\\", " ").replace("/", " ").replace(".", " "))
                 for word in wordlist:
                     if word in banlist:
                         rejected = f"{fname} contains {word}"
@@ -189,10 +187,11 @@ def check_contents(source, downloadid, booktype, title):
                     elif "M" in str(fsize):
                         fsize = int(float(fsize.split("M")[0].strip()) * 1048576)
                     elif "K" in str(fsize):
-                        fsize = int(float(fsize.split("K")[0].strip()) * 1024)
-                    fsize = round(
-                        check_int(fsize, 0) / 1048576.0, 2
-                    )  # float to 2dp in Mb
+                        fsize = int(float(fsize.split("K")[0].strip() * 1024))
+                    mb_size = check_int(fsize, 0) / 1048576.0
+                    fsize = round(mb_size, 2)  # float to 2dp in Mb
+                    if mb_size and not fsize:  # small file, don't round to zero
+                        fsize = 0.01
                     unit = "Mb"
                 except ValueError:
                     fsize = 0
