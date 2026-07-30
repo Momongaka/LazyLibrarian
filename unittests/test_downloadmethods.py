@@ -379,6 +379,19 @@ class TorDlMethodRejectionTest(LLTestCase):
 
         self.assertIn('new', self.failed_row_update())
 
+    def test_a_client_with_no_name_yet_still_gets_content_checked(self):
+        # transmission withholds a name until a torrent has made progress, so
+        # right after adding it returns nothing. Taking that as the title left
+        # tor_title empty, and an empty title skips the content checks.
+        self.qbittorrent.add_file.return_value = (TORRENT_HASH, '', False)
+        self.qbittorrent.get_name.return_value = ''
+
+        status, res = self.snatch()
+
+        self.check_contents.assert_called_once()
+        self.assertEqual(self.check_contents.call_args.args[3], 'The Book')
+        self.assertFalse(status)
+        self.assertIn('no ebook files', res)
 
 if __name__ == '__main__':
     unittest.main()

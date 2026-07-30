@@ -893,7 +893,11 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
             # qBittorrent files v2 and hybrid torrents under their truncated v2
             # hash, so the id it returns is not always the hash we calculated
             if download_id:
-                tor_title = qbittorrent.get_name(download_id)
+                # keep the name we already have if the client has none for us:
+                # an empty title skips the content checks further down
+                client_name = qbittorrent.get_name(download_id)
+                if client_name:
+                    tor_title = client_name
 
         if CONFIG.get_bool('TOR_DOWNLOADER_TRANSMISSION') and CONFIG['TRANSMISSION_HOST']:
             source = "TRANSMISSION"
@@ -919,7 +923,9 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
                 download_id = hashid
                 if label and not adopted:
                     transmission.set_label(download_id, label)
-                tor_title = transmission.get_torrent_name(download_id)
+                client_name = transmission.get_torrent_name(download_id)
+                if client_name:
+                    tor_title = client_name
                 tor_folder = transmission.get_torrent_folder(download_id)
                 tor_files = transmission.get_torrent_files(download_id)
                 logger.debug(f"{tor_title}: Folder is {tor_folder}")
