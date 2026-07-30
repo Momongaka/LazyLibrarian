@@ -187,7 +187,7 @@ def check_contents(source, downloadid, booktype, title):
                     elif "M" in str(fsize):
                         fsize = int(float(fsize.split("M")[0].strip()) * 1048576)
                     elif "K" in str(fsize):
-                        fsize = int(float(fsize.split("K")[0].strip() * 1024))
+                        fsize = int(float(fsize.split("K")[0].strip()) * 1024)
                     mb_size = check_int(fsize, 0) / 1048576.0
                     fsize = round(mb_size, 2)  # float to 2dp in Mb
                     if mb_size and not fsize:  # small file, don't round to zero
