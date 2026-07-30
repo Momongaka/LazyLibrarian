@@ -2378,6 +2378,21 @@ def _handle_seeding_status(
         # asked while the torrent is still there to ask about, because the
         # answer covers the files on disk further down as well as the task
         may_delete = may_delete_data(book_state.source, book_state.download_id)
+        # only worth waiting on an answer if the answer would decide something:
+        # with Keep Files set and DEL_COMPLETED off, nothing gets removed either
+        # way and there is no reason to hold the row back
+        deletes_something = CONFIG.get_bool("DEL_COMPLETED") or not CONFIG.get_bool(
+            "DESTINATION_COPY"
+        )
+        if may_delete is None and deletes_something:
+            # the client could not be asked, so leave the row where it is and
+            # come back to it rather than marking it done with its files still
+            # sitting there
+            logger.info(
+                f"{book_state.download_title}: cannot reach {book_state.source} to "
+                f"finish up, leaving it for the next run"
+            )
+            return True  # Skip to next item
 
         if CONFIG.get_bool("DEL_COMPLETED"):
             logger.debug(
