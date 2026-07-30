@@ -43,6 +43,7 @@ headers = {'Accept': 'application/json', 'Content-Type': 'application/json'}
 
 def add_torrent(link, data=None, provider_options=None):
     logger = logging.getLogger(__name__)
+    provider_options = provider_options or {}
     dlcommslogger = logging.getLogger('special.dlcomms')
     try:
         retid = False

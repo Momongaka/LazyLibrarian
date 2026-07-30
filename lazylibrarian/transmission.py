@@ -47,6 +47,7 @@ def add_torrent(link, directory=None, metainfo=None, provider_options=None):
              belong to whoever added it first.
     """
     logger = logging.getLogger(__name__)
+    provider_options = provider_options or {}
     method = 'torrent-add'
     if metainfo:
         arguments = {'metainfo': metainfo}
@@ -81,6 +82,9 @@ def add_torrent(link, directory=None, metainfo=None, provider_options=None):
 
             if "seed_ratio" in provider_options:
                 set_seed_ratio(retid, provider_options["seed_ratio"])
+            # no seed_duration here: Transmission has no wall clock seeding
+            # limit, only an idle one, which is a different thing. A duration is
+            # held to by refusing to remove the torrent until it is met instead.
 
             return retid, '', adopted
 
@@ -173,6 +177,20 @@ def get_torrent_folder_by_id(torrentid):  # uses transmission id
             time.sleep(5)
 
     return ''
+
+
+def seed_state(torrentid):
+    """ What a torrent has seeded so far, as (ratio, seconds), or None. """
+    logger = logging.getLogger(__name__)
+    arguments = {'ids': [torrentid], 'fields': ['uploadRatio', 'secondsSeeding']}
+    response, _ = torrent_action('torrent-get', arguments)  # type: dict
+    if not response:
+        logger.debug('seed_state: No response from transmission')
+        return None
+    torrents = response.get('arguments', {}).get('torrents') or []
+    if not torrents:
+        return None
+    return torrents[0].get('uploadRatio') or 0, torrents[0].get('secondsSeeding') or 0
 
 
 def get_torrent_files(torrentid):  # uses hashid

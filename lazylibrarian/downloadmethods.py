@@ -53,7 +53,7 @@ from lazylibrarian.cache import fetch_url
 from lazylibrarian.common import get_user_agent, proxy_list
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.directparser import bok_grabs, bok_login, session_get
-from lazylibrarian.download_client import check_contents, delete_task
+from lazylibrarian.download_client import check_contents, delete_task, seed_requirement
 from lazylibrarian.filesystem import (
     DIRS,
     get_directory,
@@ -838,17 +838,14 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
             logger.debug(f"data: {make_unicode(str(torrent[:50]))}")
             return False, res
 
+        # the same seeding requirement whichever provider group served the
+        # result: an rss feed can be a private tracker's too
         provider_options = {}
-        if provider:
-            for item in CONFIG.providers('TORZNAB'):
-                if item['NAME'] == provider or item['DISPNAME'] == provider or item['HOST'] == provider:
-                    seed_ratio = item.get_item("SEED_RATIO").value
-                    if seed_ratio:
-                        provider_options['seed_ratio'] = seed_ratio
-                    seed_duration = item.get_item("SEED_DURATION").value
-                    if seed_duration:
-                        provider_options['seed_duration'] = seed_duration
-                    break
+        seed_ratio, seed_duration = seed_requirement(provider)
+        if seed_ratio:
+            provider_options['seed_ratio'] = seed_ratio
+        if seed_duration:
+            provider_options['seed_duration'] = seed_duration
 
         if CONFIG.get_bool('TOR_DOWNLOADER_UTORRENT') and CONFIG['UTORRENT_HOST']:
             logger.debug(f"Sending {tor_title} to Utorrent")

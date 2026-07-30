@@ -646,6 +646,10 @@ ARRAY_DEFS: dict[str, DefaultArrayDef] = {
         ConfigInt('', "DLPRIORITY", 0),
         ConfigDownloadTypes('', "DLTYPES", 'E'),
         ConfigStr('', "LABEL", ''),
+        # an rss feed can be a private tracker's just as much as a torznab
+        # search can, so it needs the same seeding requirement
+        ConfigFloat('', "SEED_RATIO", 0),
+        ConfigInt('', "SEED_DURATION", 0),
     ]),
     'IRC': ('SERVER', 'IRC_%s', [
         ConfigStr('', 'NAME', 'IRC', persist=False),

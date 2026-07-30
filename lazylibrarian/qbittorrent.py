@@ -316,6 +316,26 @@ def category_matches(hashid, expect_category=None):
     return not category_mismatch(torrent.get('category') or '', expect_category)
 
 
+def seed_state(hashid):
+    """ What a torrent has seeded so far, as (ratio, seconds), or None.
+
+    None means we could not ask, which is not the same as nothing seeded.
+    """
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    qbclient = get_client()
+    if not qbclient:
+        return None
+    try:
+        torrent = find_torrent(qbclient, hashid.lower())
+    except Exception as e:
+        dlcommslogger.error(f"Failed to get seed_state: {e}")
+        return None
+    if not torrent:
+        return None
+    # torrents/info reports the ratio as a float and seeding_time in seconds
+    return torrent.get('ratio') or 0, torrent.get('seeding_time') or 0
+
+
 def remove_torrent(hashid, remove_data=False, expect_category=None):
     """ Remove a torrent from qBittorrent, category permitting.
 
