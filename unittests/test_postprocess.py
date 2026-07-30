@@ -1412,3 +1412,60 @@ class ProcessDirEndToEndTest(LLTestCaseWithStartup):
 
         # 5. Database updated
         self.assert_status_updated(book_id, 'Processed')
+
+    @mock.patch('lazylibrarian.postprocess._is_valid_media_file')
+    @mock.patch('lazylibrarian.postprocess.CONFIG.get_bool')
+    @mock.patch('lazylibrarian.postprocess.check_contents')
+    @mock.patch('lazylibrarian.postprocess.get_download_progress')
+    @mock.patch('lazylibrarian.postprocess.get_download_name')
+    def test_audiobook_in_download_root_does_not_copy_everything(
+        self, mock_get_name, mock_get_progress, mock_check_contents,
+        mock_get_bool, mock_is_valid_media
+    ):
+        """Regression test for #2901: loose audiobook in download root must not
+        cause copy_tree to copy the entire download directory.
+
+        When candidate_ptr is the download root itself and book_file(recurse=True)
+        finds a .m4b there, pp_path becomes the download root and copy_tree copies
+        everything in it.  The guard should reject the download root as a candidate
+        before book_file ever runs.
+        """
+        mock_check_contents.return_value = None
+        mock_get_progress.return_value = (100, True)
+        mock_get_name.return_value = None
+        mock_is_valid_media.return_value = True
+
+        def get_bool_side_effect(key):
+            if key == "AUDIO_TAB":
+                return True
+            if key == "DESTINATION_COPY":
+                return True
+            return False
+
+        mock_get_bool.side_effect = get_bool_side_effect
+
+        book_id = "audio_root_001"
+        author_name = "Joe Dunthorne"
+        book_name = "Children of Radium"
+        download_title = "Joe_Dunthorne-Children_of_Radium"
+
+        self.create_test_author_and_book(book_id, author_name, book_name)
+        self.create_snatched_download(book_id, download_title, "AudioBook")
+
+        # Place a loose .m4b in the download root (no subfolder)
+        loose_m4b = os.path.join(self.download_dir, "Children of Radium.m4b")
+        with open(loose_m4b, 'w') as f:
+            f.write("audiobook data")
+
+        # Other unrelated files that must survive
+        other_epub = os.path.join(self.download_dir, "Unrelated_Book.epub")
+        with open(other_epub, 'w') as f:
+            f.write("unrelated ebook")
+
+        process_dir(ignoreclient=True)
+
+        # The unrelated file must still be in the download root untouched
+        self.assertTrue(
+            os.path.exists(other_epub),
+            "Unrelated files in download root must not be copied or moved"
+        )
