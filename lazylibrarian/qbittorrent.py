@@ -510,7 +510,7 @@ def handle_add_http_error(qbclient, dlcommslogger, err, hashid, label):
     return False, res, False
 
 
-def add_file(data, hashid, title, provider_options):
+def add_file(data, hashid, title, provider_options, label=None):
     """ Send torrent data to qBittorrent.
 
     :return: (torrent id, '', adopted) on success, or (False, message, False).
@@ -525,7 +525,7 @@ def add_file(data, hashid, title, provider_options):
     if not qbclient:
         return False, "Failed to login to qbittorrent", False
 
-    kwargs = get_args(provider_options)
+    kwargs = get_args(provider_options, label)
     dlcommslogger.debug(f'{kwargs}')
     try:
         result = qbclient.download_from_file(data, **kwargs)
@@ -538,7 +538,7 @@ def add_file(data, hashid, title, provider_options):
     return wait_for_torrent(qbclient, dlcommslogger, hashid, result, 'add_file')
 
 
-def add_torrent(link, hashid, provider_options):
+def add_torrent(link, hashid, provider_options, label=None):
     """ Send a url or magnet to qBittorrent.
 
     :return: (torrent id, '', adopted) on success, or (False, message, False).
@@ -554,7 +554,7 @@ def add_torrent(link, hashid, provider_options):
         return False, "Failed to login to qbittorrent", False
 
     hashid = hashid.lower()
-    kwargs = get_args(provider_options)
+    kwargs = get_args(provider_options, label)
     dlcommslogger.debug(f'{kwargs}')
     try:
         result = qbclient.download_from_link(link, **kwargs)
@@ -567,14 +567,22 @@ def add_torrent(link, hashid, provider_options):
     return wait_for_torrent(qbclient, dlcommslogger, hashid, result, 'add_torrent')
 
 
-def get_args(provider_options):
-    """ Get optional arguments based on configuration"""
+def get_args(provider_options, label=None):
+    """ Get optional arguments based on configuration
+
+    :param label: the category to file the torrent under, already resolved for
+        the library being searched. QBITTORRENT_LABEL can be a comma separated
+        list of per library categories, so the unresolved value is not usable as
+        a category on its own.
+    """
     args = {'paused': bool(CONFIG.get_bool('TORRENT_PAUSED'))}
     if CONFIG['QBITTORRENT_DIR']:
         args['savepath'] = CONFIG['QBITTORRENT_DIR']
 
-    if CONFIG['QBITTORRENT_LABEL']:
-        args['category'] = CONFIG['QBITTORRENT_LABEL']
+    if label is None:
+        label = CONFIG['QBITTORRENT_LABEL']
+    if label:
+        args['category'] = label
 
     if "seed_ratio" in provider_options:
         args['ratioLimit'] = provider_options["seed_ratio"]

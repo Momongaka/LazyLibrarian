@@ -125,8 +125,9 @@ from lazylibrarian.scheduling import SchedulerCommand, restart_jobs
 # 88 add bookauthors table
 # 89 add dnb_id to book table
 # 90 add Origin to wanted table
+# 91 add Category to wanted table
 
-db_current_version = 90
+db_current_version = 91
 
 
 def upgrade_needed():
@@ -1519,6 +1520,15 @@ def update_schema(db, upgradelog):
         upgradelog.write(f"{time.ctime()} v90: {lazylibrarian.UPDATE_MSG}\n")
         # 'new' or 'adopted', empty for anything snatched before we recorded it
         db.action('ALTER TABLE wanted ADD COLUMN Origin TEXT')
+
+    if not has_column(db, "wanted", "Category"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding Category column to wanted table'
+        upgradelog.write(f"{time.ctime()} v91: {lazylibrarian.UPDATE_MSG}\n")
+        # the downloader category we asked for, to compare against later. Left
+        # empty for existing rows: we cannot know what was sent at the time, and
+        # guessing would put someone else's torrent at risk
+        db.action('ALTER TABLE wanted ADD COLUMN Category TEXT')
 
     if changes:
         upgradelog.write(f"{time.ctime()} Changed: {changes}\n")
