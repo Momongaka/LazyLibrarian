@@ -396,30 +396,107 @@ class RemoveTorrentTest(LLTestCase):
         self.assertTrue(qbittorrent.remove_torrent(EXISTING_HASH))
         self.qbclient.delete.assert_called_once_with(EXISTING_HASH)
 
-    def test_data_is_kept_for_a_torrent_in_another_category(self):
-        # a duplicate we took on may be a torrent someone else added and is
-        # still seeding: drop our copy of it, leave their files alone
-        self.qbclient.torrents.return_value = [_torrent(category='films', state='pausedUP')]
+    def test_a_torrent_in_another_category_is_left_alone(self):
+        # the case that cost someone a private tracker seed: we can reach a
+        # torrent in any category by hash, so the category has to be a veto
+        # rather than something we note on the way past
+        self.qbclient.torrents.return_value = [_torrent(name='The Windsors At War',
+                                                        category='Long-term Seeding',
+                                                        state='pausedUP')]
 
-        with _label('llbooks'):
-            self.assertTrue(qbittorrent.remove_torrent(EXISTING_HASH, remove_data=True))
+        with self.assertLogs(level='WARNING') as logged:
+            self.assertFalse(qbittorrent.remove_torrent(EXISTING_HASH, remove_data=True,
+                                                        expect_category='books'))
 
         self.qbclient.delete_permanently.assert_not_called()
-        self.qbclient.delete.assert_called_once_with(EXISTING_HASH)
+        self.qbclient.delete.assert_not_called()
+        said = ' '.join(logged.output)
+        self.assertIn('Skipping deletion', said)
+        self.assertIn('Long-term Seeding', said)
+        self.assertNotIn('removing', said)
 
-    def test_data_is_removed_for_a_torrent_in_our_own_category(self):
+    def test_data_is_removed_for_a_torrent_in_the_category_we_recorded(self):
+        self.qbclient.torrents.return_value = [_torrent(category='llbooks', state='pausedUP')]
+
+        self.assertTrue(qbittorrent.remove_torrent(EXISTING_HASH, remove_data=True,
+                                                   expect_category='llbooks'))
+
+        self.qbclient.delete_permanently.assert_called_once_with(EXISTING_HASH)
+
+    def test_a_recategorised_torrent_of_ours_is_left_alone(self):
+        # we added it, then someone moved it somewhere they are keeping it
+        self.qbclient.torrents.return_value = [_torrent(category='Long-term Seeding',
+                                                        state='pausedUP')]
+
+        self.assertFalse(qbittorrent.remove_torrent(EXISTING_HASH, remove_data=True,
+                                                    expect_category='llbooks'))
+        self.qbclient.delete.assert_not_called()
+        self.qbclient.delete_permanently.assert_not_called()
+
+    def test_with_nothing_recorded_the_configured_categories_decide(self):
+        self.qbclient.torrents.return_value = [_torrent(category='Long-term Seeding',
+                                                        state='pausedUP')]
+
+        with _label('llbooks'):
+            self.assertFalse(qbittorrent.remove_torrent(EXISTING_HASH, remove_data=True))
+        self.qbclient.delete_permanently.assert_not_called()
+
+    def test_with_nothing_recorded_our_own_category_still_passes(self):
         self.qbclient.torrents.return_value = [_torrent(category='llbooks', state='pausedUP')]
 
         with _label('llbooks'):
             self.assertTrue(qbittorrent.remove_torrent(EXISTING_HASH, remove_data=True))
-
         self.qbclient.delete_permanently.assert_called_once_with(EXISTING_HASH)
+
+    def test_a_per_library_label_list_still_matches(self):
+        # QBITTORRENT_LABEL can be a list that resolves per library, so both
+        # halves of it are categories of ours
+        self.qbclient.torrents.return_value = [_torrent(category='llaudio', state='pausedUP')]
+
+        with _label('llbooks, llaudio'):
+            self.assertTrue(qbittorrent.remove_torrent(EXISTING_HASH, remove_data=True))
+        self.qbclient.delete_permanently.assert_called_once_with(EXISTING_HASH)
+
+    def test_an_uncategorised_setup_still_deletes(self):
+        self.qbclient.torrents.return_value = [_torrent(category='', state='pausedUP')]
+
+        with _label(''):
+            self.assertTrue(qbittorrent.remove_torrent(EXISTING_HASH, remove_data=True))
+        self.qbclient.delete_permanently.assert_called_once_with(EXISTING_HASH)
+
+    def test_seeding_is_still_respected_for_a_torrent_of_ours(self):
+        self.qbclient.torrents.return_value = [_torrent(category='llbooks', state='uploading')]
+
+        def config(_self, key):
+            return 'llbooks' if key == 'QBITTORRENT_LABEL' else ''
+
+        with mock.patch.object(type(qbittorrent.CONFIG), '__getitem__', config), \
+                mock.patch.object(type(qbittorrent.CONFIG), 'get_bool', lambda _s, k: k == 'SEED_WAIT'):
+            self.assertFalse(qbittorrent.remove_torrent(EXISTING_HASH, remove_data=True,
+                                                        expect_category='llbooks'))
+        self.qbclient.delete_permanently.assert_not_called()
 
     def test_unknown_hash_removes_nothing(self):
         self.qbclient.torrents.return_value = []
 
         self.assertFalse(qbittorrent.remove_torrent(EXISTING_HASH))
         self.qbclient.delete.assert_not_called()
+
+
+class ConfiguredCategoriesTest(LLTestCase):
+
+    def test_a_single_label(self):
+        with _label('books'):
+            self.assertEqual(qbittorrent.configured_categories(), {'books'})
+
+    def test_a_per_library_list(self):
+        with _label('books, audiobooks'):
+            self.assertEqual(qbittorrent.configured_categories(),
+                             {'books, audiobooks', 'books', 'audiobooks'})
+
+    def test_no_label_at_all(self):
+        with _label(''):
+            self.assertEqual(qbittorrent.configured_categories(), set())
 
 
 class AddDuplicateTest(LLTestCase):
