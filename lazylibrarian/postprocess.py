@@ -1672,7 +1672,15 @@ def _process_matched_directory(
     logger.debug(f"download_dir: {download_dir}")
     logger.debug(f"download_title: {book_state.download_title}")
 
-    if candidate_ptr and candidate_ptr.rstrip(os.sep) == get_directory('Download').rstrip(os.sep):
+    def _norm(p):
+        return os.path.normcase(os.path.normpath(p)) if p else ''
+
+    all_download_dirs = {_norm(d)
+                         for d in get_list(CONFIG.get_str('DOWNLOAD_DIR'), ',') if d.strip()}
+    all_download_dirs.add(_norm(get_directory('Download')))
+    all_download_dirs.discard('')
+
+    if candidate_ptr and _norm(candidate_ptr) in all_download_dirs:
         download_dir = candidate_ptr
         candidate_ptr = os.path.join(candidate_ptr, book_state.download_title)
         book_state.update_candidate(candidate_ptr)
@@ -1796,6 +1804,9 @@ def _process_matched_directory(
         # For non ebook types, just find the file
         book_type_str = book_state.get_book_type_str()
         if book_type_str:
+            candidate = _norm(book_state.candidate_ptr or "")
+            if candidate in all_download_dirs or candidate == _norm(download_dir):
+                return False, f"No {book_type_enum.value} found in matched folder"
             result = book_file(
                 book_state.candidate_ptr or "",
                 book_type_str,
