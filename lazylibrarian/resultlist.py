@@ -97,6 +97,63 @@ def find_best_result(resultlist, book, searchtype, source):
             minsize = CONFIG.get_int('REJECT_MINSIZE')
             auxinfo = 'eBook'
 
+        # Language tags that appear in release names, mapped to the set of
+        # IMP_PREFLANG values each one satisfies.  Only unambiguous indicators:
+        # two-letter codes (en, fr, de ...) are too common as English words.
+        _LANG_TO_PREFLANG = {
+            'english': {'en', 'eng', 'english'},
+            'eng': {'en', 'eng', 'english'},
+            'french': {'fr', 'fre', 'fra', 'french'},
+            'fre': {'fr', 'fre', 'fra', 'french'},
+            'fra': {'fr', 'fre', 'fra', 'french'},
+            'german': {'de', 'ger', 'deu', 'german'},
+            'ger': {'de', 'ger', 'deu', 'german'},
+            'deu': {'de', 'ger', 'deu', 'german'},
+            'spanish': {'es', 'spa', 'spanish'},
+            'spa': {'es', 'spa', 'spanish'},
+            'italian': {'it', 'ita', 'italian'},
+            'ita': {'it', 'ita', 'italian'},
+            'swedish': {'sv', 'swe', 'swedish'},
+            'swe': {'sv', 'swe', 'swedish'},
+            'norwegian': {'no', 'nor', 'norwegian'},
+            'nor': {'no', 'nor', 'norwegian'},
+            'danish': {'da', 'dan', 'danish'},
+            'dan': {'da', 'dan', 'danish'},
+            'dutch': {'nl', 'dut', 'nld', 'dutch'},
+            'dut': {'nl', 'dut', 'nld', 'dutch'},
+            'nld': {'nl', 'dut', 'nld', 'dutch'},
+            'portuguese': {'pt', 'por', 'portuguese'},
+            'por': {'pt', 'por', 'portuguese'},
+            'russian': {'ru', 'rus', 'russian'},
+            'rus': {'ru', 'rus', 'russian'},
+            'polish': {'pl', 'pol', 'polish'},
+            'pol': {'pl', 'pol', 'polish'},
+            'czech': {'cs', 'cze', 'ces', 'czech'},
+            'cze': {'cs', 'cze', 'ces', 'czech'},
+            'ces': {'cs', 'cze', 'ces', 'czech'},
+            'finnish': {'fi', 'fin', 'finnish'},
+            'fin': {'fi', 'fin', 'finnish'},
+            'hungarian': {'hu', 'hun', 'hungarian'},
+            'hun': {'hu', 'hun', 'hungarian'},
+            'turkish': {'tr', 'tur', 'turkish'},
+            'tur': {'tr', 'tur', 'turkish'},
+            'japanese': {'ja', 'jpn', 'japanese'},
+            'jpn': {'ja', 'jpn', 'japanese'},
+            'chinese': {'zh', 'chi', 'zho', 'chinese'},
+            'chi': {'zh', 'chi', 'zho', 'chinese'},
+            'zho': {'zh', 'chi', 'zho', 'chinese'},
+            'korean': {'ko', 'kor', 'korean'},
+            'kor': {'ko', 'kor', 'korean'},
+            'arabic': {'ar', 'ara', 'arabic'},
+            'ara': {'ar', 'ara', 'arabic'},
+            'romanian': {'ro', 'ron', 'romanian'},
+            'ron': {'ro', 'ron', 'romanian'},
+            'greek': {'el', 'ell', 'greek'},
+            'ell': {'el', 'ell', 'greek'},
+        }
+        preflang_lower = {v.strip().lower() for v in get_list(CONFIG['IMP_PREFLANG'], ',') if v.strip()}
+        check_lang = preflang_lower and 'all' not in preflang_lower
+
         if source == 'nzb':
             prefix = 'nzb'
         else:  # rss and direct providers return same names as torrents
@@ -214,6 +271,19 @@ def find_best_result(resultlist, book, searchtype, source):
                             and word not in get_list(title.lower()):
                         rejected = True
                         logger.debug(f"Rejecting {result_title}, contains {word}")
+                        break
+
+            if not rejected and check_lang:
+                title_words = get_list(title.lower())
+                author_words = get_list(author.lower())
+                for word in get_list(result_title.lower()):
+                    if word in title_words or word in author_words:
+                        continue
+                    mapped = _LANG_TO_PREFLANG.get(word)
+                    if mapped and not mapped.intersection(preflang_lower):
+                        rejected = True
+                        logger.debug(f"Rejecting {result_title}, language '{word}' "
+                                     f"not in preferred languages")
                         break
 
             size_temp = check_int(res[f"{prefix}size"], 1000)  # Need to cater for when this is NONE (Issue 35)
