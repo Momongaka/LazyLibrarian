@@ -297,20 +297,22 @@ def category_mismatch(category, expect_category=None):
 
 
 def category_matches(hashid, expect_category=None):
-    """ True only if the torrent is still in the category we filed it under.
+    """ Whether the torrent is still in the category we filed it under.
 
-    Anything we cannot confirm is a no: this is asked before deleting files, so
-    a client we cannot reach has to mean wait rather than go ahead.
+    Three answers, because they lead to different places: True to go ahead,
+    False for a torrent that is somewhere else or no longer here, and None when
+    the client could not be asked, which is worth trying again rather than
+    treating as a no.
     """
     dlcommslogger = logging.getLogger('special.dlcomms')
     qbclient = get_client()
     if not qbclient:
-        return False
+        return None
     try:
         torrent = find_torrent(qbclient, hashid.lower())
     except Exception as e:
         dlcommslogger.error(f"Failed to check category: {e}")
-        return False
+        return None
     if not torrent:
         return False
     return not category_mismatch(torrent.get('category') or '', expect_category)

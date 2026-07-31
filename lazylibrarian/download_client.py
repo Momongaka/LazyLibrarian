@@ -804,7 +804,8 @@ def download_ownership(source, download_id):
 
 
 def may_delete_data(source, download_id):
-    """ Whether the files under a download are ours to delete.
+    """ Whether the files under a download are ours to delete, or None if the
+    client could not be asked.
 
     Ownership comes from our own record, and for qBittorrent the torrent also
     has to still be in the category we filed it under: someone can move a
@@ -818,14 +819,19 @@ def may_delete_data(source, download_id):
     if not owned:
         return False
     if source == "QBITTORRENT":
-        if qbittorrent.category_matches(download_id, category):
-            return True
-        # said no, or could not be reached to answer. Either way the files stay,
-        # so say so rather than leaving someone to wonder where they went.
-        logging.getLogger(__name__).warning(
-            f"Leaving the files for {download_id}: qBittorrent does not have it in "
-            f"category [{category}], or could not be asked")
-        return False
+        matches = qbittorrent.category_matches(download_id, category)
+        if matches is None:
+            # No answer is not the same as no. Returning None leaves the caller
+            # free to come back to it, and reads as false to anything that only
+            # cares whether it may go ahead.
+            logging.getLogger(__name__).warning(
+                f"Cannot reach qBittorrent to check {download_id}, will try again")
+            return None
+        if not matches:
+            logging.getLogger(__name__).warning(
+                f"Leaving the files for {download_id}: qBittorrent does not have it "
+                f"in category [{category}]")
+        return matches
     return True
 
 

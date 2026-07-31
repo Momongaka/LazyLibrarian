@@ -232,6 +232,13 @@ class MayDeleteDataTest(LLTestCaseWithConfigandDIRS):
         self.qbittorrent.category_matches.return_value = False
         self.assertFalse(may_delete_data('QBITTORRENT', HASHID))
 
+    def test_a_client_we_cannot_reach_says_nothing_rather_than_no(self):
+        # the difference matters: no means finish up and leave the files, while
+        # nothing means ask again next run
+        self.add_row('new', 'books')
+        self.qbittorrent.category_matches.return_value = None
+        self.assertIsNone(may_delete_data('QBITTORRENT', HASHID))
+
     def test_an_adopted_torrent_never_gets_that_far(self):
         self.add_row('adopted', '')
         self.assertFalse(may_delete_data('QBITTORRENT', HASHID))
