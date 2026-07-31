@@ -18,7 +18,7 @@ import time
 import requests
 
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.formatter import redact_url
+from lazylibrarian.formatter import get_list, redact_url
 from lib.qbittorrent import Client, WrongCredentialsError
 
 # qBittorrent Web API 2.14+ can accept a torrents/add request before it has
@@ -267,10 +267,68 @@ def get_progress(hashid):
     return -1, failure if failure else 'error hash not found', False
 
 
-def remove_torrent(hashid, remove_data=False):
+def configured_categories():
+    """ Every category this configuration could have filed a torrent under.
+
+    QBITTORRENT_LABEL is a single category, or a comma separated list that
+    resolves per library, so both spellings have to count as ours.
+    """
+    label = CONFIG['QBITTORRENT_LABEL']
+    if not label:
+        return set()
+    return {label, *get_list(label, ',')}
+
+
+def category_mismatch(category, expect_category=None):
+    """ Say why a torrent is not where we filed it, or return '' if it is.
+
+    With nothing recorded, fall back to what this configuration could have
+    asked for. An install with no label of its own files torrents with no
+    category at all, so that is what counts as ours there.
+    """
+    if expect_category is not None:
+        if category != expect_category:
+            return f"torrent category [{category}] does not match owned category [{expect_category}]"
+        return ''
+    ours = configured_categories() or {''}
+    if category not in ours:
+        return f"torrent category [{category}] is not one of ours {sorted(ours)}"
+    return ''
+
+
+def category_matches(hashid, expect_category=None):
+    """ True only if the torrent is still in the category we filed it under.
+
+    Anything we cannot confirm is a no: this is asked before deleting files, so
+    a client we cannot reach has to mean wait rather than go ahead.
+    """
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    qbclient = get_client()
+    if not qbclient:
+        return False
+    try:
+        torrent = find_torrent(qbclient, hashid.lower())
+    except Exception as e:
+        dlcommslogger.error(f"Failed to check category: {e}")
+        return False
+    if not torrent:
+        return False
+    return not category_mismatch(torrent.get('category') or '', expect_category)
+
+
+def remove_torrent(hashid, remove_data=False, expect_category=None):
+    """ Remove a torrent from qBittorrent, category permitting.
+
+    :param expect_category: the category recorded when we snatched this, or None
+        where there is no record of it. A torrent sitting in any other category
+        is left alone: qBittorrent looks a torrent up by hash whatever category
+        it is in, which is what lets us find one we took on, and the same reach
+        would otherwise let us delete a torrent somebody keeps for a private
+        tracker.
+    """
     logger = logging.getLogger(__name__)
     dlcommslogger = logging.getLogger('special.dlcomms')
-    dlcommslogger.debug(f'remove_torrent({hashid},{remove_data})')
+    dlcommslogger.debug(f'remove_torrent({hashid},{remove_data},{expect_category})')
     hashid = hashid.lower()
     qbclient = get_client()
     if not qbclient:
@@ -286,14 +344,10 @@ def remove_torrent(hashid, remove_data=False):
         # hash we matched on
         found = torrent_id(torrent, hashid)
         name = torrent.get('name', found)
-        label = CONFIG['QBITTORRENT_LABEL']
-        if remove_data and label and torrent.get('category') != label:
-            # a duplicate we took on can be a torrent someone else added and is
-            # still using. Dropping our copy of it is fair, deleting the files
-            # underneath it is not.
-            logger.warning(f"{name} is in category [{torrent.get('category')}], not [{label}]: "
-                           f"removing the torrent but leaving the data")
-            remove_data = False
+        mismatch = category_mismatch(torrent.get('category') or '', expect_category)
+        if mismatch:
+            logger.warning(f"Skipping deletion of {found}: {mismatch}")
+            return False
         remove = True
         if torrent.get('state') in ('uploading', 'stalledUP'):
             if not CONFIG.get_bool('SEED_WAIT'):
@@ -510,7 +564,7 @@ def handle_add_http_error(qbclient, dlcommslogger, err, hashid, label):
     return False, res, False
 
 
-def add_file(data, hashid, title, provider_options):
+def add_file(data, hashid, title, provider_options, label=None):
     """ Send torrent data to qBittorrent.
 
     :return: (torrent id, '', adopted) on success, or (False, message, False).
@@ -525,7 +579,7 @@ def add_file(data, hashid, title, provider_options):
     if not qbclient:
         return False, "Failed to login to qbittorrent", False
 
-    kwargs = get_args(provider_options)
+    kwargs = get_args(provider_options, label)
     dlcommslogger.debug(f'{kwargs}')
     try:
         result = qbclient.download_from_file(data, **kwargs)
@@ -538,7 +592,7 @@ def add_file(data, hashid, title, provider_options):
     return wait_for_torrent(qbclient, dlcommslogger, hashid, result, 'add_file')
 
 
-def add_torrent(link, hashid, provider_options):
+def add_torrent(link, hashid, provider_options, label=None):
     """ Send a url or magnet to qBittorrent.
 
     :return: (torrent id, '', adopted) on success, or (False, message, False).
@@ -554,7 +608,7 @@ def add_torrent(link, hashid, provider_options):
         return False, "Failed to login to qbittorrent", False
 
     hashid = hashid.lower()
-    kwargs = get_args(provider_options)
+    kwargs = get_args(provider_options, label)
     dlcommslogger.debug(f'{kwargs}')
     try:
         result = qbclient.download_from_link(link, **kwargs)
@@ -567,14 +621,22 @@ def add_torrent(link, hashid, provider_options):
     return wait_for_torrent(qbclient, dlcommslogger, hashid, result, 'add_torrent')
 
 
-def get_args(provider_options):
-    """ Get optional arguments based on configuration"""
+def get_args(provider_options, label=None):
+    """ Get optional arguments based on configuration
+
+    :param label: the category to file the torrent under, already resolved for
+        the library being searched. QBITTORRENT_LABEL can be a comma separated
+        list of per library categories, so the unresolved value is not usable as
+        a category on its own.
+    """
     args = {'paused': bool(CONFIG.get_bool('TORRENT_PAUSED'))}
     if CONFIG['QBITTORRENT_DIR']:
         args['savepath'] = CONFIG['QBITTORRENT_DIR']
 
-    if CONFIG['QBITTORRENT_LABEL']:
-        args['category'] = CONFIG['QBITTORRENT_LABEL']
+    if label is None:
+        label = CONFIG['QBITTORRENT_LABEL']
+    if label:
+        args['category'] = label
 
     if "seed_ratio" in provider_options:
         args['ratioLimit'] = provider_options["seed_ratio"]

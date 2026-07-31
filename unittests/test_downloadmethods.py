@@ -357,6 +357,12 @@ class TorDlMethodRejectionTest(LLTestCase):
                 return call.args[1]
         return None
 
+    def snatched_row_update(self):
+        for call in self.db.action.call_args_list:
+            if 'UPDATE wanted' in call.args[0] and 'Snatched' in call.args[0]:
+                return call.args[1]
+        return None
+
     def test_a_rejected_adopted_torrent_is_recorded_as_adopted(self):
         # delete_task looks the row up by DownloadID and Source, so a failed
         # row that carries neither reads as a torrent we added ourselves and
@@ -378,6 +384,47 @@ class TorDlMethodRejectionTest(LLTestCase):
         self.snatch()
 
         self.assertIn('new', self.failed_row_update())
+
+    def test_a_client_with_no_name_yet_still_gets_content_checked(self):
+        # transmission withholds a name until a torrent has made progress, so
+        # right after adding it returns nothing. Taking that as the title left
+        # tor_title empty, and an empty title skips the content checks.
+        self.qbittorrent.add_file.return_value = (TORRENT_HASH, '', False)
+        self.qbittorrent.get_name.return_value = ''
+
+        status, res = self.snatch()
+
+        self.check_contents.assert_called_once()
+        self.assertEqual(self.check_contents.call_args.args[3], 'The Book')
+        self.assertFalse(status)
+        self.assertIn('no ebook files', res)
+
+    def test_the_category_we_asked_for_is_recorded(self):
+        # what a later cleanup compares the torrent's own category against
+        self.qbittorrent.add_file.return_value = (TORRENT_HASH, '', False)
+
+        with mock.patch.object(downloadmethods, 'CONFIG',
+                               FakeConfig(DEL_FAILED=True, QBITTORRENT_LABEL='books')):
+            self.snatch()
+
+        self.assertIn('books', self.failed_row_update())
+        self.assertEqual(self.qbittorrent.add_file.call_args.kwargs['label'], 'books')
+
+    def test_a_per_library_label_list_is_resolved_before_it_is_sent(self):
+        # QBITTORRENT_LABEL can be a list, ebook first then audiobook. Sending
+        # it unresolved filed the torrent under the whole string.
+        self.qbittorrent.add_file.return_value = (TORRENT_HASH, '', False)
+        self.check_contents.return_value = ''  # let it get as far as Snatched
+
+        with mock.patch.object(downloadmethods, 'CONFIG',
+                               FakeConfig(QBITTORRENT_LABEL='books, audiobooks')), \
+                self.fetch(TORRENT_DATA):
+            downloadmethods.tor_dl_method(bookid='1', tor_title='The Book',
+                                          tor_url='https://provider.example/get/1.torrent',
+                                          library='AudioBook')
+
+        self.assertEqual(self.qbittorrent.add_file.call_args.kwargs['label'], 'audiobooks')
+        self.assertIn('audiobooks', self.snatched_row_update())
 
 
 if __name__ == '__main__':

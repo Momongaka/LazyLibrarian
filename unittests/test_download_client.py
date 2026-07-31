@@ -2,14 +2,14 @@
 #
 # Purpose:
 #   Test the content checks a download has to pass before it is accepted,
-#   in particular which files in a torrent get a say in what format it is,
-#   and what we are allowed to delete afterwards.
+#   in particular which files in a torrent get a say in what format it is.
+#   What we are allowed to delete afterwards is in test_download_ownership.
 
 import unittest
 from unittest import mock
 
 from lazylibrarian import download_client
-from lazylibrarian.download_client import check_contents, delete_task, is_archive_file
+from lazylibrarian.download_client import check_contents, is_archive_file
 from unittests.unittesthelpers import LLTestCase
 
 EBOOK_CONFIG = {
@@ -155,52 +155,29 @@ class CheckContentsTest(LLTestCase):
             rejected = check_contents('QBITTORRENT', 'deadbeef', 'ebook', 'a release')
         self.assertIn('too large', rejected)
 
+    def test_m4a_is_accepted_when_it_is_a_configured_audiobook_type(self):
+        with mock.patch.object(download_client, 'CONFIG',
+                               FakeConfig(AUDIOBOOK_TYPE='mp3, m4b, m4a', REJECT_AUDIO='')):
+            rejected = self.check(_files('The Book/The Book.m4a'), booktype='audiobook')
+        self.assertEqual(rejected, '')
+
+    def test_m4a_is_rejected_when_it_is_not_a_configured_audiobook_type(self):
+        # the shipped default is 'mp3, m4b', so an m4a release is a
+        # configuration question rather than anything wrong with the matching
+        rejected = self.check(_files('The Book/The Book.m4a'), booktype='audiobook')
+        self.assertIn('no audiobook files', rejected)
+        self.assertIn('m4a', rejected)
+
+    def test_extensions_match_whatever_case_they_arrive_in(self):
+        with mock.patch.object(download_client, 'CONFIG',
+                               FakeConfig(AUDIOBOOK_TYPE='mp3, m4b, m4a', REJECT_AUDIO='')):
+            rejected = self.check(_files('The Book/The Book.M4A'), booktype='audiobook')
+        self.assertEqual(rejected, '')
+
     def test_files_without_sizes_are_still_matched(self):
         # rtorrent and some deluge versions report a file list with no sizes
         self.files.return_value = [{'name': 'The Book/The Book.epub'}]
         self.assertEqual(check_contents('RTORRENT', 'deadbeef', 'ebook', 'a release'), '')
-
-
-class DeleteTaskTest(LLTestCase):
-
-    def setUp(self):
-        super().setUp()
-        self.set_loglevel(50)
-        self.db = mock.Mock()
-        mock.patch.object(download_client.database, 'DBConnection', return_value=self.db).start()
-        self.qbittorrent = mock.patch.object(download_client, 'qbittorrent').start()
-        self.transmission = mock.patch.object(download_client, 'transmission').start()
-        self.addCleanup(mock.patch.stopall)
-
-    def test_an_adopted_torrent_is_left_alone(self):
-        # it was already in the client when we asked for it, so the torrent and
-        # the files under it belong to whoever added it
-        self.db.select.return_value = [{'Origin': 'adopted'}]
-        delete_task('QBITTORRENT', 'deadbeef', True)
-        self.qbittorrent.remove_torrent.assert_not_called()
-
-    def test_an_adopted_transmission_torrent_is_left_alone(self):
-        self.db.select.return_value = [{'Origin': 'adopted'}]
-        delete_task('TRANSMISSION', 'deadbeef', True)
-        self.transmission.remove_torrent.assert_not_called()
-
-    def test_a_torrent_we_added_is_deleted_with_its_data(self):
-        self.db.select.return_value = [{'Origin': 'new'}]
-        delete_task('QBITTORRENT', 'deadbeef', True)
-        self.qbittorrent.remove_torrent.assert_called_once_with('deadbeef', True)
-
-    def test_a_torrent_shared_with_an_adopted_request_is_left_alone(self):
-        # the same torrent can serve an ebook and an audiobook request
-        self.db.select.return_value = [{'Origin': 'new'}, {'Origin': 'adopted'}]
-        delete_task('QBITTORRENT', 'deadbeef', True)
-        self.qbittorrent.remove_torrent.assert_not_called()
-
-    def test_an_unrecorded_origin_keeps_the_old_behaviour(self):
-        # snatched before we started recording this, or a client that cannot
-        # tell us: treat it as ours, which is what happened before
-        self.db.select.return_value = []
-        delete_task('QBITTORRENT', 'deadbeef', True)
-        self.qbittorrent.remove_torrent.assert_called_once_with('deadbeef', True)
 
 
 if __name__ == '__main__':

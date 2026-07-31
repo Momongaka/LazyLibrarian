@@ -187,7 +187,7 @@ def check_contents(source, downloadid, booktype, title):
                     elif "M" in str(fsize):
                         fsize = int(float(fsize.split("M")[0].strip()) * 1048576)
                     elif "K" in str(fsize):
-                        fsize = int(float(fsize.split("K")[0].strip() * 1024))
+                        fsize = int(float(fsize.split("K")[0].strip()) * 1024)
                     mb_size = check_int(fsize, 0) / 1048576.0
                     fsize = round(mb_size, 2)  # float to 2dp in Mb
                     if mb_size and not fsize:  # small file, don't round to zero
@@ -754,37 +754,91 @@ def get_download_progress(source, downloadid):
     return progress, finished
 
 
-def was_adopted(source, download_id):
-    """Return True if the client already held this download before we asked.
+# Only a torrent can turn out to be someone else's already: it is found by
+# infohash in a client that may hold anything. A usenet or direct download is
+# created by the request that asked for it and by nothing else.
+ADOPTABLE_SOURCES = ("QBITTORRENT", "TRANSMISSION", "UTORRENT", "RTORRENT",
+                     "DELUGEWEBUI", "DELUGERPC", "SYNOLOGY_TOR")
 
-    A torrent recognised by infohash was added by someone else, so both the
-    torrent and its data belong to them whatever we decide about our own
-    request. Anything we don't have a record for counts as ours, which is what
-    entries from before this was recorded are.
+
+def download_ownership(source, download_id):
+    """What we know about a downloader task, as (owned, category).
+
+    owned is True only where a record says we created the task ourselves.
+    Anything else counts as not ours: a task we took on from the client, a row
+    from before we recorded this, or no row at all. Removing a torrent someone
+    else added takes their seed with it and cannot be undone, so an absent
+    record has to mean no rather than yes.
+
+    One torrent can serve an ebook and an audiobook request at once, so a single
+    adopted row settles it for every row that shares the id.
+
+    category is the downloader category recorded when the request was snatched,
+    or None where we have no record of it. It is not proof of anything on its
+    own, it is what the torrent's current category gets compared against.
     """
     if not download_id:
-        return False
+        return False, None
     db = database.DBConnection()
     try:
-        # one torrent can serve more than one request, so any request that had
-        # to take on an existing torrent settles it for all of them
         entries = db.select(
-            "SELECT Origin from wanted WHERE DownloadID=? and Source=?",
+            "SELECT Origin, Category from wanted WHERE DownloadID=? and Source=?",
             (download_id, source),
         )
     finally:
         db.close()
-    return any(entry["Origin"] == "adopted" for entry in entries)
+    if not entries:
+        return False, None
+    if any(entry["Origin"] != "new" for entry in entries):
+        return False, None
+    # A row that recorded no category does not get a vote on what the category
+    # is. Rows written before the column existed have None here, and an install
+    # with no label of its own records an empty string, which is a different
+    # thing: one means we cannot check, the other means expect no category.
+    categories = {entry["Category"] for entry in entries if entry["Category"] is not None}
+    if len(categories) > 1:
+        # two requests recorded different categories for one torrent, so we
+        # cannot say which one it is filed under
+        return False, None
+    return True, categories.pop() if categories else None
+
+
+def may_delete_data(source, download_id):
+    """ Whether the files under a download are ours to delete.
+
+    Ownership comes from our own record, and for qBittorrent the torrent also
+    has to still be in the category we filed it under: someone can move a
+    torrent we added into a category they are keeping, and the files under it
+    then belong to that, not to us. Ask this before deleting anything, while
+    the torrent is still there to be asked about.
+    """
+    if source not in ADOPTABLE_SOURCES:
+        return True
+    owned, category = download_ownership(source, download_id)
+    if not owned:
+        return False
+    if source == "QBITTORRENT":
+        if qbittorrent.category_matches(download_id, category):
+            return True
+        # said no, or could not be reached to answer. Either way the files stay,
+        # so say so rather than leaving someone to wonder where they went.
+        logging.getLogger(__name__).warning(
+            f"Leaving the files for {download_id}: qBittorrent does not have it in "
+            f"category [{category}], or could not be asked")
+        return False
+    return True
 
 
 def delete_task(source, download_id, remove_data):
     logger = logging.getLogger(__name__)
-    if was_adopted(source, download_id):
-        # Removing the torrent would stop someone else's seed, and removing the
-        # data would take files we never downloaded. Our own request has already
-        # been marked failed or processed by the caller.
+    owned, category = download_ownership(source, download_id)
+    if source in ADOPTABLE_SOURCES and not owned:
+        # Removing the torrent would stop someone else's seed and removing the
+        # data would take files we never downloaded, so this needs a record
+        # saying the task is ours before it goes anywhere near the client. Our
+        # own request has already been marked failed or processed by the caller.
         logger.info(
-            f"Not deleting {download_id} from {source}: it was already there before we asked for it"
+            f"Not deleting {download_id} from {source}: nothing on record says we added it"
         )
         return True
     try:
@@ -803,7 +857,9 @@ def delete_task(source, download_id, remove_data):
         elif source == "RTORRENT":
             rtorrent.remove_torrent(download_id, remove_data)
         elif source == "QBITTORRENT":
-            qbittorrent.remove_torrent(download_id, remove_data)
+            # qBittorrent finds a torrent by hash whatever category it sits in,
+            # so it gets the category we recorded to check against as well
+            qbittorrent.remove_torrent(download_id, remove_data, expect_category=category)
         elif source == "TRANSMISSION":
             transmission.remove_torrent(download_id, remove_data)
         elif source.startswith("SYNOLOGY"):

@@ -45,7 +45,7 @@ from lazylibrarian.download_client import (
     get_download_folder,
     get_download_name,
     get_download_progress,
-    was_adopted,
+    may_delete_data,
 )
 from lazylibrarian.filesystem import (
     DIRS,
@@ -2375,6 +2375,10 @@ def _handle_seeding_status(
                 f"{book_state.download_title} not seeding at {book_state.source}"
             )
 
+        # asked while the torrent is still there to ask about, because the
+        # answer covers the files on disk further down as well as the task
+        may_delete = may_delete_data(book_state.source, book_state.download_id)
+
         if CONFIG.get_bool("DEL_COMPLETED"):
             logger.debug(
                 f"Removing seeding completed {book_state.download_title} from {book_state.source}"
@@ -2399,9 +2403,10 @@ def _handle_seeding_status(
         # NOTE it will silently fail if the torrent client downloadfolder is not local
         # e.g. in a docker or on a remote machine
         book_path = get_download_folder(book_state.source, book_state.download_id)
-        if was_adopted(book_state.source, book_state.download_id):
-            # the client already held this torrent when we asked for it, so
-            # book_path is someone else's download folder
+        if not may_delete:
+            # either nothing on record says we created this download, or the
+            # torrent has since been moved into a category someone is keeping,
+            # so book_path may well be someone else's download folder
             logger.debug("Not removing original files as the torrent was not ours")
         elif CONFIG.get_bool("DESTINATION_COPY"):
             logger.debug("Not removing original files as Keep Files is set")

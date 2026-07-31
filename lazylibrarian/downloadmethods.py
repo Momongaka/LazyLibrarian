@@ -669,6 +669,9 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
     # a torrent the client already held before we asked for it is not ours to
     # delete, however this request turns out
     adopted = False
+    # the downloader category we actually asked for, recorded so a later run can
+    # tell our torrent from one that happens to share the id
+    snatch_category = ''
 
     full_url = tor_url  # keep the url as stored in "wanted" table
     tor_url = make_unicode(tor_url)
@@ -883,17 +886,28 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
 
         if CONFIG.get_bool('TOR_DOWNLOADER_QBITTORRENT') and CONFIG['QBITTORRENT_HOST']:
             source = "QBITTORRENT"
+            # resolved here rather than read from config inside the client: the
+            # label can be a per library list, and the category we send is the
+            # one we have to recognise the torrent by later. Kept local so it
+            # cannot leak into another downloader's block.
+            qb_label = label or use_label(source, library)
             if torrent:
                 logger.debug(f"Sending {tor_title} data to qBittorrent")
                 download_id, res, adopted = qbittorrent.add_file(torrent, hashid, tor_title,
-                                                                 provider_options)
+                                                                 provider_options, label=qb_label)
             else:
                 logger.debug(f"Sending {tor_title} url to qBittorrent")
-                download_id, res, adopted = qbittorrent.add_torrent(tor_url, hashid, provider_options)
+                download_id, res, adopted = qbittorrent.add_torrent(tor_url, hashid,
+                                                                    provider_options, label=qb_label)
             # qBittorrent files v2 and hybrid torrents under their truncated v2
             # hash, so the id it returns is not always the hash we calculated
             if download_id:
-                tor_title = qbittorrent.get_name(download_id)
+                snatch_category = qb_label
+                # keep the name we already have if the client has none for us:
+                # an empty title skips the content checks further down
+                client_name = qbittorrent.get_name(download_id)
+                if client_name:
+                    tor_title = client_name
 
         if CONFIG.get_bool('TOR_DOWNLOADER_TRANSMISSION') and CONFIG['TRANSMISSION_HOST']:
             source = "TRANSMISSION"
@@ -917,9 +931,12 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
             if download_id:
                 # transmission returns its own int, but we store hashid instead
                 download_id = hashid
+                snatch_category = label
                 if label and not adopted:
                     transmission.set_label(download_id, label)
-                tor_title = transmission.get_torrent_name(download_id)
+                client_name = transmission.get_torrent_name(download_id)
+                if client_name:
+                    tor_title = client_name
                 tor_folder = transmission.get_torrent_folder(download_id)
                 tor_files = transmission.get_torrent_files(download_id)
                 logger.debug(f"{tor_title}: Folder is {tor_folder}")
@@ -1066,8 +1083,8 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
                         # delete_task looks the row up by them to find out
                         # whether the torrent was ours to delete
                         db.action("UPDATE wanted SET status='Failed',DLResult=?,Source=?,DownloadID=?,"
-                                  "Origin=? WHERE NZBurl=?",
-                                  (rejected, source, download_id, origin, full_url))
+                                  "Origin=?,Category=? WHERE NZBurl=?",
+                                  (rejected, source, download_id, origin, snatch_category, full_url))
                         if CONFIG.get_bool('DEL_FAILED'):
                             delete_task(source, download_id, True)
                         return False, rejected
@@ -1078,8 +1095,9 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
                 db.action("UPDATE books SET status='Snatched' WHERE BookID=?", (bookid,))
             elif library == 'AudioBook':
                 db.action("UPDATE books SET audiostatus='Snatched' WHERE BookID=?", (bookid,))
-            db.action("UPDATE wanted SET status='Snatched', Source=?, DownloadID=?, Origin=? WHERE NZBurl=?",
-                      (source, download_id, origin, full_url))
+            db.action("UPDATE wanted SET status='Snatched', Source=?, DownloadID=?, Origin=?, "
+                      "Category=? WHERE NZBurl=?",
+                      (source, download_id, origin, snatch_category, full_url))
             record_usage_data(f'Download/TOR/{source}/Success')
             db.close()
             return True, ''
