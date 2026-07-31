@@ -89,17 +89,37 @@ def add_torrent(link, directory=None, metainfo=None, provider_options=None):
     return False, res, False
 
 
+def metadata_ready(torrent):
+    """ Whether Transmission knows what is in a torrent yet.
+
+    A magnet has no name or file list until its metadata arrives, and until then
+    Transmission answers with the infohash as the name, so there is something to
+    wait for. What there is to wait for is the metadata, not the download:
+    metadataPercentComplete reaches 1 as soon as the torrent is understood,
+    while percentDone stays at 0 until pieces actually arrive. Waiting on the
+    latter withholds the name of a perfectly well described torrent that simply
+    has no peers yet.
+
+    A daemon too old to report metadataPercentComplete keeps the old answer,
+    where progress is the only signal available.
+    """
+    complete = torrent.get('metadataPercentComplete')
+    if isinstance(complete, (int, float)):
+        return complete >= 1
+    return bool(torrent.get('percentDone'))
+
+
 def get_torrent_name(torrentid):  # uses hashid
     logger = logging.getLogger(__name__)
     method = 'torrent-get'
-    arguments = {'ids': [torrentid], 'fields': ['name', 'percentDone', 'labels']}
+    arguments = {'ids': [torrentid], 'fields': ['name', 'metadataPercentComplete', 'percentDone', 'labels']}
     retries = 3
     while retries:
         response, _ = torrent_action(method, arguments)  # type: dict
         if response and len(response['arguments']['torrents']):
-            percentdone = response['arguments']['torrents'][0]['percentDone']
-            if percentdone:
-                return response['arguments']['torrents'][0]['name']
+            torrent = response['arguments']['torrents'][0]
+            if metadata_ready(torrent):
+                return torrent['name']
         else:
             logger.debug('get_torrent_name: No response from transmission')
             return ''
@@ -114,14 +134,14 @@ def get_torrent_name(torrentid):  # uses hashid
 def get_torrent_folder(torrentid):  # uses hashid
     logger = logging.getLogger(__name__)
     method = 'torrent-get'
-    arguments = {'ids': [torrentid], 'fields': ['downloadDir', 'percentDone']}
+    arguments = {'ids': [torrentid], 'fields': ['downloadDir', 'metadataPercentComplete', 'percentDone']}
     retries = 3
     while retries:
         response, _ = torrent_action(method, arguments)  # type: dict
         if response and len(response['arguments']['torrents']):
-            percentdone = response['arguments']['torrents'][0]['percentDone']
-            if percentdone:
-                return response['arguments']['torrents'][0]['downloadDir']
+            torrent = response['arguments']['torrents'][0]
+            if metadata_ready(torrent):
+                return torrent['downloadDir']
         else:
             logger.debug('get_torrent_folder: No response from transmission')
             return ''
@@ -136,19 +156,14 @@ def get_torrent_folder(torrentid):  # uses hashid
 def get_torrent_folder_by_id(torrentid):  # uses transmission id
     logger = logging.getLogger(__name__)
     method = 'torrent-get'
-    arguments = {'fields': ['name', 'percentDone', 'id']}
+    arguments = {'fields': ['name', 'metadataPercentComplete', 'percentDone', 'id']}
     retries = 3
     while retries:
         response, _ = torrent_action(method, arguments)  # type: dict
         if response and len(response['arguments']['torrents']):
-            tor = 0
-            while tor < len(response['arguments']['torrents']):
-                percentdone = response['arguments']['torrents'][tor]['percentDone']
-                if percentdone:
-                    torid = response['arguments']['torrents'][tor]['id']
-                    if str(torid) == str(torrentid):
-                        return response['arguments']['torrents'][tor]['name']
-                tor += 1
+            for torrent in response['arguments']['torrents']:
+                if metadata_ready(torrent) and str(torrent['id']) == str(torrentid):
+                    return torrent['name']
         else:
             logger.debug('get_torrent_folder: No response from transmission')
             return ''
