@@ -133,6 +133,7 @@ BASE_DEFAULTS: list[ConfigItem] = [
     ConfigBool('Logging', 'LOGREDACT', 0, onchange=LogConfig.change_loguiredact),
     ConfigBool('Logging', 'HOSTREDACT', 0),
     ConfigBool('Logging', 'LOGFILEREDACT', 0, onchange=LogConfig.change_logfileredact),
+    ConfigCSV('Logging', 'REDACT_PARAMS', '', force_lower=True),
     ConfigInt('Logging', 'LOGLEVEL', 20, onchange=LogConfig.change_root_loglevel),
     ConfigCSV('Logging', 'LOGSPECIALDEBUG', ''),
 
