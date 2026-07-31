@@ -829,6 +829,89 @@ def may_delete_data(source, download_id):
     return True
 
 
+def seed_requirement(provider):
+    """ What a provider asks us to seed to, as (ratio, minutes).
+
+    Zero for either means the provider does not ask for it. Both the torznab
+    and the rss provider groups can be a private tracker's, so both carry it.
+    """
+    if not provider:
+        return 0, 0
+    for group in ("TORZNAB", "RSS"):
+        for item in CONFIG.providers(group):
+            if provider in (item["NAME"], item["DISPNAME"], item["HOST"]):
+                return (item.get_item("SEED_RATIO").value,
+                        item.get_item("SEED_DURATION").value)
+    return 0, 0
+
+
+def seed_state(source, download_id):
+    """ What a download has seeded so far, as (ratio, seconds), or None where the
+    client cannot tell us. """
+    if source == "QBITTORRENT":
+        return qbittorrent.seed_state(download_id)
+    if source == "TRANSMISSION":
+        return transmission.seed_state(download_id)
+    return None
+
+
+def seeding_incomplete(source, download_id, providers):
+    """ Say why a torrent still owes its tracker some seeding, or return ''.
+
+    Setting a ratio or a time on the client only asks the client to stop at that
+    point, it does not stop us removing the torrent before it gets there, which
+    on a private tracker is how an account collects a hit and run. Nothing is
+    enforced unless the provider asks for something, so this is inert until
+    somebody fills the fields in.
+
+    A client that cannot report what it has seeded is not held up: refusing
+    forever on a client we cannot ask would leave downloads in place with no way
+    for the user to see why.
+    """
+    # one torrent can serve two requests from different providers, so it owes
+    # whatever the strictest of them asks for
+    want_ratio = want_minutes = 0
+    for provider in providers:
+        ratio, minutes = seed_requirement(provider)
+        want_ratio = max(want_ratio, ratio)
+        want_minutes = max(want_minutes, minutes)
+    if not want_ratio and not want_minutes:
+        return ''
+    state = seed_state(source, download_id)
+    if state is None:
+        return ''
+    ratio, seconds = state
+    # Either limit satisfies it. A tracker asking for both normally means one or
+    # the other will do, and more to the point the clients stop seeding at the
+    # first limit they reach, so waiting for both would hold a torrent forever
+    # that the client has already stopped: the second limit would never arrive.
+    if want_ratio and ratio >= want_ratio:
+        return ''
+    if want_minutes and seconds >= want_minutes * 60:
+        return ''
+    owing = []
+    if want_ratio:
+        owing.append(f"ratio {ratio:.2f} of {want_ratio:.2f}")
+    if want_minutes:
+        owing.append(f"{int(seconds / 60)} of {want_minutes} minutes seeded")
+    return ', '.join(owing)
+
+
+def download_providers(source, download_id):
+    """ Every provider that asked for this download, as recorded when snatched. """
+    if not download_id:
+        return []
+    db = database.DBConnection()
+    try:
+        entries = db.select(
+            "SELECT NZBprov from wanted WHERE DownloadID=? and Source=?",
+            (download_id, source),
+        )
+    finally:
+        db.close()
+    return [entry["NZBprov"] for entry in entries if entry["NZBprov"]]
+
+
 def delete_task(source, download_id, remove_data):
     logger = logging.getLogger(__name__)
     owned, category = download_ownership(source, download_id)
@@ -842,6 +925,13 @@ def delete_task(source, download_id, remove_data):
         )
         return True
     try:
+        if source in ADOPTABLE_SOURCES:
+            owing = seeding_incomplete(source, download_id,
+                                       download_providers(source, download_id))
+            if owing:
+                logger.info(f"Not deleting {download_id} from {source} yet: {owing}")
+                return False
+
         if source == "BLACKHOLE":
             logger.warning(
                 f"Download {download_id} has not been processed from blackhole"

@@ -1676,6 +1676,12 @@
                         <button role="testprov" class="button btn btn-xs btn-warning active" type="button" value="rss_${loop.index}"> Test</button>
                       </span>
                     </div>
+                    <div class="input-group">
+                      <span class="input-group-addon">Seed Ratio</span>
+                      <input type="number" id="rss_${loop.index}_seed_ratio" name="rss_${loop.index}_seed_ratio" value="${provider['SEED_RATIO']}" class="form-control" placeholder="0.0" step=any>
+                      <span class="input-group-addon">Seed Minutes</span>
+                      <input type="number" id="rss_${loop.index}_seed_duration" name="rss_${loop.index}_seed_duration" value="${provider['SEED_DURATION']}" class="form-control" placeholder="0">
+                    </div>
                   </div>
                   %endfor
                   </fieldset>
