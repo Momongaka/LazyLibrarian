@@ -55,11 +55,11 @@ class DBConnection:
             self.opened = 1
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.debug(str(e))
-            logger.debug(DIRS.get_dbfile())
-            logger.debug(str(os.stat(DIRS.get_dbfile())))
-            self.connection.close()
-            raise e
+            logger.warning(f"Database connection failed: {e}")
+            logger.warning(f"Database file: {DIRS.get_dbfile()}")
+            if getattr(self, 'connection', None):
+                self.connection.close()
+            raise
 
     def __del__(self):
         if hasattr(self, 'opened') and self.opened > 0:

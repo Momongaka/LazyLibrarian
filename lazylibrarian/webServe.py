@@ -515,7 +515,7 @@ class WebInterface:
                 clear_our_cookies()
             db.close()
         else:
-            perm = lazylibrarian.perm_admin
+            perm = 0
 
         if perm & required_perm:
             return
@@ -3054,7 +3054,8 @@ class WebInterface:
                 elif kwargs['whichStatus'] == 'Abandoned':
                     cmd += " and books.bookID in (" + ", ".join(f"'{w}'" for w in abandoned) + ")"
                 elif kwargs['whichStatus'] != 'All':
-                    cmd += " and " + status_type + "='" + kwargs['whichStatus'] + "'"
+                    cmd += f" and {status_type}=?"
+                    args.append(kwargs['whichStatus'])
 
             elif kwargs['source'] == "Books":
                 cmd += " and books.STATUS !='Skipped' AND books.STATUS !='Ignored'"
@@ -8376,11 +8377,13 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def generate_ro_api(self):
+        self.check_permitted(lazylibrarian.perm_admin)
         return self.generate_api(ro=True)
 
     @cherrypy.expose
     @require_auth()
     def generate_api(self, ro=False):
+        self.check_permitted(lazylibrarian.perm_admin)
         logger = logging.getLogger(__name__)
         api_key = hashlib.sha224(str(random.getrandbits(256)).encode('utf-8')).hexdigest()[0:32]
         if ro:
@@ -8869,6 +8872,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def test_ffmpeg(self, **kwargs):
+        self.check_permitted(lazylibrarian.perm_admin)
         thread_name("WEBSERVER")
         cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
         postprocesslogger = logging.getLogger('special.postprocess')
@@ -8904,6 +8908,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def test_ebook_convert(self, **kwargs):
+        self.check_permitted(lazylibrarian.perm_admin)
         thread_name("WEBSERVER")
         cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
         if 'prg' in kwargs and kwargs['prg']:
@@ -8924,6 +8929,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def test_calibredb(self, **kwargs):
+        self.check_permitted(lazylibrarian.perm_admin)
         thread_name("WEBSERVER")
         cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
         if 'prg' in kwargs and kwargs['prg']:
@@ -8936,6 +8942,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def test_preprocessor(self, **kwargs):
+        self.check_permitted(lazylibrarian.perm_admin)
         thread_name("WEBSERVER")
         cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
         if 'prg' in kwargs and kwargs['prg']:

@@ -108,7 +108,7 @@ class TestCache(LLTestCaseWithConfigandDIRS):
         elif args[0] == 'http://someourl.com/test-timeout':
             raise requests.exceptions.Timeout('Test timeout error')
         elif str(args[0]).startswith('http://someourl.com/torznab/'):
-            return MockResponse(f"torznab {kwargs['params']['timeout']}", 200)
+            return MockResponse(f"torznab {kwargs.get('timeout', 'none')}", 200)
 
         return MockResponse('', 404)
 

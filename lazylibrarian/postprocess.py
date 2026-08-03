@@ -1347,14 +1347,25 @@ def _should_delete_processed_files(book_path, download_dir) -> "tuple[bool, str]
         return False, book_path
 
     # Don't delete if path is the download root directory
-    if book_path == download_dir.rstrip(os.sep):
+    resolved_root = os.path.realpath(os.path.normpath(download_dir))
+    resolved_path = os.path.realpath(os.path.normpath(book_path))
+    if resolved_path == resolved_root:
         return False, book_path
 
+    # Reject paths outside the download root
+    deletion_path = resolved_path
+    if not deletion_path.startswith(resolved_root + os.sep):
+        if ".unpack" not in book_path:
+            return False, book_path
+        return True, book_path
+
     # Walk up subdirectories to find the top-level folder to delete
-    deletion_path = book_path
-    if deletion_path.startswith(download_dir) and ".unpack" not in deletion_path:
-        while os.path.dirname(deletion_path) != download_dir.rstrip(os.sep):
-            deletion_path = os.path.dirname(deletion_path)
+    if ".unpack" not in deletion_path:
+        while os.path.dirname(deletion_path) != resolved_root:
+            parent = os.path.dirname(deletion_path)
+            if parent == deletion_path:
+                break
+            deletion_path = parent
 
     return True, deletion_path
 
@@ -4086,7 +4097,7 @@ def _process_auto_add(src_path: str, book_type_enum: BookType = BookType.EBOOK):
         if book_type_enum == BookType.EBOOK and CONFIG.get_bool("ONE_FORMAT"):
             booktype_list = get_list(CONFIG["EBOOK_TYPE"])
             for bktype in booktype_list:
-                while not match:
+                if not match:
                     for _name in names:
                         name = enforce_str(_name)
                         extn = os.path.splitext(name)[1].lstrip(".")
