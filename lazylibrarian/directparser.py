@@ -110,9 +110,13 @@ def bok_login():
         logger.error(str(e))
         return None
 
+    if not zlib.isLoggedIn():
+        logger.error(f"Zlibrary login error. {zlib.login_status()}")
+        return None
+
     profile = zlib.getProfile()
     if not profile:
-        logger.error("Zlibrary invalid credentials")
+        logger.error("Zlibrary profile error")
         return None
     if not CONFIG['BOK_REMIX_USERID'] or not CONFIG['BOK_REMIX_USERKEY']:
         CONFIG['BOK_REMIX_USERID'] = profile["user"]["id"]
