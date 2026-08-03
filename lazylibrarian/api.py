@@ -2261,10 +2261,15 @@ class Api:
 
         if source in lazylibrarian.INFOSOURCES.keys():
             this_source = lazylibrarian.INFOSOURCES[source]
+            if not this_source['enabled']:
+                self.data = f"Source [{source}] is disabled"
+                return
             api = this_source['api']
             api = api()
             res = api.find_author_id(authorname=authorname)
             self.data = str(res)
+        else:
+            self.data = f"Invalid source [{source}]"
 
     def _findmissingauthorid(self, **kwargs):
         TELEMETRY.record_usage_data()
@@ -2278,11 +2283,15 @@ class Api:
         this_source = None
         if source in lazylibrarian.INFOSOURCES.keys():
             this_source = lazylibrarian.INFOSOURCES[source]
+            if not this_source['enabled']:
+                self.data = f"Source [{source}] is disabled"
+                return
+
             key = this_source['author_key']
             if key == 'authorid':  # not all providers have authorid
                 key = ''
         if not key:
-            self.data = f"Invalid or disabled source [{source}]"
+            self.data = f"Invalid source [{source}]"
             return
 
         authordata = db.select(f"SELECT AuthorName from authors WHERE {key}='' or {key} is null")
@@ -2304,15 +2313,24 @@ class Api:
             return
 
         authorname = format_author_name(kwargs['name'], postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
-        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
-            source = kwargs['source']
-        else:
-            source = CONFIG.get_str('BOOK_API')
-        api = source['api']
+        source = CONFIG.get_str('BOOK_API')
+        if 'source' in kwargs:
+            if  kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
+                source = kwargs['source']
+            else:
+                self.data = f"Invalid source [{source}]"
+                return
+
+        this_source = lazylibrarian.INFOSOURCES[source]
+        if not this_source['enabled']:
+            self.data = f"Source [{source}] is disabled"
+            return
+
+        api = this_source['api']
         api = api()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
-                                      name=f"API-{source['src']}RESULTS",
+                                      name=f"API-{this_source['src']}RESULTS",
                                       args=[f"<ll>{authorname}", myqueue])
         search_api.start()
         search_api.join()
@@ -2324,15 +2342,24 @@ class Api:
             self.data = 'Missing parameter: name'
             return
 
-        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
-            source = kwargs['source']
-        else:
-            source = CONFIG.get_str('BOOK_API')
-        api = source['api']
+        source = CONFIG.get_str('BOOK_API')
+        if 'source' in kwargs:
+            if  kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
+                source = kwargs['source']
+            else:
+                self.data = f"Invalid source [{source}]"
+                return
+
+        this_source = lazylibrarian.INFOSOURCES[source]
+        if not this_source['enabled']:
+            self.data = f"Source [{source}] is disabled"
+            return
+
+        api = this_source['api']
         api = api()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
-                                      name=f"API-{source['src']}RESULTS",
+                                      name=f"API-{this_source['src']}RESULTS",
                                       args=[f"{kwargs['name']}<ll>", myqueue])
         search_api.start()
         search_api.join()
@@ -2384,17 +2411,26 @@ class Api:
         if 'id' not in kwargs:
             self.data = 'Missing parameter: id'
             return
-        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
-            source = kwargs['source']
-        else:
-            source = CONFIG.get_str('BOOK_API')
-        api = source['api']
+        source = CONFIG.get_str('BOOK_API')
+        if 'source' in kwargs:
+            if  kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
+                source = kwargs['source']
+            else:
+                self.data = f"Invalid source [{source}]"
+                return
+
+        this_source = lazylibrarian.INFOSOURCES[source]
+        if not this_source['enabled']:
+            self.data = f"Source [{source}] is disabled"
+            return
+
+        api = this_source['api']
         api = api()
         if 'wait' in kwargs:
             self.data = api.add_bookid_to_db(kwargs['id'], None, None, "Added by API")
         else:
             threading.Thread(target=api.add_bookid_to_db,
-                             name=f"API-{source['src']}RESULTS",
+                             name=f"API-{this_source['src']}RESULTS",
                              args=[kwargs['id'], None, None, "Added by API"]).start()
 
     def _movebook(self, **kwargs):
