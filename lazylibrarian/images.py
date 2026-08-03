@@ -432,7 +432,7 @@ def get_book_cover(bookid=None, src=None, ignore=''):
             if src:
                 return None, src
 
-        cmd = ("select BookName,AuthorName,BookLink,BookISBN,books.gr_id,books.hc_id,books.ol_id,books.ra_id"
+        cmd = ("select BookName,AuthorName,BookLink,BookISBN,books.gr_id,books.hc_id,books.ol_id,books.ran_id"
                " from books,authors where bookID=? and books.AuthorID = authors.AuthorID")
         item = db.match(cmd, (bookid,))
         if not item:
@@ -458,9 +458,9 @@ def get_book_cover(bookid=None, src=None, ignore=''):
 
         # see if ranobedb has a cover
         if not src or src == 'ranobedb' and 'ranobedb' not in ignore:
-            if item['ra_id']:
+            if item['ran_id']:
                 r_a = lazylibrarian.ran.RanobeDB()
-                bookdict, _ = r_a.get_bookdict_for_bookid(item['ra_id'])
+                bookdict, _ = r_a.get_bookdict_for_bookid(item['ran_id'])
                 img = bookdict.get('bookimg')
                 if img:
                     coverlink = cache_bookimg(img, bookid, src, suffix='_ra', imgid=imgid)
