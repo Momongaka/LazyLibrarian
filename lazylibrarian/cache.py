@@ -132,18 +132,18 @@ def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
         else:
             timeout = CONFIG.get_int('HTTP_TIMEOUT')
 
-    payload = {}
+    req_kwargs = {}
     if timeout:
-        payload["timeout"] = timeout
+        req_kwargs["timeout"] = timeout
     if proxies:
-        payload["proxies"] = proxies
+        req_kwargs["proxies"] = proxies
     verify = False
     if url.startswith('https') and CONFIG.get_bool('SSL_VERIFY'):
         verify = True
         if CONFIG['SSL_CERTS']:
             verify = CONFIG['SSL_CERTS']
     try:
-        r = requests.get(url, verify=verify, params=payload, headers=headers)
+        r = requests.get(url, verify=verify, headers=headers, **req_kwargs)
     except requests.exceptions.TooManyRedirects as e:
         # This is to work around an oddity (bug??) with verified https goodreads requests
         # Goodreads sometimes redirects back to the same page in a loop using code 301,
@@ -155,7 +155,7 @@ def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
             return f"TooManyRedirects {str(e)}", False
         logger.debug(f"Retrying - got TooManyRedirects on {url}")
         try:
-            r = requests.get(url, verify=False, params=payload, headers=headers)
+            r = requests.get(url, verify=False, headers=headers, **req_kwargs)
             logger.debug(f"TooManyRedirects retry status code {r.status_code}")
         except Exception as e:
             return f"Exception {type(e).__name__}: {str(e)}", False
@@ -165,7 +165,7 @@ def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
             return f"Timeout {str(e)}", False
         logger.debug(f"fetch_url: retrying - got timeout on {url}")
         try:
-            r = requests.get(url, verify=verify, params=payload, headers=headers)
+            r = requests.get(url, verify=verify, headers=headers, **req_kwargs)
         except Exception as e:
             return f"Exception {type(e).__name__}: {str(e)}", False
     except Exception as e:
@@ -175,7 +175,7 @@ def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
         h = r.headers
         cachelogger.debug(f"{h}")
         logger.debug(f"{r.status_code} {len(r.content)}, {h.get('X-Cache')}")
-        r = requests.get(url, verify=verify, params=payload, headers=headers)
+        r = requests.get(url, verify=verify, headers=headers, **req_kwargs)
         logger.debug(f"Retry: {r.status_code} {len(r.content)}, {h.get('X-Cache')}")
     if r.status_code == 200:
         if raw:

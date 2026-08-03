@@ -185,7 +185,9 @@ def db_upgrade(current_version: int, restartjobs: bool = False):
                     logger.debug(f'Database integrity check: {result}')
                 else:
                     logger.error(f'Database integrity check: {result}')
-                    # should probably abort now if result is not "ok"
+                    logger.error('Aborting database upgrade on corrupt database')
+                    db.close()
+                    return
 
             if db_version < current_version:
                 if db_version:
