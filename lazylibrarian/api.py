@@ -2301,12 +2301,14 @@ class Api:
             return
 
         authorname = format_author_name(kwargs['name'], postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
-        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
-            source = kwargs['source']
+        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES:
+            source = lazylibrarian.INFOSOURCES[kwargs['source']]
+        elif CONFIG.get_str('BOOK_API') in lazylibrarian.INFOSOURCES:
+            source = lazylibrarian.INFOSOURCES[CONFIG.get_str('BOOK_API')]
         else:
-            source = CONFIG.get_str('BOOK_API')
-        api = source['api']
-        api = api()
+            self.data = 'No valid book API source configured'
+            return
+        api = source['api']()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
                                       name=f"API-{source['src']}RESULTS",
@@ -2321,12 +2323,14 @@ class Api:
             self.data = 'Missing parameter: name'
             return
 
-        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
-            source = kwargs['source']
+        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES:
+            source = lazylibrarian.INFOSOURCES[kwargs['source']]
+        elif CONFIG.get_str('BOOK_API') in lazylibrarian.INFOSOURCES:
+            source = lazylibrarian.INFOSOURCES[CONFIG.get_str('BOOK_API')]
         else:
-            source = CONFIG.get_str('BOOK_API')
-        api = source['api']
-        api = api()
+            self.data = 'No valid book API source configured'
+            return
+        api = source['api']()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
                                       name=f"API-{source['src']}RESULTS",
@@ -2381,12 +2385,14 @@ class Api:
         if 'id' not in kwargs:
             self.data = 'Missing parameter: id'
             return
-        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
-            source = kwargs['source']
+        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES:
+            source = lazylibrarian.INFOSOURCES[kwargs['source']]
+        elif CONFIG.get_str('BOOK_API') in lazylibrarian.INFOSOURCES:
+            source = lazylibrarian.INFOSOURCES[CONFIG.get_str('BOOK_API')]
         else:
-            source = CONFIG.get_str('BOOK_API')
-        api = source['api']
-        api = api()
+            self.data = 'No valid book API source configured'
+            return
+        api = source['api']()
         if 'wait' in kwargs:
             self.data = api.add_bookid_to_db(kwargs['id'], None, None, "Added by API")
         else:
@@ -2624,6 +2630,10 @@ class Api:
                 author_name = authorsearch[0]['AuthorName']
                 self.logger.debug(f"Removing all references to author: {author_name}")
                 db.action('DELETE from authors WHERE AuthorID=?', (kwargs['id'],))
+                orphans = db.select(
+                    'select seriesid from series except select seriesid from seriesauthors')
+                for orphan in orphans:
+                    db.action('DELETE from series where seriesid=?', (orphan[0],))
         finally:
             db.close()
 
