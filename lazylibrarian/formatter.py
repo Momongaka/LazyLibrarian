@@ -423,7 +423,7 @@ def date_format(datestr, formatstr="$Y-$m-$d", context='', datelang=''):
     if not datestr:
         return ''
 
-    if datestr.isdigit():  # just issue number or year
+    if check_int(datestr, 0, positive=False):  # just issue number or year, could be negative like -412 BC
         return datestr
 
     logger = logging.getLogger(__name__)
