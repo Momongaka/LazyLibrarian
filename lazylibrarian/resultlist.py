@@ -286,6 +286,19 @@ def find_best_result(resultlist, book, searchtype, source):
                                      f"not in preferred languages")
                         break
 
+            if not rejected:
+                result_words = set(get_list(result_title.lower()))
+                ebook_types = {t.lower() for t in get_list(CONFIG['EBOOK_TYPE'])}
+                audio_types = {t.lower() for t in get_list(CONFIG['AUDIOBOOK_TYPE'])}
+                format_tokens = result_words & (ebook_types | audio_types)
+                if format_tokens:
+                    if auxinfo == 'eBook' and format_tokens <= audio_types:
+                        rejected = True
+                        logger.debug(f"Rejecting {result_title}, format tokens are audiobook types")
+                    elif auxinfo == 'AudioBook' and format_tokens <= ebook_types:
+                        rejected = True
+                        logger.debug(f"Rejecting {result_title}, format tokens are ebook types")
+
             size_temp = check_int(res[f"{prefix}size"], 1000)  # Need to cater for when this is NONE (Issue 35)
             size = round(float(size_temp) / 1048576, 2)
 

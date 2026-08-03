@@ -66,6 +66,13 @@ class DBConnection:
             # If not, the DB object was partially initialised and isn't valud
             self.close()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def close(self):
         self.dbcommslogger.debug('close')
         with db_lock:

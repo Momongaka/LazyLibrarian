@@ -2663,6 +2663,10 @@ class Api:
                 author_name = authorsearch[0]['AuthorName']
                 self.logger.debug(f"Removing all references to author: {author_name}")
                 db.action('DELETE from authors WHERE AuthorID=?', (kwargs['id'],))
+                orphans = db.select(
+                    'select seriesid from series except select seriesid from seriesauthors')
+                for orphan in orphans:
+                    db.action('DELETE from series where seriesid=?', (orphan[0],))
         finally:
             db.close()
 

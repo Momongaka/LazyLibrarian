@@ -99,3 +99,31 @@ class LanguageRejectionTest(LLTestCaseWithStartup):
 
         match = find_best_result(results, book, "book", "tor")
         self.assertIsNotNone(match, "'Danish' in author name should not trigger rejection")
+
+
+class CrossFormatRejectionTest(LLTestCaseWithStartup):
+
+    def test_audiobook_format_rejected_for_ebook_search(self):
+        book = _make_book("Some Author", "Some Book", library="eBook")
+        results = [_make_tor_result("Some Author - Some Book m4b")]
+        match = find_best_result(results, book, "book", "tor")
+        self.assertIsNone(match, "m4b-only result should be rejected for eBook search")
+
+    def test_ebook_format_rejected_for_audiobook_search(self):
+        book = _make_book("Some Author", "Some Book", library="AudioBook")
+        results = [_make_tor_result("Some Author - Some Book epub")]
+        match = find_best_result(results, book, "audiobook", "tor")
+        self.assertIsNone(match, "epub-only result should be rejected for AudioBook search")
+
+    def test_correct_format_not_rejected(self):
+        """epub in an eBook search should pass the cross-format check."""
+        book = _make_book("Some Author", "Some Book", library="eBook")
+        results = [_make_tor_result("Some Author - Some Book epub")]
+        match = find_best_result(results, book, "book", "tor")
+        self.assertIsNotNone(match, "Correct format should not be rejected")
+
+    def test_no_format_tokens_not_rejected(self):
+        book = _make_book("Some Author", "Some Book", library="eBook")
+        results = [_make_tor_result("Some Author - Some Book")]
+        match = find_best_result(results, book, "book", "tor")
+        self.assertIsNotNone(match, "No format tokens should not trigger rejection")
