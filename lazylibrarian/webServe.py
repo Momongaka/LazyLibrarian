@@ -81,7 +81,7 @@ from lazylibrarian.config2 import CONFIG, wishlist_type
 from lazylibrarian.configtypes import ConfigBool
 from lazylibrarian.csvfile import dump_table, export_csv, import_csv, restore_table
 from lazylibrarian.dbupgrade import check_db
-from lazylibrarian.download_client import delete_task, get_download_progress
+from lazylibrarian.download_client import get_download_progress
 from lazylibrarian.downloadmethods import (
     direct_dl_method,
     irc_dl_method,
@@ -7665,10 +7665,9 @@ class WebInterface:
         db = database.DBConnection()
         if not status or status == 'all':
             logger.info("Clearing all history")
-            # also reset the Snatched status in book table to Wanted and cancel any failed download task
-            # ONLY reset if status is still Snatched, as maybe a later task succeeded
+            # Reset Snatched books back to Wanted so they get searched again
             status = "Snatched"
-            cmd = "SELECT BookID,AuxInfo,Source,DownloadID from wanted WHERE Status=?"
+            cmd = "SELECT BookID,AuxInfo from wanted WHERE Status=?"
             rowlist = db.select(cmd, (status,))
             for book in rowlist:
                 if book['BookID'] != 'unknown':
@@ -7678,15 +7677,12 @@ class WebInterface:
                     elif book['AuxInfo'] == 'AudioBook':
                         db.action("UPDATE books SET AudioStatus='Wanted' WHERE Bookid=? AND AudioStatus=?",
                                   (book['BookID'], status))
-                    if CONFIG.get_bool('DEL_FAILED'):
-                        delete_task(book['Source'], book['DownloadID'], True)
             db.action("DELETE from wanted")
         else:
             logger.info(f"Clearing history where status is {status}")
             if status == 'Snatched':
-                # also reset the Snatched status in book table to Wanted and cancel any failed download task
-                # ONLY reset if status is still Snatched, as maybe a later task succeeded
-                cmd = "SELECT BookID,AuxInfo,Source,DownloadID from wanted WHERE Status in ('Snatched', 'Matched')"
+                # Reset Snatched books back to Wanted so they get searched again
+                cmd = "SELECT BookID,AuxInfo from wanted WHERE Status in ('Snatched', 'Matched')"
                 rowlist = db.select(cmd)
                 for book in rowlist:
                     if book['BookID'] != 'unknown':
@@ -7696,8 +7692,6 @@ class WebInterface:
                         elif book['AuxInfo'] == 'AudioBook':
                             db.action("UPDATE books SET AudioStatus='Wanted' WHERE Bookid=? AND AudioStatus=?",
                                       (book['BookID'], status))
-                    if CONFIG.get_bool('DEL_FAILED'):
-                        delete_task(book['Source'], book['DownloadID'], True)
                 db.action("DELETE from wanted WHERE Status='Matched'")
             db.action('DELETE from wanted WHERE Status=?', (status,))
         db.close()
