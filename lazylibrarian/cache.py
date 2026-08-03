@@ -390,7 +390,7 @@ class XMLCacheRequest(CacheRequest):
     def name(cls) -> str:
         return "XML"
 
-    def read_from_cache(self, hashfilename: str) -> tuple[str | None, bool]:
+    def read_from_cache(self, hashfilename: str):
         with open(syspath(hashfilename), "rb") as cachefile:
             result = cachefile.read()
         source = None
@@ -414,14 +414,14 @@ class XMLCacheRequest(CacheRequest):
             if not self.cachelogger.isEnabledFor(logging.DEBUG):
                 remove_file(hashfilename)
             return None, False
-        return str(source), True
+        return source, True
 
     def fetch_data(self) -> tuple[str, bool]:
         gr_api_sleep()
         headers = {'User-Agent': get_user_agent(), 'Accept': 'application/xml', 'Accept-Language': 'en-US,en;q=0.5'}
         return fetch_url(self.url, raw=True, headers=headers)
 
-    def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> tuple[str | None, bool]:
+    def load_from_result_and_cache(self, result: str, filename: str, docache: bool):
         source = None
         result = make_bytestr(result)
         if not result:
@@ -434,7 +434,7 @@ class XMLCacheRequest(CacheRequest):
                     source = ElementTree.fromstring(result)
                     if not docache:
                         self.cachelogger.debug(f"Returning {len(source)} bytes xml uncached")
-                        return str(source), False
+                        return source, False
                 except UnicodeEncodeError:
                     # sometimes we get utf-16 data labelled as utf-8
                     try:
@@ -442,7 +442,7 @@ class XMLCacheRequest(CacheRequest):
                         source = ElementTree.fromstring(result)
                         if not docache:
                             self.cachelogger.debug(f"Returning {len(source)} bytes xml uncached")
-                            return str(source), False
+                            return source, False
                     except (ElementTree.ParseError, UnicodeEncodeError, UnicodeDecodeError):
                         self.logger.error(f"Error parsing xml from {self.url}")
                         source = None
@@ -457,7 +457,7 @@ class XMLCacheRequest(CacheRequest):
                     self.cachelogger.debug(f"Cached {len(result)} bytes xml {filename}")
             except Exception as e:
                 self.logger.error(f"Exception {e} writing {filename}")
-                return str(source), False
+                return source, False
         else:
             self.logger.error(f"Error getting xml data from {self.url}")
             if result:
@@ -469,7 +469,7 @@ class XMLCacheRequest(CacheRequest):
                 except Exception as e:
                     self.logger.error(f"Exception {e} writing {filename}.err")
             return None, False
-        return str(source), True
+        return source, True
 
 
 class HTMLCacheRequest(CacheRequest):
