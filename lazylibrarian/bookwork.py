@@ -1259,7 +1259,7 @@ def get_book_pubdate(bookid, refresh=False):
             bookdate = rootxml.find('book/work/original_publication_year').text
             if bookdate is None:
                 bookdate = '0000'
-            elif check_year(bookdate, past=1800, future=0):
+            elif check_int(bookdate, positive=False):  # changed to allow any year for classics
                 try:
                     mn = check_int(rootxml.find(
                         './book/work/original_publication_month').text, 0)

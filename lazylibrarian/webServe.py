@@ -2295,6 +2295,13 @@ class WebInterface:
             return None
         authid_key = 'AuthorID'
         bookid_key = 'BookID'
+
+        api_sources = []
+        for item in lazylibrarian.INFOSOURCES.keys():
+            # source, authorid, bookid
+            info_source = lazylibrarian.INFOSOURCES[item]
+            api_sources.append([info_source, info_source['author_key'], info_source['book_key']])
+
         for itm in api_sources:
             if CONFIG['BOOK_API'] == itm[0]:
                 authid_key = itm[1]
@@ -3746,6 +3753,12 @@ class WebInterface:
         if booktype is not None:
             preftype = booktype
 
+        api_sources = []
+        for item in lazylibrarian.INFOSOURCES.keys():
+            # source, authorid, bookid
+            info_source = lazylibrarian.INFOSOURCES[item]
+            api_sources.append([info_source, info_source['author_key'], info_source['book_key']])
+
         bookid_key = 'BookID'
         for itm in api_sources:
             if CONFIG['BOOK_API'] == itm[0]:
@@ -4198,9 +4211,9 @@ class WebInterface:
                         if bookdate == '0000':
                             edited += "Date "
                         else:
-                            # googlebooks sometimes gives yyyy, sometimes yyyy-mm, sometimes yyyy-mm-dd
-                            if len(bookdate) == 4:
-                                y = check_year(bookdate)
+                            # sometimes get yyyy, sometimes yyyy-mm, sometimes yyyy-mm-dd
+                            if len(bookdate) <= 4:  # eg 412 BC = -412 or 400 AD = 400
+                                y = check_int(bookdate, positive=False)
                             elif len(bookdate) in [7, 10]:
                                 y = check_year(bookdate[:4])
                                 if y and len(bookdate) == 7:
@@ -4237,6 +4250,8 @@ class WebInterface:
                         covertype = '_go'
                     elif cover == 'bing':
                         covertype = '_bi'
+                    elif cover == 'ranobedb':
+                        covertype = '_ra'
                     elif cover == 'cover':
                         covertype = '_cover'
                     if covertype:
