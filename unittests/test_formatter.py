@@ -6,6 +6,7 @@
 
 import lazylibrarian
 from lazylibrarian import formatter
+from lazylibrarian.config2 import CONFIG
 from unittests.unittesthelpers import LLTestCaseWithStartup
 
 
@@ -715,3 +716,34 @@ class FormatterTest(LLTestCaseWithStartup):
         ]
         for url, expected in data:
             self.assertEqual(formatter.redact_url(url), expected)
+
+    def test_redact_url_config_params(self):
+        """REDACT_PARAMS extends the built-in credential list."""
+        CONFIG['REDACT_PARAMS'] = 'jackett_apikey, custom_token'
+        formatter._credential_re_cache['params'] = None
+        try:
+            url = "http://indexer/dl?jackett_apikey=deadbeef&id=42"
+            result = formatter.redact_url(url)
+            self.assertNotIn('deadbeef', result)
+            self.assertIn('jackett_apikey=[redacted]', result)
+
+            url2 = "http://indexer/dl?custom_token=s3cr3t&t=get"
+            result2 = formatter.redact_url(url2)
+            self.assertNotIn('s3cr3t', result2)
+            self.assertIn('custom_token=[redacted]', result2)
+        finally:
+            CONFIG['REDACT_PARAMS'] = ''
+            formatter._credential_re_cache['params'] = None
+
+    def test_redact_url_path_secrets(self):
+        """Secrets from REDACTLIST are redacted in URL paths."""
+        original = getattr(CONFIG, 'REDACTLIST', [])
+        CONFIG.REDACTLIST = ['pkl4u83iz41up73m4zsigqsd4zyie50r']
+        try:
+            url = "http://192.168.1.10:9117/dl/strike/pkl4u83iz41up73m4zsigqsd4zyie50r/t.torrent"
+            result = formatter.redact_url(url)
+            self.assertNotIn('pkl4u83iz41up73m4zsigqsd4zyie50r', result)
+            self.assertIn('[redacted]', result)
+            self.assertIn('/dl/strike/', result)
+        finally:
+            CONFIG.REDACTLIST = original
