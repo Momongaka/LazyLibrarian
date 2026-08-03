@@ -501,21 +501,22 @@ class WebInterface:
     def check_permitted(required_perm):
         adminlogger = logging.getLogger('special.admin')
         userid = ''
-        cookie = cherrypy.request.cookie
-        if cookie and 'll_uid' in list(cookie.keys()):
-            cookie_userid = cookie['ll_uid'].value
-            perm = 0
-            db = database.DBConnection()
-            res = db.match('SELECT * from users where UserID=?', (cookie_userid,))
-            if res:
-                perm = check_int(res['Perms'], 0)
-                userid = res['UserID']
-            else:
-                adminlogger.debug(f"No match for userid [{cookie_userid}]")
-                clear_our_cookies()
-            db.close()
+        if not CONFIG.get_bool('USER_ACCOUNTS'):
+            perm = lazylibrarian.perm_admin
         else:
+            cookie = cherrypy.request.cookie
             perm = 0
+            if cookie and 'll_uid' in list(cookie.keys()):
+                cookie_userid = cookie['ll_uid'].value
+                db = database.DBConnection()
+                res = db.match('SELECT * from users where UserID=?', (cookie_userid,))
+                if res:
+                    perm = check_int(res['Perms'], 0)
+                    userid = res['UserID']
+                else:
+                    adminlogger.debug(f"No match for userid [{cookie_userid}]")
+                    clear_our_cookies()
+                db.close()
 
         if perm & required_perm:
             return
