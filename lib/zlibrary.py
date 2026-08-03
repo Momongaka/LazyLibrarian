@@ -27,6 +27,7 @@ class Zlibrary:
         self.__domain = "1lib.sk"
 
         self.__loggedin = False
+        self.__login_status = {}
         self.__headers = {
             "Content-Type": "application/x-www-form-urlencoded",
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/"
@@ -41,9 +42,12 @@ class Zlibrary:
         if domain is not None:
             self.__domain = domain
         if email is not None and password is not None:
-            self.login(email, password)
+            self.__login_status = self.login(email, password)
         elif remix_userid is not None and remix_userkey is not None:
-            self.loginWithToken(remix_userid, remix_userkey)
+            self.__login_status = self.loginWithToken(remix_userid, remix_userkey)
+
+    def login_status(self) -> dict[str, str]:
+        return self.__login_status
 
     def __setValues(self, response) -> dict[str, str]:
         if not response["success"]:
@@ -107,12 +111,16 @@ class Zlibrary:
             data.pop('languages')
             for cnt,item in enumerate(languages):
                 data[f'languages[{cnt}]'] = item.lower().strip()
-        return requests.post(
+        res = requests.post(
             "https://" + self.__domain + url,
             data=data,
             cookies=self.__cookies,
             headers=self.__headers,
-        ).json()
+        )
+        if res.status_code == 200:
+            return res.json()
+        else:
+            return {'success': False, 'status': res.status_code}
 
     def __makeGetRequest(
         self, url: str, params=None, cookies=None
@@ -123,12 +131,16 @@ class Zlibrary:
             print("Not logged in")
             return None
 
-        return requests.get(
+        res = requests.get(
             "https://" + self.__domain + url,
             params=params,
             cookies=self.__cookies if cookies is None else cookies,
             headers=self.__headers,
-        ).json()
+        )
+        if res.status_code == 200:
+            return res.json()
+        else:
+            return {'success': False, 'status': res.status_code}
 
     def getProfile(self) -> dict[str, str]:
         return self.__makeGetRequest("/eapi/user/profile")
