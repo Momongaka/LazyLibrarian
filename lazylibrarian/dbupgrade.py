@@ -126,8 +126,9 @@ from lazylibrarian.scheduling import SchedulerCommand, restart_jobs
 # 89 add dnb_id to book table
 # 90 add Origin to wanted table
 # 91 add Category to wanted table
+# 92 add ran_id to author and books table
 
-db_current_version = 91
+db_current_version = 92
 
 
 def upgrade_needed():
@@ -862,8 +863,8 @@ def check_db(upgradelog=None):
                 logger.warning(f"Found {len(no_bookid)} unknown bookids in reading lists")
             for item in no_bookid:
                 cmd = ('SELECT BookID from books WHERE ol_id=? OR gr_id=? OR lt_workid=? OR gb_id=?'
-                       ' or hc_id=? or dnb_id=?')
-                res = db.match(cmd, (item, item, item, item, item, item))
+                       ' or hc_id=? or dnb_id=? or ran_id=?')
+                res = db.match(cmd, (item, item, item, item, item, item, item))
                 if res:
                     logger.debug(f"Bookid {item} is now {res[0]}")
                     for table in reading_lists:
@@ -1531,6 +1532,17 @@ def update_schema(db, upgradelog):
         # empty for existing rows: we cannot know what was sent at the time, and
         # guessing would put someone else's torrent at risk
         db.action('ALTER TABLE wanted ADD COLUMN Category TEXT')
+
+    if not has_column(db, "books", "ran_id"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding ran_id column to books table'
+        upgradelog.write(f"{time.ctime()} v92: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE books ADD COLUMN ran_id TEXT')
+    if not has_column(db, "authors", "ran_id"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding ran_id column to authors table'
+        upgradelog.write(f"{time.ctime()} v92: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE authors ADD COLUMN ran_id TEXT')
 
     if changes:
         upgradelog.write(f"{time.ctime()} Changed: {changes}\n")

@@ -130,6 +130,8 @@ def send_to_calibre(booktype, global_name, folder, data):
                 identifier = f"google:{bookid}"
             elif data.get("dnb_id") == bookid:
                 identifier = f"dnb:{bookid}"
+            elif data.get("ran_id") == bookid:
+                identifier = f"RanobeDB:{bookid}"
         elif booktype == "comic":
             if bookid.startswith("CV"):
                 identifier = f"ComicVine:{bookid[2:]}"

@@ -132,6 +132,7 @@ class EbookMetadata(BookMetadata):
     ol_id: str = ""
     hc_id: str = ""
     dnb_id: str = ""
+    ran_id: str = ""
 
     def __post_init__(self):
         """Validate required fields"""
@@ -299,7 +300,7 @@ def prepare_book_metadata(book_id: str, book_type: str, db) -> EbookMetadata | N
     query = (
         "SELECT AuthorName,BookName,BookDesc,BookIsbn,BookImg,BookDate,BookLang,BookPub,BookRate,"
         "Requester,AudioRequester,BookGenre,Narrator,"
-        "books.gr_id,books.ol_id,books.gb_id,books.hc_id,books.dnb_id "
+        "books.gr_id,books.ol_id,books.gb_id,books.hc_id,books.dnb_id,books.ran_id "
         "from books,authors WHERE BookID=? and books.AuthorID = authors.AuthorID"
     )
     result = db.match(query, (book_id,))
@@ -352,6 +353,7 @@ def prepare_book_metadata(book_id: str, book_type: str, db) -> EbookMetadata | N
         ol_id=book_data.get("ol_id", ""),
         hc_id=book_data.get("hc_id", ""),
         dnb_id=book_data.get("dnb_id", ""),
+        ran_id=book_data.get("ran_id", ""),
     )
 
 
