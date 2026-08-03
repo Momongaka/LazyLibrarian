@@ -32,7 +32,7 @@ import requests
 import urllib3
 
 import lazylibrarian
-from lazylibrarian import database, dnb, gb, gr, hc, ol, versioncheck
+from lazylibrarian import database, dnb, gb, gr, hc, ol, ran, versioncheck
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.cache import fetch_url, init_hex_caches
 from lazylibrarian.cleanup import UNBUNDLER
@@ -340,6 +340,8 @@ class StartupLazyLibrarian:
                                 'api': gb.GoogleBooks, 'has_subs': 1},
                 'DNB': {'src': 'DN', 'author_key': 'authorid', 'book_key': 'dnb_id', 'enabled': 'DNB_API',
                         'api': dnb.DNB, 'has_subs': 1},
+                'RanobeDB': {'src': 'RA', 'author_key': 'ran_id', 'book_key': 'ran_id', 'enabled': 'RAN_API',
+                        'api': ran.RanobeDB, 'has_subs': 0},
                 }
         adminlogger = logging.getLogger('special.admin')
         adminlogger.debug(info_sources)

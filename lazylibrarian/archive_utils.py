@@ -35,6 +35,16 @@ from lazylibrarian.postprocess_utils import enforce_str
 from lazylibrarian.telemetry import TELEMETRY
 
 
+def _safe_extract_path(item, targetdir):
+    if os.path.__name__ == "ntpath":
+        dst = os.path.join(targetdir, item.replace("/", "\\"))
+    else:
+        dst = os.path.join(targetdir, item)
+    if not os.path.realpath(dst).startswith(os.path.realpath(targetdir) + os.sep):
+        return None
+    return dst
+
+
 def unpack_multipart(source_dir, download_dir, title):
     """
     Unpack multipart zip/rar files into one directory.
@@ -66,12 +76,11 @@ def unpack_multipart(source_dir, download_dir, title):
                     z = zipfile.ZipFile(archivename)
                     for item in z.namelist():
                         if not item.endswith("/"):
-                            # not if it's a directory
+                            dst = _safe_extract_path(item, targetdir)
+                            if not dst:
+                                logger.warning(f"Skipping {item}: path escapes target directory")
+                                continue
                             logger.debug(f"Extracting {item} to {targetdir}")
-                            if os.path.__name__ == "ntpath":
-                                dst = os.path.join(targetdir, item.replace("/", "\\"))
-                            else:
-                                dst = os.path.join(targetdir, item)
                             with open(syspath(dst), "wb") as d:
                                 d.write(z.read(item))
                 except Exception as e:
@@ -146,12 +155,11 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                 if is_valid_type(
                     item, extensions=CONFIG.get_all_types_list()
                 ) and not item.endswith("/"):
-                    # not if it's a directory
+                    dst = _safe_extract_path(item, targetdir)
+                    if not dst:
+                        logger.warning(f"Skipping {item}: path escapes target directory")
+                        continue
                     logger.debug(f"Extracting {item} to {targetdir}")
-                    if os.path.__name__ == "ntpath":
-                        dst = os.path.join(targetdir, item.replace("/", "\\"))
-                    else:
-                        dst = os.path.join(targetdir, item)
                     dstdir = os.path.dirname(dst)
                     if not make_dirs(dstdir):
                         logger.error(f"Failed to create directory {dstdir}")
@@ -183,11 +191,11 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                     item, extensions=CONFIG.get_all_types_list()
                 ) and not item.endswith("/"):
                     # not if it's a directory
+                    dst = _safe_extract_path(item, targetdir)
+                    if not dst:
+                        logger.warning(f"Skipping {item}: path escapes target directory")
+                        continue
                     logger.debug(f"Extracting {item} to {targetdir}")
-                    if os.path.__name__ == "ntpath":
-                        dst = os.path.join(targetdir, item.replace("/", "\\"))
-                    else:
-                        dst = os.path.join(targetdir, item)
                     dstdir = os.path.dirname(dst)
                     if not make_dirs(dstdir):
                         logger.error(f"Failed to create directory {dstdir}")
@@ -219,11 +227,11 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                     item, extensions=CONFIG.get_all_types_list()
                 ) and not item.endswith("/"):
                     # not if it's a directory
+                    dst = _safe_extract_path(item, targetdir)
+                    if not dst:
+                        logger.warning(f"Skipping {item}: path escapes target directory")
+                        continue
                     logger.debug(f"Extracting {item} to {targetdir}")
-                    if os.path.__name__ == "ntpath":
-                        dst = os.path.join(targetdir, item.replace("/", "\\"))
-                    else:
-                        dst = os.path.join(targetdir, item)
                     dstdir = os.path.dirname(dst)
                     if not make_dirs(dstdir):
                         logger.error(f"Failed to create directory {dstdir}")
@@ -264,11 +272,11 @@ def unpack_archive(archivename, download_dir, title, targetdir=""):
                 for entry in data:
                     for item in wanted_files:
                         if entry[0].filename.endswith(item):
+                            dst = _safe_extract_path(item, targetdir)
+                            if not dst:
+                                logger.warning(f"Skipping {item}: path escapes target directory")
+                                continue
                             logger.debug(f"Extracting {item} to {targetdir}")
-                            if os.path.__name__ == "ntpath":
-                                dst = os.path.join(targetdir, item.replace("/", "\\"))
-                            else:
-                                dst = os.path.join(targetdir, item)
                             dstdir = os.path.dirname(dst)
                             if not make_dirs(dstdir):
                                 logger.error(f"Failed to create directory {dstdir}")

@@ -81,7 +81,7 @@ from lazylibrarian.config2 import CONFIG, wishlist_type
 from lazylibrarian.configtypes import ConfigBool
 from lazylibrarian.csvfile import dump_table, export_csv, import_csv, restore_table
 from lazylibrarian.dbupgrade import check_db
-from lazylibrarian.download_client import delete_task, get_download_progress
+from lazylibrarian.download_client import get_download_progress
 from lazylibrarian.downloadmethods import (
     direct_dl_method,
     irc_dl_method,
@@ -515,7 +515,7 @@ class WebInterface:
                 clear_our_cookies()
             db.close()
         else:
-            perm = lazylibrarian.perm_admin
+            perm = 0
 
         if perm & required_perm:
             return
@@ -2295,6 +2295,13 @@ class WebInterface:
             return None
         authid_key = 'AuthorID'
         bookid_key = 'BookID'
+
+        api_sources = []
+        for item in lazylibrarian.INFOSOURCES.keys():
+            # source, authorid, bookid
+            info_source = lazylibrarian.INFOSOURCES[item]
+            api_sources.append([info_source, info_source['author_key'], info_source['book_key']])
+
         for itm in api_sources:
             if CONFIG['BOOK_API'] == itm[0]:
                 authid_key = itm[1]
@@ -3054,7 +3061,8 @@ class WebInterface:
                 elif kwargs['whichStatus'] == 'Abandoned':
                     cmd += " and books.bookID in (" + ", ".join(f"'{w}'" for w in abandoned) + ")"
                 elif kwargs['whichStatus'] != 'All':
-                    cmd += " and " + status_type + "='" + kwargs['whichStatus'] + "'"
+                    cmd += f" and {status_type}=?"
+                    args.append(kwargs['whichStatus'])
 
             elif kwargs['source'] == "Books":
                 cmd += " and books.STATUS !='Skipped' AND books.STATUS !='Ignored'"
@@ -3745,6 +3753,12 @@ class WebInterface:
         if booktype is not None:
             preftype = booktype
 
+        api_sources = []
+        for item in lazylibrarian.INFOSOURCES.keys():
+            # source, authorid, bookid
+            info_source = lazylibrarian.INFOSOURCES[item]
+            api_sources.append([info_source, info_source['author_key'], info_source['book_key']])
+
         bookid_key = 'BookID'
         for itm in api_sources:
             if CONFIG['BOOK_API'] == itm[0]:
@@ -4197,9 +4211,9 @@ class WebInterface:
                         if bookdate == '0000':
                             edited += "Date "
                         else:
-                            # googlebooks sometimes gives yyyy, sometimes yyyy-mm, sometimes yyyy-mm-dd
-                            if len(bookdate) == 4:
-                                y = check_year(bookdate)
+                            # sometimes get yyyy, sometimes yyyy-mm, sometimes yyyy-mm-dd
+                            if len(bookdate) <= 4:  # eg 412 BC = -412 or 400 AD = 400
+                                y = check_int(bookdate, positive=False)
                             elif len(bookdate) in [7, 10]:
                                 y = check_year(bookdate[:4])
                                 if y and len(bookdate) == 7:
@@ -4236,6 +4250,8 @@ class WebInterface:
                         covertype = '_go'
                     elif cover == 'bing':
                         covertype = '_bi'
+                    elif cover == 'ranobedb':
+                        covertype = '_ra'
                     elif cover == 'cover':
                         covertype = '_cover'
                     if covertype:
@@ -7665,10 +7681,9 @@ class WebInterface:
         db = database.DBConnection()
         if not status or status == 'all':
             logger.info("Clearing all history")
-            # also reset the Snatched status in book table to Wanted and cancel any failed download task
-            # ONLY reset if status is still Snatched, as maybe a later task succeeded
+            # Reset Snatched books back to Wanted so they get searched again
             status = "Snatched"
-            cmd = "SELECT BookID,AuxInfo,Source,DownloadID from wanted WHERE Status=?"
+            cmd = "SELECT BookID,AuxInfo from wanted WHERE Status=?"
             rowlist = db.select(cmd, (status,))
             for book in rowlist:
                 if book['BookID'] != 'unknown':
@@ -7678,15 +7693,12 @@ class WebInterface:
                     elif book['AuxInfo'] == 'AudioBook':
                         db.action("UPDATE books SET AudioStatus='Wanted' WHERE Bookid=? AND AudioStatus=?",
                                   (book['BookID'], status))
-                    if CONFIG.get_bool('DEL_FAILED'):
-                        delete_task(book['Source'], book['DownloadID'], True)
             db.action("DELETE from wanted")
         else:
             logger.info(f"Clearing history where status is {status}")
             if status == 'Snatched':
-                # also reset the Snatched status in book table to Wanted and cancel any failed download task
-                # ONLY reset if status is still Snatched, as maybe a later task succeeded
-                cmd = "SELECT BookID,AuxInfo,Source,DownloadID from wanted WHERE Status in ('Snatched', 'Matched')"
+                # Reset Snatched books back to Wanted so they get searched again
+                cmd = "SELECT BookID,AuxInfo from wanted WHERE Status in ('Snatched', 'Matched')"
                 rowlist = db.select(cmd)
                 for book in rowlist:
                     if book['BookID'] != 'unknown':
@@ -7696,8 +7708,6 @@ class WebInterface:
                         elif book['AuxInfo'] == 'AudioBook':
                             db.action("UPDATE books SET AudioStatus='Wanted' WHERE Bookid=? AND AudioStatus=?",
                                       (book['BookID'], status))
-                    if CONFIG.get_bool('DEL_FAILED'):
-                        delete_task(book['Source'], book['DownloadID'], True)
                 db.action("DELETE from wanted WHERE Status='Matched'")
             db.action('DELETE from wanted WHERE Status=?', (status,))
         db.close()
@@ -8382,11 +8392,13 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def generate_ro_api(self):
+        self.check_permitted(lazylibrarian.perm_admin)
         return self.generate_api(ro=True)
 
     @cherrypy.expose
     @require_auth()
     def generate_api(self, ro=False):
+        self.check_permitted(lazylibrarian.perm_admin)
         logger = logging.getLogger(__name__)
         api_key = hashlib.sha224(str(random.getrandbits(256)).encode('utf-8')).hexdigest()[0:32]
         if ro:
@@ -8875,6 +8887,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def test_ffmpeg(self, **kwargs):
+        self.check_permitted(lazylibrarian.perm_admin)
         thread_name("WEBSERVER")
         cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
         postprocesslogger = logging.getLogger('special.postprocess')
@@ -8910,6 +8923,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def test_ebook_convert(self, **kwargs):
+        self.check_permitted(lazylibrarian.perm_admin)
         thread_name("WEBSERVER")
         cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
         if 'prg' in kwargs and kwargs['prg']:
@@ -8930,6 +8944,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def test_calibredb(self, **kwargs):
+        self.check_permitted(lazylibrarian.perm_admin)
         thread_name("WEBSERVER")
         cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
         if 'prg' in kwargs and kwargs['prg']:
@@ -8942,6 +8957,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def test_preprocessor(self, **kwargs):
+        self.check_permitted(lazylibrarian.perm_admin)
         thread_name("WEBSERVER")
         cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
         if 'prg' in kwargs and kwargs['prg']:

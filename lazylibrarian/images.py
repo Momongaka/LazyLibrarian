@@ -335,15 +335,16 @@ def cache_bookimg(img, bookid, src, suffix='', imgid=None):
 
 def get_book_cover(bookid=None, src=None, ignore=''):
     """ Return link to a local file containing a book cover image for a bookid, and which source used.
-        Try 1. Local file cached from goodreads/googlebooks when book was imported
-            2. cover.jpg if we have the book
-            3. LibraryThing cover image (if you have a dev key)
-            5. Goodreads search (if book was imported from goodreads)
-            6. OpenLibrary image
-            7. Google isbn search (if google has a link to book for sale)
-            8. Google images search (if lazylibrarian config allows)
+        Try  Local file cached from goodreads/googlebooks when book was imported
+             cover.jpg if we have the book
+             LibraryThing cover image (if you have a dev key)
+             Goodreads search (if book was imported from goodreads)
+             OpenLibrary image
+             RanobeDB image (if book was imported from ranobedb)
+             Google isbn search (if google has a link to book for sale)
+             Google images search (if lazylibrarian config allows)
 
-        src = cache, cover, goodreads, librarything, googleisbn, openlibrary, googleimage
+        src = cache, cover, goodreads, librarything, googleisbn, openlibrary, googleimage, ranobedb
         ignore = csv of sources to skip
         Return None if no cover available. """
     logger = logging.getLogger(__name__)
@@ -431,7 +432,7 @@ def get_book_cover(bookid=None, src=None, ignore=''):
             if src:
                 return None, src
 
-        cmd = ("select BookName,AuthorName,BookLink,BookISBN,books.gr_id,books.hc_id,books.ol_id"
+        cmd = ("select BookName,AuthorName,BookLink,BookISBN,books.gr_id,books.hc_id,books.ol_id,books.ra_id"
                " from books,authors where bookID=? and books.AuthorID = authors.AuthorID")
         item = db.match(cmd, (bookid,))
         if not item:
@@ -452,8 +453,20 @@ def get_book_cover(bookid=None, src=None, ignore=''):
                     if coverlink:
                         return coverlink, 'hardcover'
                 logger.debug(f"No img in hardcover bookdict {bookdict}")
-            else:
-                logger.debug(f"No hc_id in {dict(item)}")
+            if src:
+                return None, src
+
+        # see if ranobedb has a cover
+        if not src or src == 'ranobedb' and 'ranobedb' not in ignore:
+            if item['ra_id']:
+                r_a = lazylibrarian.ran.RanobeDB()
+                bookdict, _ = r_a.get_bookdict_for_bookid(item['ra_id'])
+                img = bookdict.get('bookimg')
+                if img:
+                    coverlink = cache_bookimg(img, bookid, src, suffix='_ra', imgid=imgid)
+                    if coverlink:
+                        return coverlink, 'ranobedb'
+                logger.debug(f"No img in ranobedb bookdict {bookdict}")
             if src:
                 return None, src
 
@@ -641,7 +654,11 @@ def get_author_image(authorid=None, refresh=False, max_num=1, ignore=''):
         return None
     db = database.DBConnection()
     try:
-        author = db.match('select AuthorName,AuthorIMG,hc_id,ol_id,gr_id from authors where AuthorID=?', (authorid,))
+        keys = lazylibrarian.importer.author_keys()
+        cmd = "SELECT * from authors WHERE AuthorID=?"
+        for k in keys:
+            cmd += f" or {k}=?"
+        author = db.match(cmd, tuple([str(authorid)] * (len(keys) + 1)))
     finally:
         db.close()
 
@@ -654,7 +671,7 @@ def get_author_image(authorid=None, refresh=False, max_num=1, ignore=''):
     got_images = 0
     cnt = 0
 
-    icrawlerdir = os.path.join(cachedir, 'icrawler', authorid)
+    icrawlerdir = os.path.join(cachedir, 'icrawler', str(authorid))
     rmtree(icrawlerdir, ignore_errors=True)
     if not os.path.isdir(icrawlerdir):
         os.mkdir(icrawlerdir)
@@ -759,14 +776,14 @@ def get_author_image(authorid=None, refresh=False, max_num=1, ignore=''):
                         else:
                             cnt = 0
         if max_num == 1:
-            if cnt:
+            if got_images:
                 img = os.path.join(icrawlerdir, os.listdir(icrawlerdir)[0])
                 coverlink, success, _ = cache_img(ImageType.AUTHOR, img_id(), img, refresh=refresh)
                 if success:
                     logger.debug(f"Cached {crawler_name} image for {authorname}")
                     return coverlink
             else:
-                logger.debug(f"No images found for {authorname}")
+                logger.debug(f"No {crawler_name} images found for {authorname}")
             rmtree(icrawlerdir, ignore_errors=True)
         else:
             return icrawlerdir

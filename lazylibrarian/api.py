@@ -11,8 +11,10 @@
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
 
+import ast
 import configparser
 import contextlib
+import hmac
 import json
 import logging
 import os
@@ -383,7 +385,8 @@ class Api:
                                                                  'Message': 'Missing parameter: apikey'}}
             return
 
-        if kwargs['apikey'] != CONFIG.get_str('API_KEY') and kwargs['apikey'] != CONFIG.get_str('API_RO_KEY'):
+        if not hmac.compare_digest(kwargs['apikey'], CONFIG.get_str('API_KEY')) and \
+                not hmac.compare_digest(kwargs['apikey'], CONFIG.get_str('API_RO_KEY')):
             self.data = {'Success': False, 'Data': '', 'Error': {'Code': 401, 'Message': 'Incorrect API key'}}
             return
         self.apikey = kwargs.pop('apikey')
@@ -398,7 +401,8 @@ class Api:
                          'Error': {'Code': 405, 'Message': f"Unknown command: {kwargs['cmd']}, try cmd=help"}}
             return
 
-        if get_case_insensitive_key_value(cmd_dict, kwargs['cmd'])[0] != 0 and self.apikey != CONFIG.get_str('API_KEY'):
+        if get_case_insensitive_key_value(cmd_dict, kwargs['cmd'])[0] != 0 and \
+                not hmac.compare_digest(self.apikey, CONFIG.get_str('API_KEY')):
             self.data = {'Success': False, 'Data': '',
                          'Error': {'Code': 405,
                                    'Message': f"Command: {kwargs['cmd']} "
@@ -498,8 +502,7 @@ class Api:
                                                                  'Message': 'Missing parameter: title'}}
             return
         db = database.DBConnection()
-        cmd = f"SELECT issueid,issuefile from issues WHERE title=\'{kwargs['title']}\'"
-        issues = db.select(cmd)
+        issues = db.select("SELECT issueid,issuefile from issues WHERE title=?", (kwargs['title'],))
         db.close()
 
         if not issues:
@@ -1437,7 +1440,7 @@ class Api:
         if 'table' not in kwargs:
             self.data = 'Missing parameter: table'
             return
-        valid = ['users', 'magazines']
+        valid = ['magazines']
         if kwargs['table'] not in valid:
             self.data = f'Invalid table. Only {str(valid)}'
             return
@@ -2258,10 +2261,15 @@ class Api:
 
         if source in lazylibrarian.INFOSOURCES.keys():
             this_source = lazylibrarian.INFOSOURCES[source]
+            if not this_source['enabled']:
+                self.data = f"Source [{source}] is disabled"
+                return
             api = this_source['api']
             api = api()
             res = api.find_author_id(authorname=authorname)
             self.data = str(res)
+        else:
+            self.data = f"Invalid source [{source}]"
 
     def _findmissingauthorid(self, **kwargs):
         TELEMETRY.record_usage_data()
@@ -2275,11 +2283,15 @@ class Api:
         this_source = None
         if source in lazylibrarian.INFOSOURCES.keys():
             this_source = lazylibrarian.INFOSOURCES[source]
+            if not this_source['enabled']:
+                self.data = f"Source [{source}] is disabled"
+                return
+
             key = this_source['author_key']
             if key == 'authorid':  # not all providers have authorid
                 key = ''
         if not key:
-            self.data = f"Invalid or disabled source [{source}]"
+            self.data = f"Invalid source [{source}]"
             return
 
         authordata = db.select(f"SELECT AuthorName from authors WHERE {key}='' or {key} is null")
@@ -2301,17 +2313,24 @@ class Api:
             return
 
         authorname = format_author_name(kwargs['name'], postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
-        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES:
-            source = lazylibrarian.INFOSOURCES[kwargs['source']]
-        elif CONFIG.get_str('BOOK_API') in lazylibrarian.INFOSOURCES:
-            source = lazylibrarian.INFOSOURCES[CONFIG.get_str('BOOK_API')]
-        else:
-            self.data = 'No valid book API source configured'
+        source = CONFIG.get_str('BOOK_API')
+        if 'source' in kwargs:
+            if  kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
+                source = kwargs['source']
+            else:
+                self.data = f"Invalid source [{source}]"
+                return
+
+        this_source = lazylibrarian.INFOSOURCES[source]
+        if not this_source['enabled']:
+            self.data = f"Source [{source}] is disabled"
             return
-        api = source['api']()
+
+        api = this_source['api']
+        api = api()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
-                                      name=f"API-{source['src']}RESULTS",
+                                      name=f"API-{this_source['src']}RESULTS",
                                       args=[f"<ll>{authorname}", myqueue])
         search_api.start()
         search_api.join()
@@ -2323,17 +2342,24 @@ class Api:
             self.data = 'Missing parameter: name'
             return
 
-        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES:
-            source = lazylibrarian.INFOSOURCES[kwargs['source']]
-        elif CONFIG.get_str('BOOK_API') in lazylibrarian.INFOSOURCES:
-            source = lazylibrarian.INFOSOURCES[CONFIG.get_str('BOOK_API')]
-        else:
-            self.data = 'No valid book API source configured'
+        source = CONFIG.get_str('BOOK_API')
+        if 'source' in kwargs:
+            if  kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
+                source = kwargs['source']
+            else:
+                self.data = f"Invalid source [{source}]"
+                return
+
+        this_source = lazylibrarian.INFOSOURCES[source]
+        if not this_source['enabled']:
+            self.data = f"Source [{source}] is disabled"
             return
-        api = source['api']()
+
+        api = this_source['api']
+        api = api()
         myqueue = Queue()
         search_api = threading.Thread(target=api.find_results,
-                                      name=f"API-{source['src']}RESULTS",
+                                      name=f"API-{this_source['src']}RESULTS",
                                       args=[f"{kwargs['name']}<ll>", myqueue])
         search_api.start()
         search_api.join()
@@ -2385,19 +2411,26 @@ class Api:
         if 'id' not in kwargs:
             self.data = 'Missing parameter: id'
             return
-        if 'source' in kwargs and kwargs['source'] in lazylibrarian.INFOSOURCES:
-            source = lazylibrarian.INFOSOURCES[kwargs['source']]
-        elif CONFIG.get_str('BOOK_API') in lazylibrarian.INFOSOURCES:
-            source = lazylibrarian.INFOSOURCES[CONFIG.get_str('BOOK_API')]
-        else:
-            self.data = 'No valid book API source configured'
+        source = CONFIG.get_str('BOOK_API')
+        if 'source' in kwargs:
+            if  kwargs['source'] in lazylibrarian.INFOSOURCES.keys():
+                source = kwargs['source']
+            else:
+                self.data = f"Invalid source [{source}]"
+                return
+
+        this_source = lazylibrarian.INFOSOURCES[source]
+        if not this_source['enabled']:
+            self.data = f"Source [{source}] is disabled"
             return
-        api = source['api']()
+
+        api = this_source['api']
+        api = api()
         if 'wait' in kwargs:
             self.data = api.add_bookid_to_db(kwargs['id'], None, None, "Added by API")
         else:
             threading.Thread(target=api.add_bookid_to_db,
-                             name=f"API-{source['src']}RESULTS",
+                             name=f"API-{this_source['src']}RESULTS",
                              args=[kwargs['id'], None, None, "Added by API"]).start()
 
     def _movebook(self, **kwargs):
@@ -2746,9 +2779,9 @@ class Api:
         TELEMETRY.record_usage_data()
         db = database.DBConnection()
         try:
-            dbentry = db.match(f'SELECT {table}ID from {table}s WHERE {table}ID={itemid}')
+            dbentry = db.match(f'SELECT {table}ID from {table}s WHERE {table}ID=?', (itemid,))
             if dbentry:
-                db.action(f"UPDATE {table}s SET Manual='{state}' WHERE {table}ID={itemid}")
+                db.action(f"UPDATE {table}s SET Manual=? WHERE {table}ID=?", (state, itemid))
             else:
                 self.data = f"{table}ID {itemid} not found"
         finally:
@@ -2789,6 +2822,9 @@ class Api:
     def _setimage(self, table, itemid, img):
         TELEMETRY.record_usage_data()
         msg = f"{table} Image [{img}] rejected"
+        if os.sep in str(itemid) or '/' in str(itemid) or '..' in str(itemid):
+            self.data = msg + " invalid ID"
+            return
         # Cache file image
         if path_isfile(img):
             extn = splitext(img)[1].lower()
@@ -2823,10 +2859,10 @@ class Api:
 
         db = database.DBConnection()
         try:
-            dbentry = db.match(f"SELECT {table}ID from {table}s WHERE {table}ID={itemid}")
+            dbentry = db.match(f"SELECT {table}ID from {table}s WHERE {table}ID=?", (itemid,))
             if dbentry:
                 subcache = 'cache' + os.path.sep + itemid + '.jpg'
-                db.action(f"UPDATE {table}s SET {table}Img='{subcache}' WHERE {table}ID={itemid}")
+                db.action(f"UPDATE {table}s SET {table}Img=? WHERE {table}ID=?", (subcache, itemid))
             else:
                 self.data = f"{table}ID {itemid} not found"
         finally:
@@ -3137,8 +3173,8 @@ class Api:
             tags = {}
         else:
             try:
-                tags = eval(kwargs['tags'])
-            except SyntaxError:
+                tags = ast.literal_eval(kwargs['tags'])
+            except (ValueError, SyntaxError):
                 tags = None
             if not isinstance(tags, dict):
                 self.data = "Invalid tags dictionary"

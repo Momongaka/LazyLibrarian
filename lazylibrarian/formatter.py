@@ -204,32 +204,75 @@ def url_fix(s, charset='utf-8'):
 # Query parameters that carry a credential of some sort. Private trackers and
 # indexers put passkeys and api keys straight in the download url, so a url
 # can't be logged as-is.
-CREDENTIAL_PARAMS = ('apikey', 'api_key', 'auth', 'authkey', 'key', 'passkey', 'passwd', 'password',
-                     'rss_key', 'rsskey', 'secret', 'session', 'sessionid', 'token', 'torrent_pass')
+_DEFAULT_CREDENTIAL_PARAMS = (
+    'apikey', 'api_key', 'auth', 'authkey', 'key', 'passkey', 'passwd',
+    'password', 'rss_key', 'rsskey', 'secret', 'session', 'sessionid',
+    'token', 'torrent_pass',
+)
 
 # A credential can turn up percent encoded inside another url, which is how a
 # private tracker's announce url reaches us in a magnet's tr= parameter, so
 # match an encoded separator as well as a literal one. Anything up to the next
 # separator goes, and over-redacting a log line is the safe way to be wrong.
-CREDENTIAL_RE = re.compile(
-    r'(?:(?<![A-Za-z0-9_])|(?<=%3F)|(?<=%26))(' + '|'.join(CREDENTIAL_PARAMS) + r')(=|%3D)[^&;#\s]*',
-    re.IGNORECASE)
 USERINFO_RE = re.compile(r'(?<=//)[^/@\s]+@')
+
+_credential_re_lock = threading.Lock()
+_credential_re_cache = {'params': None, 'regex': None}
+
+_DEFAULT_CREDENTIAL_RE = re.compile(
+    r'(?:(?<![A-Za-z0-9_])|(?<=%3F)|(?<=%26))('
+    + '|'.join(_DEFAULT_CREDENTIAL_PARAMS)
+    + r')(=|%3D)[^&;#\s]*',
+    re.IGNORECASE)
+
+
+def _credential_re():
+    try:
+        from lazylibrarian.config2 import CONFIG
+        extra = get_list(CONFIG['REDACT_PARAMS'], ',')
+    except Exception:
+        extra = []
+    all_params = sorted(set(_DEFAULT_CREDENTIAL_PARAMS) | {p.lower() for p in extra if p})
+    key = tuple(all_params)
+    with _credential_re_lock:
+        if _credential_re_cache['params'] == key:
+            return _credential_re_cache['regex']
+    try:
+        regex = re.compile(
+            r'(?:(?<![A-Za-z0-9_])|(?<=%3F)|(?<=%26))('
+            + '|'.join(re.escape(p) for p in all_params)
+            + r')(=|%3D)[^&;#\s]*',
+            re.IGNORECASE)
+    except re.error:
+        return _DEFAULT_CREDENTIAL_RE
+    with _credential_re_lock:
+        _credential_re_cache['regex'] = regex
+        _credential_re_cache['params'] = key
+    return regex
+
+
+def _redact_secrets_in_path(url):
+    try:
+        from lazylibrarian.config2 import CONFIG
+        secrets = CONFIG.REDACTLIST
+        for secret in secrets:
+            if isinstance(secret, str) and len(secret) > 3 and secret in url:
+                url = url.replace(secret, '[redacted]')
+    except Exception:
+        pass
+    return url
 
 
 def redact_url(url):
-    """
-    Mask any credentials in a url so it is safe to log.
-    Strips userinfo and the value of any known credential parameter, whether it
-    is in the url itself or percent encoded inside one.
-    """
     if not url:
         return ''
     url = make_unicode(url)
     if not isinstance(url, str):
         return '[unprintable url]'
     url = USERINFO_RE.sub('[redacted]@', url, count=1)
-    return CREDENTIAL_RE.sub(r'\1\2[redacted]', url)
+    url = _credential_re().sub(r'\1\2[redacted]', url)
+    url = _redact_secrets_in_path(url)
+    return url
 
 
 def book_series(bookname):
@@ -380,7 +423,7 @@ def date_format(datestr, formatstr="$Y-$m-$d", context='', datelang=''):
     if not datestr:
         return ''
 
-    if datestr.isdigit():  # just issue number or year
+    if check_int(datestr, 0, positive=False):  # just issue number or year, could be negative like -412 BC
         return datestr
 
     logger = logging.getLogger(__name__)

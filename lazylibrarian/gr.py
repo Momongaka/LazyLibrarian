@@ -1299,6 +1299,7 @@ class GoodReads:
             book_language = rootxml.find('./book/language_code').text
         except Exception as e:
             self.logger.error(f"Error getting language_code from book xml: {str(e)}")
+            book_language = ''
 
         bookname = rootxml.find('./book/title').text
 

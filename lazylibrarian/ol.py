@@ -210,6 +210,8 @@ class OpenLibrary:
             self.logger.error(f'Unhandled exception in OL.find_results: {traceback.format_exc()}')
 
     def find_author_id(self, authorname='', title='', refresh=False):
+        if not authorname:
+            authorname = ''  # we may just have a title?
         authorname = authorname.replace('#', '').replace('/', '_')
         authorname = format_author_name(authorname, postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
         self.logger.debug(f"Getting OL author id for {authorname}, refresh={refresh}")
@@ -1433,7 +1435,7 @@ class OpenLibrary:
             bookdict['authorname'] = match['AuthorName']
             bookdict['authorid'] = match['AuthorID']
         else:
-            auth_id = lazylibrarian.importer.add_author_name_to_db(author=authorname,
+            _, auth_id, _ = lazylibrarian.importer.add_author_name_to_db(author=authorname,
                                                                    refresh=False,
                                                                    addbooks=False,
                                                                    reason=f"ol.add_bookid {bookid}")

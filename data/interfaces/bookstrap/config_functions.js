@@ -1013,6 +1013,14 @@
             });
         });
 
+        $('#ran_api').on('click', function() {
+            let status = $("#ran_api").prop("checked") ? 'True' : ''
+            $.get('ran_api_changed', {'status': status},
+            function(data) {
+                location.reload();
+            });
+        });
+
         $('#hc_api').on('change', function() {
             let status = $("#hc_api").prop("checked") ? 'True' : ''
             $.get('hc_api_changed', {'status': status},
@@ -1032,6 +1040,14 @@
         $('#gb_api').on('change', function() {
             let apikey = $.trim($("#gb_api").val());
             $.get('gb_api_changed', {'gb_api': apikey},
+            function(data) {
+                location.reload();
+            });
+        });
+
+        $('#book_api').on('change', function() {
+            let apikey = $.trim($("#book_api").val());
+            $.get('book_api_changed', {'book_api': apikey},
             function(data) {
                 location.reload();
             });

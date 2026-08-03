@@ -631,6 +631,7 @@
                     gr_selected = ''
                     hc_selected = ''
                     dnb_selected = ''
+                    ran_selected = ''
                     if CONFIG['BOOK_API'] == "GoodReads":
                         gr_selected = 'selected="selected"'
                     if CONFIG['BOOK_API'] == "GoogleBooks":
@@ -641,6 +642,8 @@
                         hc_selected = 'selected="selected"'
                     if CONFIG['BOOK_API'] == "DNB":
                         dnb_selected = 'selected="selected"'
+                    if CONFIG['BOOK_API'] == "RanobeDB":
+                        ran_selected = 'selected="selected"'
                     %>
                     <label for="book_api" class="control-label">Primary Information Source</label>
                     <select id="book_api" name="book_api" class="form-control">
@@ -655,6 +658,9 @@
                       %endif
                       %if CONFIG['DNB_API']:
                         <option value = "DNB" ${dnb_selected}>Deutsche Nationalbibliothek</option>
+                      %endif
+                      %if CONFIG['RAN_API']:
+                        <option value = "RanobeDB" ${ran_selected}>RanobeDB</option>
                       %endif
                       %if CONFIG['HC_API']:
                         <option value = "HardCover" ${hc_selected}>HardCover</option>
@@ -685,6 +691,16 @@
                     <label for="dnb_api">
                       <input type="checkbox" id="dnb_api" name="dnb_api" value="1" ${checked} />
                       Enable Deutsche Nationalbibliothek api for book information
+                    </label>
+                  </div>
+                  </fieldset>
+                  <fieldset id="ran_options">
+                  <label class="control-label">RanobeDB API:</label>
+                  <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['RAN_API'] else '' %>
+                    <label for="ran_api">
+                      <input type="checkbox" id="ran_api" name="ran_api" value="1" ${checked} />
+                      RanobeDB api for book/author information
                     </label>
                   </div>
                   </fieldset>

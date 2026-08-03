@@ -112,7 +112,7 @@ from lazylibrarian.formatter import (
 )
 from lazylibrarian.images import cache_bookimg, get_book_cover
 
-id_key = {'DNB': 'dnb_id', 'HardCover': 'hc_id', 'GoodReads': 'gr_id',
+id_key = {'DNB': 'dnb_id', 'RanobeDB': 'ran_id', 'HardCover': 'hc_id', 'GoodReads': 'gr_id',
           'GoogleBooks': 'gb_id', 'OpenLibrary': 'ol_id'}
 
 
