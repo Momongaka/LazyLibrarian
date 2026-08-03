@@ -88,7 +88,7 @@ class RanobeDB:
             res = db.match('SELECT ran_id from authors WHERE Authorid=?', (auth_id, ))
             resultqueue = Queue()
             searchterm = f"/books?staff={res['ran_id']}"
-            if not self.find_results(searchterm, resultqueue, authorname=auth_name):
+            if not self.find_results(searchterm, resultqueue, authorname=auth_name, refresh=refresh):
                 self.logger.warning(f"No results from {self.__class__.__name__} for {auth_name}")
                 return
 
@@ -102,7 +102,7 @@ class RanobeDB:
             db.close()
 
 
-    def find_results(self, searchterm='', queue=None, authorname=''):
+    def find_results(self, searchterm='', queue=None, authorname='', refresh=True):
         """
         Searchterm may be passed as a searchterm, isbn, title, author, or title<ll>author
         (isbn13 only, 13 digits starting 978 or 979)
@@ -147,14 +147,14 @@ class RanobeDB:
 
             self.logger.debug(f'Now searching {self.__class__.__name__} with searchterm: {searchterm}')
             searchterm = searchterm.lstrip('/')
-            results, in_cache = self._result_from_cache(searchterm)
+            results, in_cache = self._result_from_cache(searchterm, refresh=refresh)
 
             if results and 'books' in results:
                 self.logger.debug(f"Search returned {len(results['books'])}")
                 for item in results['books']:
                     # for each book, call /book/id to get full info
                     booksearchterm = f"book/{item['id']}"
-                    book_result, in_cache = self._result_from_cache(booksearchterm)
+                    book_result, in_cache = self._result_from_cache(booksearchterm, refresh=refresh)
                     book = self._build_book_dict(book_result.get('book'))
 
                     if not book['authorname']:
@@ -256,9 +256,8 @@ class RanobeDB:
     def _build_book_dict(self, book):
         """ Return all the book info we need as a dictionary or default value if no key """
         mydict = {'authorname': '', 'authorid': '', 'bookdesc': '', 'booklink': '', 'bookisbn': '',
-                  'bookimg': 'images/nocover.png', 'bookpages': 0}
-        mydict['bookid'] = book.get('id', '')
-        mydict['bookname'] = book.get('romaji') if book.get('romaji') else book.get('title')
+                  'bookimg': 'images/nocover.png', 'bookpages': 0, 'bookid': book.get('id', ''),
+                  'bookname': book.get('romaji') if book.get('romaji') else book.get('title')}
         if book.get('image') and book['image'].get('filename'):
             mydict['bookimg'] = self.image_url + book['image']['filename']
         mydict['bookdesc'] = book.get('description', '')
@@ -268,12 +267,13 @@ class RanobeDB:
         if not mydict['booklang']:
             mydict['booklang'] = book.get('olang', '')
         mydict['bookdate'] = book.get('c_release_date', '')
-        mydict['bookrate'] = book.get('rating') if book.get('rating') else 0
-        if mydict['bookrate'] and book.get('num_reviews'):
-            mydict['bookrate_count'] = book['num_reviews'].get('count', 0)
-        if 'score' in mydict['bookrate'] and 'count' in mydict['bookrate']:
+        mydict['bookrate'] = book.get('rating', '')
+        if isinstance(mydict['bookrate'], dict) and 'score' in mydict['bookrate'] and 'count' in mydict['bookrate']:
             mydict['bookrate_count'] = mydict['bookrate']['count']
             mydict['bookrate'] = mydict['bookrate']['score']
+        elif book.get('num_reviews'):
+            mydict['bookrate_count'] = book['num_reviews'].get('count', 0)
+
         contributors = []
         # build a list of contributors (id, name, role)
         for edition in book.get('editions'):
@@ -323,7 +323,7 @@ class RanobeDB:
 
             # not all series provide an index, so use position in book list
             if index is None:
-                for bk, ind in enumerate(book['series']['books'], start=1):
+                for ind, bk in enumerate(book['series']['books'], start=1):
                     if bk.get('id') == mydict['bookid']:
                         index = ind
                         break
@@ -369,7 +369,6 @@ class RanobeDB:
         cache_hits = 0
 
         self.logger.debug(f"Getting {self.__class__.__name__} author info for {authorid}:{authorname}, refresh={refresh}")
-        author_name = ''
         author_born = ''
         author_died = ''
         author_link = ''
@@ -395,9 +394,9 @@ class RanobeDB:
             item = results['staff']
             if item['id'] == authorid:
                 if item['romaji']:
-                    author_name = item['romaji']
+                    authorname = item['romaji']
                 else:
-                    author_name = item['name']
+                    authorname = item['name']
                 author_id = authorid
                 about = item['description']
                 if item['website']:
@@ -406,7 +405,6 @@ class RanobeDB:
             for item in results['staff']:
                 if item['name'] == authorname or item['romaji'] == authorname:
                     author_id = item['id']
-                    author_name = authorname
                     break
             searchcmd = f'staff/{author_id}'
             results, in_cache = self._result_from_cache(searchcmd, refresh=refresh)
@@ -499,7 +497,6 @@ class RanobeDB:
         sorted on ascending position in the series
         """
         resultlist = []
-        author_name = ''
         api_hits = 0
         cache_hits = 0
 
@@ -579,7 +576,7 @@ class RanobeDB:
 
 
 
-    def _result_from_cache(self, searchcmd: str, refresh=False) -> (str, bool):
+    def _result_from_cache(self, searchcmd: str, refresh=False) -> tuple[dict, bool]:
         """Get API result from cache or fetch if needed."""
         headers = {'Content-Type': 'application/json',
                    'User-Agent': get_user_agent(),
