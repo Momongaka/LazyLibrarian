@@ -23,7 +23,6 @@ from enum import Enum
 from http.client import responses
 from typing import Any
 from xml.etree import ElementTree
-from xml.etree.ElementTree import Element
 
 import requests
 
@@ -98,7 +97,7 @@ def init_hex_caches() -> bool:
 
 
 def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
-              raw: bool = False) -> tuple[str | bytes, bool]:
+              raw: bool = False) -> (str | bytes, bool):
     """ Return the result of fetching a URL and True if success
         Otherwise return error message and False
         Return data as raw/bytes, if raw == True
@@ -227,7 +226,7 @@ def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
     return f"Response status {r.status_code}: {msg}", False
 
 
-def cache_img(img_type: ImageType, img_id: str, img_url: str, refresh=False) -> tuple[str, bool, bool]:
+def cache_img(img_type: ImageType, img_id: str, img_url: str, refresh=False) -> (str, bool, bool):
     """ Cache the image from the given filename or URL in the local images cache
         linked to the id.
         On success, return the link to the cached file, True, was_in_cache
@@ -273,18 +272,18 @@ def cache_img(img_type: ImageType, img_id: str, img_url: str, refresh=False) -> 
     return msg, False, False
 
 
-def gr_xml_request(my_url, use_cache=True, expire=True) -> tuple[Any, bool]:
+def gr_xml_request(my_url, use_cache=True, expire=True) -> (Any, bool):
     # respect goodreads api limit
     result, in_cache = XMLCacheRequest(url=my_url, use_cache=use_cache, expire=expire).get_cached_request()
     return result, in_cache
 
 
-def json_request(my_url, use_cache=True, expire=True) -> tuple[Any, bool]:
+def json_request(my_url, use_cache=True, expire=True) -> (Any, bool):
     result, in_cache = JSONCacheRequest(url=my_url, use_cache=use_cache, expire=expire).get_cached_request()
     return result, in_cache
 
 
-def html_request(my_url, use_cache=True, expire=True) -> tuple[Any, bool]:
+def html_request(my_url, use_cache=True, expire=True) -> (Any, bool):
     result, in_cache = HTMLCacheRequest(url=my_url, use_cache=use_cache, expire=expire).get_cached_request()
     return result, in_cache
 
@@ -309,18 +308,18 @@ class CacheRequest(ABC):
         return f"{cls.name()}Cache"
 
     @abc.abstractmethod
-    def read_from_cache(self, hashfilename: str) -> tuple[str, bool]:
+    def read_from_cache(self, hashfilename: str) -> (str, bool):
         """ Read the source from cache """
 
-    def fetch_data(self) -> tuple[str, bool]:
+    def fetch_data(self) -> (str, bool):
         """ Fetch the data; called if it's not in the cache """
         return fetch_url(self.url, headers=None)
 
     @abc.abstractmethod
-    def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> tuple[str, bool]:
+    def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> (str, bool):
         """ Load the value from result and store it in cache if docache is True """
 
-    def get_cached_request(self) -> tuple[Any, bool]:
+    def get_cached_request(self) -> (Any, bool):
         # hashfilename = hash of url
         # if hashfilename exists in cache and isn't too old, return its contents
         # if not, read url and store the result in the cache
@@ -380,7 +379,7 @@ class CacheRequest(ABC):
             return True
         return False
 
-    def get_hashed_filename(self, cache_location: str) -> tuple[str, str]:
+    def get_hashed_filename(self, cache_location: str) -> (str, str):
         myhash = md5_utf8(self.url)
         hashfilename = os.path.join(cache_location, myhash[0], myhash[1], f"{myhash}.{self.name().lower()}")
         return hashfilename, myhash
@@ -391,7 +390,7 @@ class XMLCacheRequest(CacheRequest):
     def name(cls) -> str:
         return "XML"
 
-    def read_from_cache(self, hashfilename: str) -> tuple[None, bool] | tuple[Element[str], bool]:
+    def read_from_cache(self, hashfilename: str) -> (str, bool):
         with open(syspath(hashfilename), "rb") as cachefile:
             result = cachefile.read()
         source = None
@@ -417,13 +416,14 @@ class XMLCacheRequest(CacheRequest):
             return None, False
         return source, True
 
-    def fetch_data(self) -> tuple[str, bool]:
+    def fetch_data(self) -> (str, bool):
         gr_api_sleep()
-        headers = {'User-Agent': get_user_agent(), 'Accept': 'application/xml', 'Accept-Language': 'en-US,en;q=0.5'}
+        headers = {'User-Agent': get_user_agent()}
+        headers['Accept'] = 'application/xml'
+        headers['Accept-Language'] = 'en-US,en;q=0.5'
         return fetch_url(self.url, raw=True, headers=headers)
 
-    def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> tuple[Element[str], bool] | \
-                                                                                       tuple[None, bool]:
+    def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> (str, bool):
         source = None
         result = make_bytestr(result)
         if not result:
@@ -479,17 +479,17 @@ class HTMLCacheRequest(CacheRequest):
     def name(cls) -> str:
         return "HTML"
 
-    def read_from_cache(self, hashfilename: str) -> tuple[bytes, bool]:
+    def read_from_cache(self, hashfilename: str) -> (str, bool):
         try:
             with open(syspath(hashfilename), "rb") as cachefile:
                 source = cachefile.read()
             return source, True
         except Exception as e:
             self.logger.error(f"Exception {e} reading {hashfilename}")
-            return b'', False
+            return '', False
 
 
-    def load_from_result_and_cache(self, result: str, filename, docache) -> tuple[str, bool]:
+    def load_from_result_and_cache(self, result: str, filename, docache) -> (str, bool):
         source = make_bytestr(result)
         try:
             with open(syspath(filename), "wb") as cachefile:
@@ -505,7 +505,7 @@ class JSONCacheRequest(CacheRequest):
     def name(cls) -> str:
         return "JSON"
 
-    def read_from_cache(self, hashfilename: str) -> tuple[str | None, bool]:
+    def read_from_cache(self, hashfilename: str) -> (str, bool):
         try:
             try:
                 with open(hashfilename) as f:
@@ -520,7 +520,7 @@ class JSONCacheRequest(CacheRequest):
             return None, False
         return source, True
 
-    def load_from_result_and_cache(self, result: str, filename: str, docache) -> tuple[str | None, bool]:
+    def load_from_result_and_cache(self, result: str, filename: str, docache) -> (str, bool):
         try:
             source = json.loads(result)
             if not docache:
