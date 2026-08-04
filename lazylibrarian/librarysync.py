@@ -1009,11 +1009,14 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 if bookid and key:
                                     match = db.match(f'SELECT AuthorID,Status,BookID FROM books where {key}=?', (bookid, ))
                                     if match:
-                                        mtype = match['Status']
                                         if authorid != match['AuthorID']:
                                             logger.warning(
-                                                f"Metadata authorid [{authorid}] does not match database "
-                                                f"[{match['AuthorID']}]")
+                                                f"Metadata bookid [{bookid}] belongs to author "
+                                                f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
+                                            match = None
+                                            bookid = None
+                                        else:
+                                            mtype = match['Status']
                                 if bookid and not match:
                                     cmd = "SELECT Status,BookID FROM books where BookName=? and AuthorID=?"
                                     match = db.match(cmd, (book, authorid))
@@ -1042,12 +1045,15 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                         match = db.match('SELECT AuthorID,BookName,Status from books where BookID=?',
                                                          (bookid,))
                                         if match:
-                                            mtype = match['Status']
-                                            book = match['BookName']
                                             if authorid != match['AuthorID']:
                                                 logger.warning(
-                                                    f"Metadata authorid [{authorid}] does not match database "
-                                                    f"[{match['AuthorID']}]")
+                                                    f"Metadata bookid [{bookid}] belongs to author "
+                                                    f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
+                                                match = None
+                                                bookid = ""
+                                            else:
+                                                mtype = match['Status']
+                                                book = match['BookName']
                                         else:
                                             logger.debug(f"Unable to add bookid via metadata bookid ({bookid})")
                                             bookid = ""
@@ -1057,12 +1063,14 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                     match = db.match('SELECT AuthorID,BookID,Status FROM books where BookIsbn=?',
                                                      (isbn,))
                                     if match:
-                                        bookid = match['BookID']
-                                        mtype = match['Status']
                                         if authorid != match['AuthorID']:
                                             logger.warning(
-                                                f"Metadata authorid [{authorid}] does not match database "
-                                                f"[{match['AuthorID']}]")
+                                                f"ISBN [{isbn}] belongs to author "
+                                                f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
+                                            match = None
+                                        else:
+                                            bookid = match['BookID']
+                                            mtype = match['Status']
 
                                 if bookid and mtype == "Ignored":
                                     logger.warning(
