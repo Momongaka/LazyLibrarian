@@ -400,6 +400,9 @@ def nzbdate2format(nzbdate):
 
 
 def date_format(datestr, formatstr="$Y-$m-$d", context='', datelang=''):
+
+    def date_format(datestr, datefmt=None):
+        if type(datestr) is str: datestr = datestr.replace("??", "00")
     # return date formatted for display in requested style
     # $d	Day of the month as a zero-padded decimal number
     # $D    Day of month, zero padded, suppress if 01
