@@ -228,8 +228,8 @@ class LazyTelemetry:
         except Exception as e:
             return f"Exception {type(e).__name__}: {str(e)}", False
 
-        if str(r.status_code).startswith('2'):  # (200 OK etc)
-            return r.text, True  # Success
+        if r.status_code == 200:
+            return r.text, True
         msg = responses.get(r.status_code, r.text)
         return f"Response status {r.status_code}: {msg}", False
 

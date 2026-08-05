@@ -529,7 +529,7 @@ query FindAuthor { authors_by_pk(id: [authorid])
             try:
                 http.client.HTTPConnection.debuglevel = 1 if lazylibrarian.REQUESTSLOG else 0
                 r = requests.post(self.graphql_url, json=query, headers=headers)
-                success = str(r.status_code).startswith('2')
+                success = r.status_code == 200
             except requests.exceptions.ConnectionError as e:
                 self.logger.error(str(e))
                 success = False

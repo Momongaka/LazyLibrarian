@@ -86,7 +86,7 @@ def session_get(sess, url, headers):
                             verify=CONFIG['SSL_CERTS'] if CONFIG['SSL_CERTS'] else True)
     else:
         response = sess.get(url, headers=headers, timeout=90, verify=False)
-    if not str(response.status_code).startswith('2'):
+    if response.status_code != 200:
         logger.debug(f"b-ok response: {response.status_code}")
     return response
 

@@ -520,9 +520,9 @@ def direct_dl_method(bookid=None, dl_title=None, dl_url=None, library='eBook', p
             logger.warning(res)
             return False, res
 
-        if str(r.status_code) in ['502', '504']:
+        if r.status_code in [502, 504]:
             time.sleep(2)
-        elif not str(r.status_code).startswith('2'):
+        elif r.status_code != 200:
             res = f"Got a {r.status_code} response for {dl_url}"
             logger.debug(res)
             return False, res
@@ -712,7 +712,7 @@ def tor_dl_method(bookid=None, tor_title=None, tor_url=None, library='eBook', la
                                  if CONFIG['SSL_CERTS'] else True)
             else:
                 r = requests.get(tor_url, headers=headers, timeout=90, proxies=proxies, verify=False)
-            if str(r.status_code).startswith('2'):
+            if r.status_code == 200:
                 torrent = r.content
                 content_type = r.headers.get('Content-Type', 'unknown')
                 if not len(torrent):

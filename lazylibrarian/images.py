@@ -708,14 +708,14 @@ def get_author_image(authorid=None, refresh=False, max_num=1, ignore=''):
                 break
             this_source = lazylibrarian.INFOSOURCES[api_source]
             # 2-letter_code, class, author_key, api_enabled
-            if this_source['author_key'] != 'authorid' and CONFIG[this_source['enabled']] and api_source not in ignore:
+            if this_source['author_key'] and this_source['author_key']!= 'authorid' and CONFIG[this_source['enabled']] and api_source not in ignore:
                 crawler_name = api_source
                 book_api = this_source['api']
                 book_api = book_api()
                 img = book_api.get_author_image(authorname=authorname, authorid=author[this_source['author_key']])
                 if img.startswith('http'):
                     img_data = requests.get(img, headers=headers)
-                    if str(img_data.status_code).startswith('2'):
+                    if img_data.status_code == 200:
                         img_file = os.path.join(icrawlerdir, f"{api_source}.jpg")
                         with open(img_file, 'wb') as f:
                             f.write(img_data.content)
@@ -732,7 +732,7 @@ def get_author_image(authorid=None, refresh=False, max_num=1, ignore=''):
                 try:
                     url = f"https://en.wikipedia.org/wiki/{safeparams}"
                     response = requests.get(url, headers=headers)
-                    if str(response.status_code).startswith('2'):
+                    if response.status_code == 200:
                         try:
                             img_name = make_unicode(response.content.split(b"infobox-image")[1].split(b'src="')[1].split(b'"')[0])
                         except IndexError:
@@ -740,7 +740,7 @@ def get_author_image(authorid=None, refresh=False, max_num=1, ignore=''):
                             img_name = None
                         if img_name:
                             img_data = requests.get(f"https:{img_name}", headers=headers)
-                            if str(img_data.status_code).startswith('2'):
+                            if img_data.status_code == 200:
                                 img_file = os.path.join(icrawlerdir, f'{crawler_name}.jpg')
                                 with open(img_file, 'wb') as f:
                                     f.write(img_data.content)

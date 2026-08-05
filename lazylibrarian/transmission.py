@@ -449,7 +449,7 @@ def torrent_action(method, arguments):
         response = requests.post(host_url, json=data, headers=headers, proxies=proxies,
                                  auth=auth, timeout=timeout)
 
-        if response and str(response.status_code).startswith('2'):
+        if response and response.status_code == 200:
             res = response.json()
             tr_version = res['arguments']['version']
             rpc_version = res['arguments']['rpc-version']
@@ -468,7 +468,7 @@ def torrent_action(method, arguments):
             headers = {'x-transmission-session-id': session_id}
             response = requests.post(host_url, json=data, headers=headers, proxies=proxies,
                                      auth=auth, timeout=timeout)
-        if not str(response.status_code).startswith('2'):
+        if response.status_code != 200:
             res = f"Expected a response from Transmission, got {response.status_code}"
             logger.error(res)
             return False, res

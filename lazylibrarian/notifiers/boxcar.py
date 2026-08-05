@@ -74,7 +74,7 @@ class BoxcarNotifier:
             timeout = CONFIG.get_int('HTTP_TIMEOUT')
             r = requests.get(cur_url, params=data, timeout=timeout, proxies=proxies)
             status = str(r.status_code)
-            if status.startswith('2'):
+            if status == 200:
                 logger.debug("BOXCAR: Notification successful.")
                 return True
 

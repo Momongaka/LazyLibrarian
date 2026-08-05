@@ -354,7 +354,7 @@ def get_latest_version_from_git():
                 else:
                     r = requests.get(url, timeout=timeout, headers=headers, proxies=proxies, verify=False)
 
-                if str(r.status_code).startswith('2'):
+                if r.status_code == 200:
                     try:
                         res = r.json()
                         for item in res:

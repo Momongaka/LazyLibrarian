@@ -603,7 +603,7 @@ class RanobeDB:
         # send query, cache result and return it
         url = f"{self.base_url}/{searchcmd}"
         r = requests.get(url, headers=headers)
-        success = str(r.status_code).startswith('2')
+        success = r.status_code == 200
 
         if success:
             res = r.json()
