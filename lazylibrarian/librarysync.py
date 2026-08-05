@@ -60,7 +60,9 @@ from lazylibrarian.images import img_id
 from lazylibrarian.importer import (
     add_author_name_to_db,
     book_keys,
+    collate_fuzzy,
     collate_nopunctuation,
+    move_book_to_author,
     search_for,
     title_translates,
     update_totals,
@@ -1007,14 +1009,22 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                     except (ValueError, IndexError):
                                         bookid = None
                                 if bookid and key:
-                                    match = db.match(f'SELECT AuthorID,Status,BookID FROM books where {key}=?', (bookid, ))
+                                    match = db.match(f'SELECT AuthorID,Status,BookID,BookName FROM books where {key}=?', (bookid, ))
                                     if match:
                                         if authorid != match['AuthorID']:
-                                            logger.warning(
-                                                f"Metadata bookid [{bookid}] belongs to author "
-                                                f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
-                                            match = None
-                                            bookid = None
+                                            if collate_fuzzy(match['BookName'], book) == 0:
+                                                logger.warning(
+                                                    f"Metadata bookid [{bookid}] author drifted from "
+                                                    f"[{match['AuthorID']}] to [{authorid}]; title matches, accepting")
+                                                move_book_to_author(match['BookID'], match['AuthorID'], authorid)
+                                                bookid = match['BookID']
+                                                mtype = match['Status']
+                                            else:
+                                                logger.warning(
+                                                    f"Metadata bookid [{bookid}] belongs to author "
+                                                    f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
+                                                match = None
+                                                bookid = None
                                         else:
                                             mtype = match['Status']
                                 if bookid and not match:
@@ -1046,11 +1056,19 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                                          (bookid,))
                                         if match:
                                             if authorid != match['AuthorID']:
-                                                logger.warning(
-                                                    f"Metadata bookid [{bookid}] belongs to author "
-                                                    f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
-                                                match = None
-                                                bookid = ""
+                                                if collate_fuzzy(match['BookName'], book) == 0:
+                                                    logger.warning(
+                                                        f"Metadata bookid [{bookid}] author drifted from "
+                                                        f"[{match['AuthorID']}] to [{authorid}]; title matches, accepting")
+                                                    move_book_to_author(match['BookID'], match['AuthorID'], authorid)
+                                                    mtype = match['Status']
+                                                    book = match['BookName']
+                                                else:
+                                                    logger.warning(
+                                                        f"Metadata bookid [{bookid}] belongs to author "
+                                                        f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
+                                                    match = None
+                                                    bookid = ""
                                             else:
                                                 mtype = match['Status']
                                                 book = match['BookName']
@@ -1060,14 +1078,22 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
 
                                 if not bookid and isbn:
                                     # See if the isbn is in our database
-                                    match = db.match('SELECT AuthorID,BookID,Status FROM books where BookIsbn=?',
+                                    match = db.match('SELECT AuthorID,BookID,BookName,Status FROM books where BookIsbn=?',
                                                      (isbn,))
                                     if match:
                                         if authorid != match['AuthorID']:
-                                            logger.warning(
-                                                f"ISBN [{isbn}] belongs to author "
-                                                f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
-                                            match = None
+                                            if collate_fuzzy(match['BookName'], book) == 0:
+                                                logger.warning(
+                                                    f"ISBN [{isbn}] author drifted from "
+                                                    f"[{match['AuthorID']}] to [{authorid}]; title matches, accepting")
+                                                move_book_to_author(match['BookID'], match['AuthorID'], authorid)
+                                                bookid = match['BookID']
+                                                mtype = match['Status']
+                                            else:
+                                                logger.warning(
+                                                    f"ISBN [{isbn}] belongs to author "
+                                                    f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
+                                                match = None
                                         else:
                                             bookid = match['BookID']
                                             mtype = match['Status']
