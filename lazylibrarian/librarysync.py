@@ -855,12 +855,12 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 logger.debug(f"Book meta incomplete in {book_filename}")
 
                         # calibre uses "metadata.opf", LL uses "bookname - authorname.opf"
-                        # just look for any .opf file in the current directory since we don't know
-                        # LL preferred authorname/bookname at this point.
+                        # match on the current book's filename since a series folder may
+                        # hold opf/metadata for more than one book
                         # Allow metadata in opf file to override book metadata as may be users pref
                         metafile = ''
                         try:
-                            metafile = opf_file(rootdir)
+                            metafile = opf_file(rootdir, bookfile=files)
                             if metafile:
                                 logger.debug(f"Reading info from {metafile}")
                                 res2 = get_book_info(metafile)
@@ -1021,16 +1021,24 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                     cmd = "SELECT Status,BookID FROM books where BookName=? and AuthorID=?"
                                     match = db.match(cmd, (book, authorid))
                                     if match:
-                                        logger.warning(
-                                            f"Metadata bookid [{bookid}] not found in database, title matches "
-                                            f"{match['BookID']}")
-                                        mtype = match['Status']
-                                        # update stored bookid to match preferred (owned) book
-                                        db.action('PRAGMA foreign_keys = OFF')
-                                        for table in ['books', 'member', 'wanted', 'failedsearch', 'genrebooks', 'bookauthors']:
-                                            cmd = f"UPDATE {table} SET BookID=? WHERE BookID=?"
-                                            db.action(cmd, (bookid, match['BookID']))
-                                        db.action('PRAGMA foreign_keys = ON')
+                                        collision = db.match("SELECT BookID FROM books where BookID=?", (bookid,))
+                                        if collision and collision['BookID'] != match['BookID']:
+                                            logger.warning(
+                                                f"Metadata bookid [{bookid}] already belongs to a different "
+                                                f"book; not merging with {match['BookID']}, ignoring stale metadata")
+                                            match = None
+                                            bookid = None
+                                        else:
+                                            logger.warning(
+                                                f"Metadata bookid [{bookid}] not found in database, title matches "
+                                                f"{match['BookID']}")
+                                            mtype = match['Status']
+                                            # update stored bookid to match preferred (owned) book
+                                            db.action('PRAGMA foreign_keys = OFF')
+                                            for table in ['books', 'member', 'wanted', 'failedsearch', 'genrebooks', 'bookauthors']:
+                                                cmd = f"UPDATE {table} SET BookID=? WHERE BookID=?"
+                                                db.action(cmd, (bookid, match['BookID']))
+                                            db.action('PRAGMA foreign_keys = ON')
 
                                 if not match:
                                     # Try and find in database under author and bookname

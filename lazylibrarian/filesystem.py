@@ -445,13 +445,20 @@ def any_file(search_dir: str, extn: str) -> str:
     return ""
 
 
-def opf_file(search_dir: str) -> str:
+def opf_file(search_dir: str, bookfile: str = '') -> str:
     global _OPFWARN
     """ Look for .opf files in search_dir, returning the file name.
+    If bookfile is given, only <bookfile-basename>.opf is considered, since search_dir may
+    hold opf for more than one book (eg a series folder) and any other .opf there belongs
+    to a different book. Return '' if it doesn't exist.
+    Otherwise (no bookfile given):
     If metadata.opf exists and no other opf file does, return metatadata.
     If metadata.opf and another .opf file exists, return the other one.
     If two or more other .opf files exist, we don't know which one to use.
     Warn and return any"""
+    if bookfile:
+        candidate = os.path.join(search_dir, f"{os.path.splitext(os.path.basename(bookfile))[0]}.opf")
+        return candidate if path_isfile(candidate) else ''
     cnt = 0
     res = ''
     meta = ''
