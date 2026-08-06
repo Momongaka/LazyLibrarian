@@ -947,6 +947,41 @@ def update_totals(authorid):
         db.close()
 
 
+def move_book_to_author(bookid, old_authorid, new_authorid):
+    logger = logging.getLogger(__name__)
+    mydb = database.DBConnection()
+    try:
+        mydb.action('PRAGMA foreign_keys = OFF')
+
+        mydb.action('UPDATE books SET AuthorID=? WHERE BookID=?', (new_authorid, bookid))
+
+        mydb.action('INSERT OR REPLACE INTO bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
+                    (new_authorid, bookid, lazylibrarian.ROLE['PRIMARY']))
+        mydb.action('DELETE FROM bookauthors WHERE AuthorID=? AND BookID=?',
+                    (old_authorid, bookid))
+
+        series_rows = mydb.select('SELECT SeriesID FROM member WHERE BookID=?', (bookid,))
+        for row in series_rows:
+            sid = row['SeriesID']
+            mydb.action("INSERT INTO seriesauthors (SeriesID, AuthorID) VALUES (?, ?)",
+                        (sid, new_authorid), suppress='UNIQUE')
+            other_books = mydb.select(
+                'SELECT m.BookID FROM member m, bookauthors ba '
+                'WHERE m.SeriesID=? AND m.BookID=ba.BookID AND ba.AuthorID=? AND m.BookID!=?',
+                (sid, old_authorid, bookid))
+            if not other_books:
+                mydb.action('DELETE FROM seriesauthors WHERE SeriesID=? AND AuthorID=?',
+                            (sid, old_authorid))
+
+        mydb.action('PRAGMA foreign_keys = ON')
+    finally:
+        mydb.close()
+
+    update_totals(old_authorid)
+    update_totals(new_authorid)
+    logger.debug(f"Moved book {bookid} from author {old_authorid} to {new_authorid}")
+
+
 def import_book(bookid, ebook=None, audio=None, wait=False, reason='importer.import_book', source=None):
     """ search goodreads or googlebooks for a bookid and import the book
         ebook/audio=None makes add_bookid_to_db use configured default """
