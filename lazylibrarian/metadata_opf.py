@@ -36,6 +36,7 @@ from lazylibrarian.formatter import (
     get_list,
     make_unicode,
     replace_all,
+    sanitize,
     surname_first,
 )
 
@@ -141,7 +142,11 @@ def create_mag_opf(
 
 def create_opf(dest_path, data_row, global_name=None, overwrite=False):
     logger = logging.getLogger(__name__)
-    opfpath = os.path.join(dest_path, f"{global_name}.opf")
+    # titles can legitimately contain a "/" (eg an omnibus title like "Broken Angels /
+    # Woken Furies / Altered Carbon"); sanitize() only collapses doubled separators, so
+    # replace real ones first or they get read as path separators
+    safe_name = (global_name or '').replace('/', '-').replace('\\', '-')
+    opfpath = os.path.join(dest_path, f"{sanitize(safe_name, is_folder_or_file=True)}.opf")
     if not overwrite and path_exists(opfpath):
         logger.debug(f"{opfpath} already exists. Did not create one.")
         setperm(opfpath)
