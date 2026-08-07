@@ -550,7 +550,12 @@ query FindAuthor { authors_by_pk(id: [authorid])
                 # RateLimit-Remaining 0 (none left)
                 # RateLimit-Reset 1735843440 (unix seconds count when reset)
                 delay = 0
-                if r.status_code == 429:
+                if r is None:
+                    delay = 60  # short backoff, then retry
+                    msg = "Connection error"
+                    res = {}
+                    self.logger.error("HardCover connection error")
+                elif r.status_code == 429:
                     limit = r.headers.get('RateLimit-Limit', 'Unknown')
                     remaining = r.headers.get('RateLimit-Remaining', 'Unknown')
                     reset = r.headers.get('RateLimit-Reset', 'Unknown')
@@ -580,14 +585,16 @@ query FindAuthor { authors_by_pk(id: [authorid])
                 else:
                     # unexpected error code, short delay
                     delay = 60
+                    msg = "HardCover error"
                     self.logger.error(f"Unexpected HardCover error: Status code {r.status_code}")
-                # noinspection PyBroadException
-                try:
-                    res = r.json()
-                    msg = str(r.status_code)
-                except Exception:
-                    res = {}
-                    msg = "Unknown reason"
+                if r:
+                    # noinspection PyBroadException
+                    try:
+                        res = r.json()
+                        msg = str(r.status_code)
+                    except Exception:
+                        res = {}
+                        msg = "Unknown reason"
                 if 'error' in res:
                     msg = str(res['error'])
                     self.logger.error(msg)
