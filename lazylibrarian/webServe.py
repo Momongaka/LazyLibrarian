@@ -11,6 +11,7 @@
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
 
+import ast
 import base64
 import contextlib
 import datetime
@@ -1563,8 +1564,8 @@ class WebInterface:
                 serversidelogger.debug(f"User subscribes to {len(res)} series")
                 for series in res:
                     myseries.append(series['WantID'])
-                cmd += " and series.seriesID in (" + ", ".join(f"'{w}'" for w in myseries) + ")"
-
+                cmd += " and series.seriesID in (?)"
+                args.append(", ".join(f"'{w}'" for w in myseries))
             cmd += " GROUP BY series.seriesID order by AuthorName,SeriesName"
 
             serversidelogger.debug(f"get_series {cmd}: {str(args)}")
@@ -5098,14 +5099,19 @@ class WebInterface:
                        "comics.comicid = comicissues.comicid) as Iss_Cnt from comics")
 
                 mycomics = []
+                args = ''
                 if userid and userprefs & lazylibrarian.pref_mycomics:
                     res = db.select("SELECT WantID from subscribers WHERE Type='comic' and UserID=?", (userid,))
                     serversidelogger.debug(f"User subscribes to {len(res)} comics")
                     for mag in res:
                         mycomics.append(mag['WantID'])
-                    cmd += " WHERE comics.comicid in (" + ", ".join(f"'{w}'" for w in mycomics) + ")"
+                    cmd += " WHERE comics.comicid in (?)"
+                    args = ", ".join(f"'{w}'" for w in mycomics)
                 cmd += " order by Title"
-                rowlist = db.select(cmd)
+                if args:
+                    rowlist = db.select(cmd, (args, ))
+                else:
+                    rowlist = db.select(cmd)
             finally:
                 db.close()
 
@@ -5648,19 +5654,22 @@ class WebInterface:
                 cmd = ("select magazines.*,(select count(*) as counter from issues where "
                        "magazines.title = issues.title) as Iss_Cnt from magazines")
 
+                maglist = ''
                 if userid and userprefs & lazylibrarian.pref_mymags:
                     res = db.select("SELECT WantID from subscribers WHERE Type='magazine' and UserID=?", (userid,))
                     serversidelogger.debug(f"User subscribes to {len(res)} magazines")
-                    maglist = ''
                     for mag in res:
                         if maglist:
                             maglist += ', '
                         maglist += f'"{mag["WantID"]}"'
-                    cmd += " WHERE Title in (" + maglist + ")"
+                    cmd += " WHERE Title in (?)"
                 cmd += " order by Title"
-
-                serversidelogger.debug(cmd)
-                rowlist = db.select(cmd)
+                if maglist:
+                    serversidelogger.debug(cmd + str(maglist))
+                    rowlist = db.select(cmd, (maglist, ))
+                else:
+                    serversidelogger.debug(cmd)
+                    rowlist = db.select(cmd)
             finally:
                 db.close()
 
@@ -6066,7 +6075,7 @@ class WebInterface:
             if itm.startswith('tags_/'):
                 new_tags[itm[5:]] = kwargs[itm]
         try:
-            old_tags = eval(kwargs['tagdata'])
+            old_tags = ast.literal_eval(kwargs['tagdata'])
         except SyntaxError:
             old_tags = None
         if not isinstance(old_tags, dict):

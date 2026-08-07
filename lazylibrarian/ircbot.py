@@ -50,7 +50,7 @@ import lazylibrarian
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.configtypes import ConfigDict
 from lazylibrarian.filesystem import DIRS, path_isfile, remove_file
-from lazylibrarian.formatter import check_int, md5_utf8, size_in_bytes, today
+from lazylibrarian.formatter import check_int, md5_utf8, sanitize, size_in_bytes, today
 
 # Prevents a common UnicodeDecodeError when downloading from many sources that don't use utf-8
 if irc_client:
@@ -119,6 +119,7 @@ try:
                 return
             self.logger.debug(f"peer sending file on port {str(peer_port)}")
             self.filename = f"{self.localfolder}/{self.filename}"
+            self.filename = sanitize(self.filename, is_folder_or_file=True)
             self.logger.debug(f"writing file {self.filename}")
             self.file = open(self.filename, "wb")
             peer_address = irc_client.ip_numstr_to_quad(peer_address)

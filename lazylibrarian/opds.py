@@ -739,12 +739,17 @@ class OPDS:
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Comics'))
         cmd = ("select comics.*,(select count(*) as counter from comicissues where "
                "comics.ComicID = comicissues.ComicID) as Iss_Cnt from comics ")
+        args = ()
         if 'query' in kwargs:
-            cmd += f"WHERE instr(comics.title, '{kwargs['query']}') > 0 "
+            cmd += "WHERE instr(comics.title, ?) > 0 "
+            args = (kwargs['query'], )
         cmd += "order by comics.title"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
         finally:
             db.close()
         if limit:
@@ -812,12 +817,17 @@ class OPDS:
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Magazines'))
         cmd = ("select magazines.*,(select count(*) as counter from issues where magazines.title = issues.title) "
                "as Iss_Cnt from magazines ")
+        args = ()
         if 'query' in kwargs:
-            cmd += f"WHERE instr(magazines.title, '{kwargs['query']}') > 0 "
+            cmd += "WHERE instr(magazines.title, ?) > 0 "
+            args = (kwargs['query'], )
         cmd += "order by magazines.title"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
         finally:
             db.close()
         if limit:
@@ -1032,11 +1042,11 @@ class OPDS:
         links = []
         entries = []
         title = ''
-        cmd = ("SELECT Title,IssueID,IssueDate,IssueAcquired,IssueFile from issues WHERE Title='%s' "
+        cmd = ("SELECT Title,IssueID,IssueDate,IssueAcquired,IssueFile from issues WHERE Title=? "
                "order by IssueDate DESC")
         db = database.DBConnection()
         try:
-            results = db.select(cmd % kwargs['magid'])
+            results = db.select(cmd, (kwargs['magid'], ))
         finally:
             db.close()
         if limit:
@@ -1113,10 +1123,13 @@ class OPDS:
             author = db.match("SELECT AuthorName from authors WHERE AuthorID=?", (kwargs['authorid'],))
             author = make_unicode(author['AuthorName'])
             cmd = "SELECT BookName,BookDate,BookID,BookAdded,BookDesc,BookImg,BookFile from books WHERE "
+            args = ()
             if 'query' in kwargs:
-                cmd += f"instr(BookName, '{kwargs['query']}' > 0 AND "
+                cmd += "instr(BookName, ? > 0 AND "
+                args += (kwargs['query'], )
             cmd += "Status='Open' and AuthorID=? order by BookDate DESC"
-            results = db.select(cmd, (kwargs['authorid'],))
+            args += (kwargs['authorid'], )
+            results = db.select(cmd, args)
         finally:
             db.close()
         if limit:
@@ -1206,10 +1219,13 @@ class OPDS:
             author = db.match("SELECT AuthorName from authors WHERE AuthorID=?", (kwargs['authorid'],))
             author = make_unicode(author['AuthorName'])
             cmd = "SELECT BookName,BookDate,BookID,BookAdded,BookDesc,BookImg,AudioFile from books WHERE "
+            args = ()
             if 'query' in kwargs:
-                cmd += f"instr(BookName, '{kwargs['query']}') > 0 AND "
+                cmd += "instr(BookName, ?) > 0 AND "
+                args += (kwargs['query'], )
             cmd += "AudioStatus='Open' and AuthorID=? order by BookDate DESC"
-            results = db.select(cmd, (kwargs['authorid'],))
+            args += (kwargs['authorid'], )
+            results = db.select(cmd, args)
         finally:
             db.close()
         if limit:
@@ -1392,12 +1408,17 @@ class OPDS:
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Magazines'))
         cmd = "select Title,IssueID,IssueAcquired,IssueDate,IssueFile,Cover from issues "
         cmd += "where IssueFile != '' "
+        args = ()
         if 'query' in kwargs:
-            cmd += f"AND instr(Title, '{kwargs['query']}') > 0 "
+            cmd += "AND instr(Title, ?) > 0 "
+            args += (kwargs['query'], )
         cmd += "order by IssueAcquired DESC"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
         finally:
             db.close()
         if limit:
@@ -1460,12 +1481,17 @@ class OPDS:
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Comics'))
         cmd = "select comics.ComicID,Title,IssueID,IssueAcquired,IssueFile,Start from comics,comicissues "
         cmd += "where comics.ComicID = comicissues.ComicID and IssueFile != '' "
+        args = ()
         if 'query' in kwargs:
-            cmd += f"AND instr(Title, '{kwargs['query']}') > 0 "
+            cmd += "AND instr(Title, ?) > 0 "
+            args += (kwargs['query'], )
         cmd += "order by IssueAcquired DESC"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
         finally:
             db.close()
         if limit:
@@ -1547,8 +1573,10 @@ class OPDS:
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Books'))
         cmd = ("select BookName,BookID,BookLibrary,BookDate,BookImg,BookDesc,BookRate,BookAdded,BookFile,AuthorID "
                "from books where Status='Open' ")
+        args = ()
         if 'query' in kwargs:
-            cmd += f"AND instr(BookName, '{kwargs['query']}') > 0 "
+            cmd += "AND instr(BookName, ?) > 0 "
+            args += (kwargs['query'], )
         if sorder == 'Recent':
             cmd += "order by BookLibrary DESC, BookName ASC"
         if sorder == 'Rated':
@@ -1556,7 +1584,10 @@ class OPDS:
 
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
             self.dlcommslogger.debug(f"Initial select found {len(results)}")
 
             readfilter = None
@@ -1673,8 +1704,10 @@ class OPDS:
 
         cmd = ("select BookName,BookID,AudioLibrary,BookDate,BookImg,BookDesc,BookRate,BookAdded,AuthorID"
                " from books WHERE ")
+        args = ()
         if 'query' in kwargs:
-            cmd += f"instr(BookName, '{kwargs['query']}') > 0 AND "
+            cmd += "instr(BookName, ?) > 0 AND "
+            args += (kwargs['query'], )
         cmd += "AudioStatus='Open'"
         if sorder == 'Recent':
             cmd += " order by AudioLibrary DESC, BookName ASC"
@@ -1682,7 +1715,10 @@ class OPDS:
             cmd += " order by BookRate DESC, BookDate DESC"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
             if limit:
                 page = results[index:(index + limit)]
             else:

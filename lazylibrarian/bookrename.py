@@ -474,7 +474,7 @@ def audio_rename(bookid, rename=False, playlist=False, overwrite=False):
 
     if rename and old_path != dest_path:
         try:
-            if len(old_path) > len(dest_path) and old_path.startswith(dest_path):
+            if len(old_path) > len(dest_path) and old_path.startswith(dest_path + os.sep):
                 # old_path is a subdir within new correct destination
                 logger.debug(f"move contents of folder {old_path} to {dest_path}")
                 failed, err = copy_tree(old_path, dest_path)

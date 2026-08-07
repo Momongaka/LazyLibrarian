@@ -368,7 +368,7 @@ def direct_dl_method(bookid=None, dl_title=None, dl_url=None, library='eBook', p
         db = database.DBConnection()
         res = db.match('SELECT bookname from books WHERE bookid=?', (bookid,))
         if res and res['bookname']:
-            folder = res['bookname']
+            folder = sanitize(res['bookname'], is_folder_or_file=True)
         try:
             success, fname = annas_download(dl_url, folder, title, extn)
         except Exception as e:

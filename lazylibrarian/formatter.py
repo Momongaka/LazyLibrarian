@@ -154,6 +154,9 @@ def sanitize(name, is_folder_or_file=False):
     # Remove all characters below code point 32
     filename = "".join(c for c in filename if ord(c) > 31)
     filename = unicodedata.normalize('NFC', filename)
+    # don't allow leading space or dot
+    while filename and filename[0] in '. ':
+        filename = filename[1:]
     # windows filenames can't end in space or dot
     while filename and filename[-1] in '. ':
         filename = filename[:-1]

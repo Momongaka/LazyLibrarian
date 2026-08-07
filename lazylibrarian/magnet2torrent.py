@@ -32,6 +32,7 @@ import tempfile
 from time import sleep
 
 from lazylibrarian.config2 import CONFIG
+from lazylibrarian.formatter import sanitize
 
 
 # noinspection PyArgumentList
@@ -96,12 +97,12 @@ def magnet2torrent(magnet, output_name=None):
     # noinspection PyUnresolvedReferences
     torcontent = lt.bencode(torfile.generate())
     ses.remove_torrent(handle)
-
-    output = os.path.abspath(f"{torinfo.name()}.torrent")
+    sanitized_name = sanitize(torinfo.name(), is_folder_or_file=True)
+    output = os.path.abspath(f"{sanitized_name}.torrent")
     if output_name:
         if os.path.isdir(output_name):
             output = os.path.abspath(os.path.join(
-                output_name, f"{torinfo.name()}.torrent"))
+                output_name, f"{sanitized_name}.torrent"))
         elif os.path.isdir(os.path.dirname(os.path.abspath(output_name))):
             output = os.path.abspath(output_name)
 

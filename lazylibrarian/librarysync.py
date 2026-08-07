@@ -692,9 +692,14 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
             if library == 'eBook':
                 cmd = ("select AuthorName, BookName, BookFile, BookID from books,authors where BookLibrary "
                        "is not null and books.AuthorID = authors.AuthorID")
+                args = ()
                 if startdir != destdir:
-                    cmd += f" and instr(BookFile, '{startdir}') = 1"
-                books = db.select(cmd)
+                    cmd += " and instr(BookFile, ?) = 1"
+                    args += (startdir, )
+                if args:
+                    books = db.select(cmd, args)
+                else:
+                    books = db.select(cmd)
                 status = CONFIG['NOTFOUND_STATUS']
                 logger.info(f'Missing eBooks will be marked as {status}')
                 for book in books:
@@ -708,9 +713,14 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
             else:  # library == 'AudioBook':
                 cmd = ("select AuthorName, BookName, AudioFile, BookID from books,authors where AudioLibrary "
                        "is not null and books.AuthorID = authors.AuthorID")
+                args = ()
                 if startdir != destdir:
-                    cmd += f" and instr(AudioFile, '{startdir}') = 1"
-                books = db.select(cmd)
+                    cmd += " and instr(AudioFile, ?) = 1"
+                    args += (startdir, )
+                if args:
+                    books = db.select(cmd, args)
+                else:
+                    books = db.select(cmd)
                 status = CONFIG['NOTFOUND_STATUS']
                 logger.info(f'Missing AudioBooks will be marked as {status}')
                 for book in books:

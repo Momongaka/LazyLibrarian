@@ -448,7 +448,9 @@ def prepare_comic_metadata(book_id, db) -> ComicMetadata | None:
     comic_name = enforce_str(
         make_unicode(unaccented(sanitize(comic_data["Title"]), only_ascii=False) or "")
     )
-    publisher = comic_data.get("Publisher", "")
+    publisher = enforce_str(
+        make_unicode(unaccented(sanitize(comic_data["Publisher"]), only_ascii=False) or "")
+    )
 
     dest_path = (
         CONFIG["COMIC_DEST_FOLDER"]

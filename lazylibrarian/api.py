@@ -448,11 +448,14 @@ class Api:
         return json.dumps(self.data)
 
     @staticmethod
-    def _dic_from_query(query):
+    def _dic_from_query(query, args=None):
 
         db = database.DBConnection()
         try:
-            rows = db.select(query)
+            if args:
+                rows = db.select(query, args)
+            else:
+                rows = db.select(query)
         finally:
             db.close()
 
@@ -1195,17 +1198,22 @@ class Api:
         TELEMETRY.record_usage_data()
         limit = kwargs.get('limit', '')
         if limit:
-            limit = f"limit {limit}"
-        self.data = self._dic_from_query(
-            f"SELECT authorid,authorname,dateadded,reason,status from authors order by dateadded desc {limit}")
+            self.data = self._dic_from_query(
+                "SELECT authorid,authorname,dateadded,reason,status from authors order by dateadded desc limit ?", (limit, ))
+        else:
+            self.data = self._dic_from_query(
+                "SELECT authorid,authorname,dateadded,reason,status from authors order by dateadded desc")
 
     def _listnewbooks(self, **kwargs):
         TELEMETRY.record_usage_data()
         limit = kwargs.get('limit', '')
         if limit:
             limit = f"limit {limit}"
-        self.data = self._dic_from_query(
-            f"SELECT bookid,bookname,bookadded,scanresult,status from books order by bookadded desc {limit}")
+            self.data = self._dic_from_query(
+                "SELECT bookid,bookname,bookadded,scanresult,status from books order by bookadded desc limit ?", (limit, ))
+        else:
+            self.data = self._dic_from_query(
+                "SELECT bookid,bookname,bookadded,scanresult,status from books order by bookadded desc")
 
     def _showthreads(self):
         TELEMETRY.record_usage_data()
@@ -1756,10 +1764,10 @@ class Api:
         res = self._dic_from_query(q)
         for author in res:
             q = "select count('bookname'),authorid,bookname from books where "
-            q += f"AuthorID={author['AuthorID']} "
+            q += "AuthorID=? "
             q += "and ( Status != 'Ignored' or AudioStatus != 'Ignored' ) "
             q += "group by bookname having ( count(bookname) > 1 )"
-            r = self._dic_from_query(q)
+            r = self._dic_from_query(q, (author['AuthorID'], ))
             self.data += r
 
     def _listdupebookstatus(self):
@@ -1770,9 +1778,9 @@ class Api:
         for item in res:
             q = 'select BookID,BookName,AuthorName,books.Status,AudioStatus from books,authors where '
             q += f"books.authorid=authors.authorid and books.authorid={item['AuthorID']} "
-            q += f"and BookName=\"{item['BookName']}\" "
+            q += "and BookName=? "
             q += "and ( books.Status != 'Ignored' or AudioStatus != 'Ignored' )"
-            r = self._dic_from_query(q)
+            r = self._dic_from_query(q, (item['BookName'], ))
             self.data += r
 
     def _listignoredbooks(self):
@@ -1792,10 +1800,9 @@ class Api:
             self.data = 'Missing parameter: id'
             return
         author = self._dic_from_query(
-            f"SELECT * from authors WHERE AuthorID=\"{self.id}\"")
+            "SELECT * from authors WHERE AuthorID=?", (self.id, ))
         books = self._dic_from_query(
-            f"SELECT * from books WHERE AuthorID=\"{self.id}\"")
-
+            "SELECT * from books WHERE AuthorID=?", (self.id, ))
         self.data = {'author': author, 'books': books}
 
     def _getmagazines(self):
@@ -1811,16 +1818,23 @@ class Api:
         q = '''SELECT authors.AuthorID,AuthorName,AuthorLink,BookName,BookSub,BookGenre,BookIsbn,BookPub,
                 BookRate,BookImg,BookPages,BookLink,BookID,BookDate,BookLang,BookAdded,books.Status,
                 audiostatus,booklibrary,audiolibrary from books,authors where books.AuthorID = authors.AuthorID'''
-
+        args = ()
         if self.status:
-            q += f" and books.Status='{self.status}'"
+            q += " and books.Status=?"
+            args += (self.status, )
         if self.audiostatus:
-            q += f" and books.AudioStatus='{self.audiostatus}'"
+            q += " and books.AudioStatus=?"
+            args += (self.audiostatus, )
         if self.sort:
-            q += f' order by {self.sort}'
+            q += ' order by ?'
+            args += (self.sort, )
         if self.limit and self.limit.isnumeric():
-            q += f' limit {self.limit}'
-        self.data = self._dic_from_query(q)
+            q += ' limit ?'
+            args += (self.limit, )
+        if args:
+            self.data = self._dic_from_query(q, args)
+        else:
+            self.data = self._dic_from_query(q)
 
     def _getissues(self, **kwargs):
         TELEMETRY.record_usage_data()
@@ -1829,21 +1843,27 @@ class Api:
         self.sort = kwargs.get('sort')
         if self.id:
             magazine = self._dic_from_query(
-                f"SELECT * from magazines WHERE Title='{self.id}' COLLATE NOCASE")
-            q = f"SELECT * from issues WHERE Title='{self.id}' COLLATE NOCASE"
+                "SELECT * from magazines WHERE Title=? COLLATE NOCASE", (self.id, ))
+            q = "SELECT * from issues WHERE Title=? COLLATE NOCASE"
+            q_args = (self.id, )
             if self.sort:
-                q += f' order by {self.sort}'
+                q += ' order by ?'
+                q_args += (self.sort, )
             if self.limit and self.limit.isnumeric():
-                q += f' limit {self.limit}'
-            issues = self._dic_from_query(q)
+                q += ' limit ?'
+                q_args += (self.limit, )
+            issues = self._dic_from_query(q, q_args)
             self.data = {'magazine': magazine, 'issues': issues}
         else:
             q = 'SELECT * from issues'
+            args = ()
             if self.sort:
-                q += f' order by {self.sort}'
+                q += ' order by ?'
+                args += (self.sort, )
             if self.limit and self.limit.isnumeric():
-                q += f' limit {self.limit}'
-            self.data = self._dic_from_query(q)
+                q += ' limit ?'
+                args += (self.limit, )
+            self.data = self._dic_from_query(q, args)
 
     def _shrinkmag(self, **kwargs):
         TELEMETRY.record_usage_data()
@@ -1900,7 +1920,7 @@ class Api:
         if not self.id:
             self.data = 'Missing parameter: id'
             return
-        book = self._dic_from_query(f"SELECT * from books WHERE BookID=\"{self.id}\"")
+        book = self._dic_from_query("SELECT * from books WHERE BookID=?", (self.id, ))
         self.data = {'book': book}
 
     def _queuebook(self, **kwargs):

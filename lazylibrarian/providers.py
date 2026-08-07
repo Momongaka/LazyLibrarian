@@ -1630,7 +1630,7 @@ def indigo(host=None, feednr=None, priority=0, dispname=None, types='E', test=Fa
             apiresult = apiresult.replace('\n', '').strip().replace(':', ': ').replace("“", "'").replace("”", "'")
 
             # conver to list of dict
-            apilist = list(eval(apiresult))
+            apilist = list(json.loads(apiresult))
 
             # List containt word without quote
             titles = []
