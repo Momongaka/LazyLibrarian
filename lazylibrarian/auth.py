@@ -185,8 +185,9 @@ class AuthController:
         # noinspection PyUnresolvedReferences
         cherrypy.session[SESSION_KEY] = cherrypy.request.login = current_username  # pylint: disable=no-member
         self.on_login(current_username, current_password)
-        if CONFIG['HTTP_ROOT']:
-            from_page = f"{CONFIG['HTTP_ROOT'].rstrip('/')}/{from_page}"
+        root = CONFIG['HTTP_ROOT'].rstrip('/')
+        if root and not from_page.startswith(root):
+            from_page = f"{root}/{from_page}"
         raise cherrypy.HTTPRedirect(from_page or CONFIG['HTTP_ROOT'])
 
     @cherrypy.expose
@@ -198,6 +199,7 @@ class AuthController:
         if username:
             cherrypy.request.login = None
             self.on_logout(username)
-            if CONFIG['HTTP_ROOT']:
-                from_page = f"{CONFIG['HTTP_ROOT']}/{from_page}"
+            root = CONFIG['HTTP_ROOT'].rstrip('/')
+            if root and not from_page.startswith(root):
+                from_page = f"{root}/{from_page}"
             raise cherrypy.HTTPRedirect(from_page or CONFIG['HTTP_ROOT'])
