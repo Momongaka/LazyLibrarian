@@ -979,7 +979,67 @@ def move_book_to_author(bookid, old_authorid, new_authorid):
 
     update_totals(old_authorid)
     update_totals(new_authorid)
+
+    _rewrite_opf_creator(bookid, new_authorid, logger)
     logger.debug(f"Moved book {bookid} from author {old_authorid} to {new_authorid}")
+
+
+def _rewrite_opf_creator(bookid, new_authorid, logger):
+    from lazylibrarian.filesystem import opf_file, path_isfile, remove_file, safe_move
+    from lazylibrarian.opfedit import opf_read, opf_write
+
+    db = database.DBConnection()
+    try:
+        row = db.match(
+            'SELECT b.BookFile, b.AudioFile, a.AuthorName '
+            'FROM books b, authors a WHERE b.BookID=? AND b.AuthorID=a.AuthorID',
+            (bookid,))
+    finally:
+        db.close()
+    if not row:
+        return
+
+    new_author = row['AuthorName']
+    book_dir = None
+    for field in ('BookFile', 'AudioFile'):
+        fpath = row[field]
+        if fpath and path_isfile(fpath):
+            book_dir = os.path.dirname(fpath)
+            break
+
+    if not book_dir:
+        return
+
+    opf = opf_file(book_dir)
+    if not opf or not path_isfile(opf):
+        return
+
+    opf_template, replaces = opf_read(opf)
+    if not opf_template:
+        return
+
+    subs = []
+    changed = False
+    for itm in replaces:
+        if itm[0].startswith('creator'):
+            if itm[1] != new_author:
+                subs.append((itm[0], new_author))
+                changed = True
+            else:
+                subs.append(itm)
+        else:
+            subs.append(itm)
+
+    if changed:
+        new_opf = opf_write(opf_template, subs)
+        if new_opf:
+            remove_file(opf_template)
+            remove_file(opf)
+            try:
+                safe_move(new_opf, opf)
+                logger.debug(f"Updated OPF creator to {new_author} in {opf}")
+            except Exception as e:
+                logger.warning(f"Failed to update OPF: {e}")
 
 
 def import_book(bookid, ebook=None, audio=None, wait=False, reason='importer.import_book', source=None):
