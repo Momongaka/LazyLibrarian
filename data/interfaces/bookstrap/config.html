@@ -2664,6 +2664,12 @@
                 </fieldset>
                 <fieldset>
                   <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['IMP_EBOOKOPF'] else '' %>
+                    <label for="imp_ebookopf" class="control-label">
+                      <input type="checkbox" id="imp_ebookopf" name="imp_ebookopf" value="1" ${checked} />
+                      Create opf files for ebooks</label>
+                  </div>
+                  <div class="checkbox">
                     <% checked = 'checked="checked"' if CONFIG['FULL_SCAN'] else '' %>
                     <label for="full_scan" class="control-label">
                       <input type="checkbox" id="full_scan" name="full_scan" value="1" ${checked} />

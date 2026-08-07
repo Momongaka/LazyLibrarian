@@ -105,6 +105,7 @@ BASE_DEFAULTS: list[ConfigItem] = [
     ConfigCSV('General', 'IMP_MONTHLANG', ''),
     ConfigStr('General', 'IMP_AUTOADD', ''),
     ConfigBool('General', 'IMP_AUTOADD_COPY', 1),
+    ConfigBool('General', 'IMP_EBOOKOPF', 1),
     ConfigBool('General', 'IMP_AUTOADD_BOOKONLY', 0),
     ConfigBool('General', 'IMP_AUTOSEARCH', 0),
     ConfigBool('General', 'BLACKLIST_FAILED', 1),

@@ -3507,7 +3507,7 @@ def _process_extras(
     # not contain our choice of authorname/title/identifier, so if autoadding we ignore it and write our own
     if not CONFIG.get_bool("IMP_AUTOADD_BOOKONLY"):
         _ = create_opf(dest_path, data, global_name, overwrite=True)
-    else:
+    elif CONFIG.get_bool('IMP_EBOOKOPF'):
         _ = create_opf(dest_path, data, global_name, overwrite=False)
     # if our_opf:
     #     write_meta(dest_path, opf_file)  # write metadata from opf to all ebook types in dest folder
@@ -4032,8 +4032,9 @@ def _process_destination(
                 uglobal_name,
                 ImageType.BOOK,
             )
-            opf_data = book_metadata.get_opf_data()
-            _ = create_opf(book_path, opf_data, uglobal_name, True)
+            if CONFIG.get_bool('IMP_EBOOKOPF'):
+                opf_data = book_metadata.get_opf_data()
+                _ = create_opf(book_path, opf_data, uglobal_name, True)
 
         # try to keep track of "preferred" ebook type or the first part of multipart audiobooks
         # Find the preferred file to use as the main book file

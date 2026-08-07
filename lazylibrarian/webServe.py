@@ -209,10 +209,15 @@ def clear_mako_cache(userid=0):
 
 
 def clear_our_cookies():
-    cherrypy.response.cookie['ll_uid'] = ''
-    cherrypy.response.cookie['ll_uid']['expires'] = 0
-    cherrypy.response.cookie['ll_prefs'] = '0'
-    cherrypy.response.cookie['ll_prefs']['expires'] = 0
+    cookie = cherrypy.response.cookie
+    cookie['ll_uid'] = ''
+    cookie['ll_uid']['path'] = '/'
+    cookie['ll_uid']['expires'] = 0
+    cookie['ll_uid']['max-age'] = 0
+    cookie['ll_prefs'] = '0'
+    cookie['ll_prefs']['path'] = '/'
+    cookie['ll_prefs']['expires'] = 0
+    cookie['ll_prefs']['max-age'] = 0
 
 
 def serve_template(templatename, **kwargs):
@@ -521,6 +526,10 @@ class WebInterface:
 
         if perm & required_perm:
             return
+
+        if not userid:
+            root = CONFIG['HTTP_ROOT'].rstrip('/') if CONFIG['HTTP_ROOT'] else ''
+            raise cherrypy.HTTPRedirect(f"{root}/auth/login")
 
         _, method, _ = get_info_on_caller(depth=1)
         TELEMETRY.record_usage_data()
@@ -848,7 +857,10 @@ class WebInterface:
             db.close()
         clear_our_cookies()
         lazylibrarian.LOGINUSER = None
-        raise cherrypy.HTTPRedirect("home")
+        if cherrypy.request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return "OK"
+        root = CONFIG['HTTP_ROOT'].rstrip('/') if CONFIG['HTTP_ROOT'] else ''
+        raise cherrypy.HTTPRedirect(f"{root}/login")
 
     @cherrypy.expose
     @require_auth()
@@ -1753,7 +1765,8 @@ class WebInterface:
         self.check_permitted(lazylibrarian.perm_status)
         logger = logging.getLogger(__name__)
         db = database.DBConnection()
-        args.pop('book_table_length', None)
+        for arg in ['book_table_length', 'series_table_length', 'author_table_length', 'ignored', '_', 'action', 'which_status']:
+            args.pop(arg, None)
         passed = 0
         failed = 0
         redirect = ''
@@ -2364,7 +2377,7 @@ class WebInterface:
     def mark_authors_ajax(self, action=None, **args):
         self.check_permitted(lazylibrarian.perm_status)
         logger = logging.getLogger(__name__)
-        for arg in ['author_table_length', 'ignored']:
+        for arg in ['author_table_length', 'series_table_length', 'book_table_length', 'ignored', '_', 'action', 'which_status']:
             args.pop(arg, None)
         passed = 0
         failed = 0
@@ -4405,14 +4418,14 @@ class WebInterface:
                         if data['BookFile'] and path_isfile(data['BookFile']):
                             dest_path = os.path.dirname(data['BookFile'])
                             global_name = splitext(os.path.basename(data['BookFile']))[0]
-                            if opf_template:  # we already have a valid (new) opffile
+                            if opf_template and CONFIG.get_bool('IMP_EBOOKOPF'):  # we already have a valid (new) opffile
                                 dest_opf = os.path.join(dest_path, global_name + '.opf')
                                 if opffile != dest_opf:
                                     try:
                                         safe_copy(opffile, dest_opf)
                                     except Exception as e:
                                         logger.warning(f"Failed to copy opf file: {str(e)}")
-                            else:
+                            elif CONFIG.get_bool('IMP_EBOOKOPF'):
                                 create_opf(dest_path, data, global_name, overwrite=True)
 
                     raise cherrypy.HTTPRedirect(f"edit_book?bookid={bookid}")

@@ -265,8 +265,10 @@ def send_to_calibre(booktype, global_name, folder, data):
                     lazylibrarian.postprocess.process_img(
                         folder, bookid, data["BookImg"], global_name, ImageType.BOOK
                     )
-                    opfpath, our_opf = create_opf(folder, data, global_name, True)
-                    # if we send an opf, does calibre update the book-meta as well?
+                    if not CONFIG.get_bool('IMP_EBOOKOPF'):
+                        logger.debug("create_book_opf is disabled")
+                    else:
+                        opfpath, our_opf = create_opf(folder, data, global_name, True)
                 elif booktype == "comic":
                     if data.get("Cover"):
                         lazylibrarian.postprocess.process_img(

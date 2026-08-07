@@ -877,7 +877,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 logger.debug(f"Reading info from {metafile}")
                                 res2 = get_book_info(metafile)
                                 for item in res2:
-                                    res[item] = res2[item]
+                                    if res2[item]:  # only override if OPF field is non-empty
+                                        res[item] = res2[item]
                         except Exception as e:
                             logger.error(f'get_book_info failed for {metafile}, {type(e).__name__} {str(e)}')
 
@@ -1259,13 +1260,14 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                                     'UPDATE books set Status=?, BookLibrary=? where BookID=?',
                                                     (CONFIG['FOUND_STATUS'], now(), bookid))
 
-                                            # create an opf file if there isn't one
-                                            book_filename = os.path.join(rootdir, files)
-                                            _ = lazylibrarian.metadata_opf.create_opf(os.path.dirname(book_filename),
-                                                                                      check_status,
-                                                                                      splitext(os.path.basename(
-                                                                                          book_filename))[0],
-                                                                                      overwrite=False)
+                                            if CONFIG.get_bool('IMP_EBOOKOPF'):
+                                                # create an opf file if there isn't one
+                                                book_filename = os.path.join(rootdir, files)
+                                                _ = lazylibrarian.metadata_opf.create_opf(os.path.dirname(book_filename),
+                                                                                          check_status,
+                                                                                          splitext(os.path.basename(
+                                                                                              book_filename))[0],
+                                                                                          overwrite=False)
                                             if CONFIG.get_bool('IMP_RENAME'):
                                                 new_filename, _ = book_rename(bookid)
                                                 if new_filename and new_filename != check_status['BookFile']:
@@ -1315,11 +1317,12 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
 
                                             # store audiobook location so we can check if it gets (re)moved
                                             book_filename = os.path.join(rootdir, files)
-                                            # create an opf if there isn't one
-                                            _ = lazylibrarian.metadata_opf.create_opf(os.path.dirname(book_filename),
-                                                                                      check_status,
-                                                                                      check_status['BookName'],
-                                                                                      overwrite=False)
+                                            if CONFIG.get_bool('IMP_EBOOKOPF'):
+                                                # create an opf if there isn't one
+                                                _ = lazylibrarian.metadata_opf.create_opf(os.path.dirname(book_filename),
+                                                                                          check_status,
+                                                                                          check_status['BookName'],
+                                                                                          overwrite=False)
                                             # link to the first part of multi-part audiobooks
                                             tokmatch = ''
                                             for token in [' 001.', ' 01.', ' 1.', ' 001 ', ' 01 ', ' 1 ', '01']:
