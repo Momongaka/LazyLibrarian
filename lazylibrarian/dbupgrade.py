@@ -378,6 +378,8 @@ def check_db(upgradelog=None):
                 source = 'gr_id'
             elif info == 'HardCover':
                 source = 'hc_id'
+            elif info == 'RanobeDB':
+                source = 'ran_id'
             else:
                 source = ''
             if source:
