@@ -187,7 +187,7 @@
                 <span class="icon-bar"></span>
               </button>
               <div id="brand">
-                <a class="navbar-brand" href="home"><i class="fa fa-home"></i> LazyLibrarian
+                <a class="navbar-brand" href="${CONFIG['HTTP_ROOT'] or ''}/home"><i class="fa fa-home"></i> LazyLibrarian
                   <i class="fa fa-spin fa-spinner" id="spinner" title="${'\n'.join(show_running())}"></i>
                 % if not show_running():
                   <script type="text/javascript">
@@ -411,7 +411,7 @@
                 callback: function (result) {
                   if (result) { $.get("logout", { },
                       function (data) {
-                         window.location = "home"
+                         window.location = "${CONFIG['HTTP_ROOT'] or ''}/login";
                       }); }
                 }
             });
