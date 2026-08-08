@@ -1818,6 +1818,22 @@ def _process_matched_directory(
             if not valid_file_path:
                 logger.debug("No valid file after extraction")
                 return False, "No valid file found after extraction"
+        elif book_state.get_book_type_enum() == BookType.AUDIOBOOK:
+            # No archives, but a multi-part audiobook is often placed in a subfolder
+            # (e.g. "<Title> (year)/"). Recurse before giving up so the post-processor
+            # can still locate the parts. Scoped to audiobooks only: the recursive find
+            # returns the first valid-extension file it walks into, with no sample
+            # filtering or name matching, so eBooks keep the original bail and let the
+            # archive/collection best-match logic handle nested layouts.
+            valid_file_path = _find_valid_file_in_directory(
+                book_state.candidate_ptr,
+                book_type=book_state.get_book_type_str(),
+                recurse=True,
+            )
+            if valid_file_path:
+                book_state.update_candidate(os.path.dirname(valid_file_path))
+            else:
+                return False, "No valid file or archives found"
         else:
             return False, "No valid file or archives found"
 
