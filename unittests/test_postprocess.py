@@ -436,6 +436,54 @@ class PostprocessHelperTest(LLTestCaseWithStartup):
             stem, ext = _tokenize_file(filepath)
             self.assertEqual((stem, ext), expected)
 
+    def test_tokenize_file_interior_periods(self):
+        """A period inside a name (author initials) must NOT be treated as a
+        file extension. Regression for download folders like
+        'Rhett C. Bruno, Jaime Castle - An Unexpected Hero A LitRPG Adventure'
+        where Path.stem chopped everything after 'C.' down to 'Rhett C',
+        destroying the title and dropping the fuzzy match below threshold."""
+        test_cases = [
+            # (name, expected_stem, expected_ext)
+            # Interior period, no real extension -> whole name is the stem
+            (
+                "Rhett C. Bruno, Jaime Castle - An Unexpected Hero A LitRPG Adventure",
+                "Rhett C. Bruno, Jaime Castle - An Unexpected Hero A LitRPG Adventure",
+                "",
+            ),
+            ("J.R.R. Tolkien - The Hobbit", "J.R.R. Tolkien - The Hobbit", ""),
+            ("Robert A. Caro - The Path to Power", "Robert A. Caro - The Path to Power", ""),
+            # Real media extension is still stripped, even with interior periods
+            (
+                "Rhett C. Bruno - An Unexpected Hero.m4b",
+                "Rhett C. Bruno - An Unexpected Hero",
+                "m4b",
+            ),
+            # Special/skip extensions must still be recognized (used elsewhere)
+            ("isolated.unpack", "isolated", "unpack"),
+            ("incomplete.part", "incomplete", "part"),
+        ]
+        for name, expected_stem, expected_ext in test_cases:
+            stem, ext = _tokenize_file(name)
+            self.assertEqual(
+                (stem, ext), (expected_stem, expected_ext), f"Failed for: {name}"
+            )
+
+    def test_tokenize_then_match_author_initial_folder(self):
+        """End-to-end: a folder named author-first with an initial must still
+        clear the match threshold against a title-first download name once it
+        is tokenized and normalized (the real-world stuck-Snatched case)."""
+        download_title = (
+            "An Unexpected Hero A LitRPG Adventure - Rhett C. Bruno, Jaime Castle"
+        )
+        folder = "Rhett C. Bruno, Jaime Castle - An Unexpected Hero A LitRPG Adventure"
+
+        stem, _ext = _tokenize_file(folder)
+        normalized_candidate = _normalize_title(stem)
+        match = _calculate_fuzzy_match(download_title, normalized_candidate, None)
+        # Same tokens, just reordered -> token_set_ratio should be ~100%,
+        # and must beat the default DLOAD_RATIO/NAME_RATIO of 90.
+        self.assertGreaterEqual(match, 90)
+
     def test_calculate_fuzzy_match(self):
         """Test fuzzy matching calculation"""
         # Perfect match

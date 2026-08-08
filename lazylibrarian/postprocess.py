@@ -26,7 +26,6 @@ import traceback
 import uuid
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Final
 
 from rapidfuzz import fuzz
@@ -798,13 +797,40 @@ def _normalize_title(title: str) -> str:
     return sanitize(new_title).strip()
 
 
+def _is_recognised_extension(ext: str) -> bool:
+    """
+    Decide whether a trailing ``.xxx`` is a real file extension rather than
+    part of the name (e.g. an author initial like ``Rhett C.``).
+
+    Recognised means a configured media type, a configured skip extension
+    (part/torrent/nzb/...), or the internal ``unpack`` marker. Comparison is
+    case-insensitive; ``ext`` is given with no leading dot.
+    """
+    ext = ext.strip().lower()
+    if not ext:
+        return False
+    recognised = set(CONFIG.get_all_types_list()) if CONFIG else set()
+    if CONFIG:
+        recognised.update(get_list(CONFIG["SKIPPED_EXT"]))
+    recognised.update(("unpack", "cbr", "cbz"))
+    return ext in recognised
+
+
 def _tokenize_file(filepath_or_name: str) -> "tuple[str, str]":
     """
     Extract filename stem and extension from a file path.
 
+    Only a *recognised* trailing extension is split off, so interior periods
+    in a name -- author initials such as "Rhett C." or "J.R.R." -- are kept in
+    the stem instead of being mistaken for an extension. Using ``Path.stem``
+    here would turn "Rhett C. Bruno - An Unexpected Hero" into "Rhett C",
+    destroying the title and dropping the fuzzy match below threshold.
+
     Example:
         >>> _tokenize_file("/path/to/file.epub")
         ("file", "epub")
+        >>> _tokenize_file("Rhett C. Bruno - An Unexpected Hero")
+        ("Rhett C. Bruno - An Unexpected Hero", "")
 
     Args:
         filepath_or_name: Full path or filename
@@ -812,11 +838,12 @@ def _tokenize_file(filepath_or_name: str) -> "tuple[str, str]":
     Returns:
         Tuple of (stem, extension) where extension has no leading dot
     """
-    path_obj = Path(filepath_or_name)
-    stem = path_obj.stem
-    # Slice off the leading dot from the suffix
-    extension = path_obj.suffix[1:]
-    return stem, extension
+    name = os.path.basename(str(filepath_or_name))
+    stem, dot, ext = name.rpartition(".")
+    if dot and stem and _is_recognised_extension(ext):
+        return stem, ext
+    # No recognised extension: the whole name is the stem
+    return name, ""
 
 
 def _is_valid_media_file(
@@ -1592,13 +1619,16 @@ def _try_match_candidate_file(
         f"{round(match_percent, 2)}% match {book_state.download_title} : {normalized_candidate}"
     )
 
-    # If no match and it's a directory, drill down to find the right book
-    if not is_match and path_isdir(book_state.candidate_ptr or ""):
+    # Drill down inside a directory to find the right book. Even when the
+    # folder name already matches the download/series title, the wanted book
+    # may be one item inside a multi-book collection, so always look for a more
+    # specific subdirectory match on the book title and prefer it when found.
+    if path_isdir(book_state.candidate_ptr or ""):
         logger.debug(f"{candidate_file} is a directory, checking contents")
 
         book_type_str = book_state.get_book_type_str()
         if not book_type_str:
-            return False, 0
+            return is_match, match_percent
 
         # Use actual book title for drill-down if available, otherwise use download title
         # This is critical for collections where download name != individual book name
@@ -1611,8 +1641,10 @@ def _try_match_candidate_file(
         # _normalize_title now handles stripping known extensions intelligently
         search_title = _normalize_title(search_title)
 
-        # Try 1: Match subdirectories (for collections organized in folders)
-        # This is common for audiobook series and some ebook collections
+        # Try 1: Match subdirectories (for collections organized in folders).
+        # This is common for audiobook series and some ebook collections. A
+        # specific subdir match overrides a broader folder-name match so a
+        # series download resolves to the individual wanted book.
         matched_subdir, subdir_match_percent = _find_matching_subdir(
             book_state.candidate_ptr or "",
             search_title,
@@ -1628,8 +1660,10 @@ def _try_match_candidate_file(
             book_state.update_candidate(matched_subdir)
             is_match = True
             match_percent = subdir_match_percent
-        else:
-            # Try 2: Match files at root level (for collections with files in one directory)
+        elif not is_match:
+            # Try 2: Match files at root level (for flat collections with files
+            # in one directory). Only needed when the folder name itself did not
+            # match; a single matched book folder is processed as-is.
             matched_file, file_match_percent = _find_matching_file_in_directory(
                 book_state.candidate_ptr or "",
                 search_title,
