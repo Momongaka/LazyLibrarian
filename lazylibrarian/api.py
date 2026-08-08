@@ -98,6 +98,7 @@ from lazylibrarian.importer import (
     add_author_name_to_db,
     add_author_to_db,
     de_duplicate,
+    delete_secondaries,
     get_all_author_details,
     search_for,
     update_totals,
@@ -3216,19 +3217,7 @@ class Api:
 
     def _deletesecondaries(self):
         TELEMETRY.record_usage_data()
-        db = database.DBConnection()
-        res = db.select('select distinct authorid from bookauthors except select authorid from books')
-        self.data = {}
-        cnt = 0
-        for item in res:
-            auth = db.match('select authorname from authors where authorid=?', (item['authorid'], ))
-            if auth:
-                self.data[item['authorid']] = auth['authorname']
-        for key, value in self.data.items():
-            cnt += 1
-            self.logger.debug(f"Deleting {key}: {value}")
-            db.action('delete from authors where authorid=?', (key, ))
-        db.action('vacuum')
+        cnt = delete_secondaries(quiet=False)
         self.data = f"Removed {cnt} secondary authors"
 
     def _cleanmaglibrary(self):

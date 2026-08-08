@@ -2248,6 +2248,14 @@
                     <span class="help-block">This will import details for contributing authors,<br>
                       not just the "primary" author of a book</span>
                   </div>
+                  <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['DEL_SECONDARY'] else '' %>
+                    <label for="del_secondary" class="control-label">
+                      <input type="checkbox" id="del_secondary" name="del_secondary" value="1" ${checked} />
+                      Periodically delete secondaries</label>
+                    <span class="help-block">This will delete authors who are only listed as secondary,<br>
+                      not as the "primary" author of any book</span>
+                  </div>
                   <fieldset>
                   <legend>External Programs</legend>
                   <div class="form-group">

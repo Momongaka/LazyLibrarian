@@ -1002,6 +1002,26 @@ def update_totals(authorid, quiet=False):
         db.close()
 
 
+def delete_secondaries(quiet=False):
+    logger = logging.getLogger(__name__)
+    db = database.DBConnection()
+    res = db.select('select distinct authorid from bookauthors except select authorid from books')
+    data = {}
+    cnt = 0
+    for item in res:
+        auth = db.match('select authorname from authors where authorid=?', (item['authorid'], ))
+        if auth:
+            data[item['authorid']] = auth['authorname']
+    for key, value in data.items():
+        cnt += 1
+        if not quiet:
+            logger.debug(f"Deleting {key}: {value}")
+        db.action('delete from authors where authorid=?', (key, ))
+    db.action('vacuum')
+    db.close()
+    return cnt
+
+
 def update_all_totals():
     """ Recalculate and update book totals (Have, Unignored, Total) for all authors in database """
     logger = logging.getLogger(__name__)
@@ -1013,6 +1033,9 @@ def update_all_totals():
             for author in authors:
                 update_totals(author['AuthorID'], quiet=True)
             logger.debug("Update totals complete")
+            if CONFIG.get_bool('DEL_SECONDARY'):
+                cnt = delete_secondaries(quiet=True)
+                logger.debug(f"Deleted {cnt} secondary authors")
     except Exception as e:
         logger.error(f"Error in update_all_totals: {e}")
     finally:
