@@ -355,6 +355,8 @@ BASE_DEFAULTS: list[ConfigItem] = [
     ConfigCSV('General', 'PREFER_WORDS', 'retail', force_lower=True),
     ConfigCSV('General', 'REJECT_AUDIO', 'epub, mobi', force_lower=True),
     ConfigInt('General', 'MAG_AGE', 31),
+    ConfigScheduler('SearchScan', 'TOTALS_INTERVAL', 'update_totals', 24, TimeUnit.HOUR,
+                    'UPDATETOTALS', 'lazylibrarian.importer.update_all_totals', 'Update Totals', False, persist=False),
     ConfigScheduler('SearchScan', 'SEARCH_BOOKINTERVAL', 'search_book', 360, TimeUnit.MIN,
                     'SEARCHALLBOOKS', 'lazylibrarian.searchbook.cron_search_book', 'Book search', True),
     ConfigScheduler('SearchScan', 'SEARCH_MAGINTERVAL', 'search_magazines', 360, TimeUnit.MIN,

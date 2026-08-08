@@ -316,15 +316,16 @@ def get_all_author_details(authorid='', authorname=None):
     pref = ''
     match = {}
     db = database.DBConnection()
+    select_keys = f"{','.join(keys)}," if keys else ""
     if authorid:
-        cmd = f"SELECT {','.join(keys)},authorid,authorname from authors WHERE authorid=?"
+        cmd = f"SELECT {select_keys}authorid,authorname from authors WHERE authorid=?"
         for k in keys:
             cmd += f" or {k}=?"
         match = db.match(cmd, tuple([str(authorid)] * (len(keys) + 1)))
     if not match and authorname:
         a_name, a_id = get_preferred_author(authorname, authorid=authorid)
         if a_id:
-            cmd = f"SELECT {','.join(keys)},authorid,authorname from authors WHERE authorname=? COLLATE NOCASE"
+            cmd = f"SELECT {select_keys}authorid,authorname from authors WHERE authorname=? COLLATE NOCASE"
             name_match = db.match(cmd, (a_name,))
             if name_match:
                 for k in keys:
@@ -798,10 +799,121 @@ def de_duplicate(authorid):
 
     if author:
         authorname = author['AuthorName']
+
+    def merge_copies(copies):
+        nonlocal total
+        if not copies or len(copies) <= 1:
+            return 0
+        copies = [dict(c) for c in copies]
+        favourite = {}
+        for copy in copies:
+            if (copy['Status'] in ['Open', 'Have'] or
+                    copy['AudioStatus'] in ['Open', 'Have']):
+                favourite = copy
+                break
+        if not favourite:
+            for copy in copies:
+                if (copy['Status'] in ['Wanted'] or
+                        copy['AudioStatus'] in ['Wanted']):
+                    favourite = copy
+                    break
+        if not favourite:
+            for copy in copies:
+                if copy['Status'] not in ['Ignored'] and copy['AudioStatus'] not in ['Ignored']:
+                    favourite = copy
+                    break
+        if not favourite and copies:
+            favourite = copies[0]
+        if not favourite:
+            return 0
+        logger.debug(f"Favourite {favourite['BookID']} {favourite['BookName']} "
+                     f"({favourite['Status']}/{favourite['AudioStatus']})")
+        merged = 0
+        def is_empty(val):
+            if not val:
+                return True
+            s = str(val).strip().lower()
+            return s in ['0000', '0000-00-00', '0000-00', '0', '0.0', 'unknown', 'none', 'null']
+
+        for copy in copies:
+            if copy['BookID'] != favourite['BookID']:
+                members = db.select("SELECT SeriesID,SeriesNum from member WHERE BookID=?",
+                                    (copy['BookID'],))
+                if members:
+                    for member in members:
+                        logger.debug(f"Updating BookID for member {member['SeriesNum']} of series "
+                                     f"{member['SeriesID']}")
+                        db.action("UPDATE member SET BookID=? WHERE BookID=? and SeriesID=?",
+                                  (favourite['BookID'], copy['BookID'], member['SeriesID']),
+                                  suppress='UNIQUE')
+                for key in booktable_keys:
+                    if is_empty(favourite[key]) and not is_empty(copy[key]):
+                        cmd = f"UPDATE books SET {key}=? WHERE BookID=?"
+                        logger.debug(f"Copy {key} from {copy['BookID']}: {copy['BookName']}")
+                        db.action(cmd, (copy[key], favourite['BookID']))
+                        favourite[key] = copy[key]
+                        if copy['Status'] not in ['Ignored'] and copy['AudioStatus'] not in ['Ignored']:
+                            if key == 'BookFile' and favourite['Status'] not in ['Open', 'Have']:
+                                logger.debug(f"Copy Status from {copy['BookID']}")
+                                db.action('UPDATE books SET Status=? WHERE BookID=?',
+                                          (copy['Status'], favourite['BookID']))
+                            if key == 'AudioFile' and favourite['AudioStatus'] not in ['Open', 'Have']:
+                                logger.debug(f"Copy AudioStatus from {copy['BookID']}")
+                                db.action('UPDATE books SET AudioStatus=? WHERE BookID=?',
+                                          (copy['AudioStatus'], favourite['BookID']))
+
+                if copy['Status'] in ['Ignored'] or copy['AudioStatus'] in ['Ignored']:
+                    logger.debug(f"Keeping duplicate {copy['BookID']}, {copy['Status']}/"
+                                 f"{copy['AudioStatus']}")
+                else:
+                    logger.debug(f"Delete {copy['BookID']} keeping {favourite['BookID']}")
+                    db.action('DELETE from books WHERE BookID=?', (copy['BookID'],))
+                    db.action("UPDATE readinglists SET Bookid=? WHERE BookID=?",
+                              (favourite['BookID'], copy['BookID']), suppress='UNIQUE')
+                    merged += 1
+        total += merged
+        return merged
+
     # noinspection PyBroadException
     try:
-        # check/delete any duplicate titles - with separate fuzz
-        # we do a nocase first, as for some reason fuzzy doesn't get called if the names match
+        # Pass 1: Merge by matching external provider IDs
+        id_keys = ['gr_id', 'WorkID', 'ol_id', 'gb_id', 'hc_id', 'dnb_id', 'ran_id', 'LT_WorkID']
+        for id_key in id_keys:
+            res = db.select(f"SELECT count({id_key}), {id_key} FROM books WHERE AuthorID=? AND {id_key} IS NOT NULL AND {id_key} != '' GROUP BY {id_key} HAVING ( count({id_key}) > 1 )", (authorid,))
+            for item in res:
+                copies = db.select(f"SELECT * FROM books WHERE AuthorID=? AND {id_key}=?", (authorid, item[1]))
+                merge_copies(copies)
+
+        # Pass 2: Merge by full title (BookName + BookSub) fuzzy comparison
+        all_books = db.select("SELECT * FROM books WHERE AuthorID=?", (authorid,))
+        seen_pairs = set()
+        for i in range(len(all_books)):
+            for j in range(i + 1, len(all_books)):
+                b1 = all_books[i]
+                b2 = all_books[j]
+                if b1['BookID'] == b2['BookID']:
+                    continue
+                pair_key = tuple(sorted([b1['BookID'], b2['BookID']]))
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+
+                # Full title construction
+                title1 = b1['BookName']
+                if b1['BookSub']:
+                    title1 += f" {b1['BookSub']}"
+                title2 = b2['BookName']
+                if b2['BookSub']:
+                    title2 += f" {b2['BookSub']}"
+
+                if collate_fuzzy(title1, title2) == 0:
+                    logger.info(f"Fuzzy duplicate full title match between [{b1['BookID']}: {title1}] and [{b2['BookID']}: {title2}]")
+                    # Reload records in case one was deleted by previous iteration
+                    current_copies = db.select("SELECT * FROM books WHERE BookID IN (?, ?)", (b1['BookID'], b2['BookID']))
+                    if len(current_copies) > 1:
+                        merge_copies(current_copies)
+
+        # Pass 3: Existing bookname NOCASE and FUZZY collation check
         for collation in ['NOCASE', 'FUZZY']:
             cmd = ("select count('bookname'),bookname from books where authorid=? "
                    f"group by bookname COLLATE {collation} having ( count(bookname) > 1 )")
@@ -813,76 +925,17 @@ def de_duplicate(authorid):
                 logger.warning(f"There {plural(dupes, 'is')} {dupes} duplicate {collation} {plural(dupes, 'title')} "
                                f"for {authorid}:{authorname}")
                 for item in res:
-                    logger.debug(f"{item[1]} has {item[0]} entries")
-                    favourite = {}
                     copies = db.select(f"SELECT * from books where AuthorID=? and BookName=? COLLATE {collation}",
                                        (authorid, item[1]))
+                    merge_copies(copies)
 
-                    for copy in copies:
-                        if (copy['Status'] in ['Open', 'Have'] or
-                                copy['AudioStatus'] in ['Open', 'Have']):
-                            favourite = copy
-                            break
-                    if not favourite:
-                        for copy in copies:
-                            if (copy['Status'] in ['Wanted'] or
-                                    copy['AudioStatus'] in ['Wanted']):
-                                favourite = copy
-                                break
-                    if not favourite:
-                        for copy in copies:
-                            if copy['Status'] not in ['Ignored'] and copy['AudioStatus'] not in ['Ignored']:
-                                favourite = copy
-                                break
-                    if not favourite and copies:
-                        favourite = copies[0]
-                    if favourite:
-                        logger.debug(f"Favourite {favourite['BookID']} {favourite['BookName']} "
-                                     f"({favourite['Status']}/{favourite['AudioStatus']})")
-                    for copy in copies:
-                        if copy['BookID'] != favourite['BookID']:
-                            logger.debug(f"Copy {copy['BookID']} {copy['BookName']} "
-                                         f"({copy['Status']}/{copy['AudioStatus']})")
-                    for copy in copies:
-                        if copy['BookID'] != favourite['BookID']:
-                            members = db.select("SELECT SeriesID,SeriesNum from member WHERE BookID=?",
-                                                (copy['BookID'],))
-                            if members:
-                                for member in members:
-                                    logger.debug(f"Updating BookID for member {member['SeriesNum']} of series "
-                                                 f"{member['SeriesID']}")
-                                    db.action("UPDATE member SET BookID=? WHERE BookID=? and SeriesID=?",
-                                              (favourite['BookID'], copy['BookID'], member['SeriesID']),
-                                              suppress='UNIQUE')
-                            for key in booktable_keys:
-                                if not favourite[key] and copy[key]:
-                                    cmd = f"UPDATE books SET {key}=? WHERE BookID=?"
-                                    logger.debug(f"Copy {key} from {copy['BookID']}: {copy['BookName']}")
-                                    db.action(cmd, (copy[key], favourite['BookID']))
-                                    if copy['Status'] not in ['Ignored'] and copy['AudioStatus'] not in ['Ignored']:
-                                        if key == 'BookFile' and favourite['Status'] not in ['Open', 'Have']:
-                                            logger.debug(f"Copy Status from {copy['BookID']}")
-                                            db.action('UPDATE books SET Status=? WHERE BookID=?',
-                                                      (copy['Status'], favourite['BookID']))
-                                        if key == 'AudioFile' and favourite['AudioStatus'] not in ['Open', 'Have']:
-                                            logger.debug(f"Copy AudioStatus from {copy['BookID']}")
-                                            db.action('UPDATE books SET AudioStatus=? WHERE BookID=?',
-                                                      (copy['AudioStatus'], favourite['BookID']))
-
-                            if copy['Status'] in ['Ignored'] or copy['AudioStatus'] in ['Ignored']:
-                                logger.debug(f"Keeping duplicate {copy['BookID']},  {copy['Status']}/"
-                                             f"{copy['AudioStatus']}")
-                            else:
-                                logger.debug(f"Delete {copy['BookID']} keeping {favourite['BookID']}")
-                                db.action('DELETE from books WHERE BookID=?', (copy['BookID'],))
-                                db.action("UPDATE readinglists SET Bookid=? WHERE BookID=?",
-                                          (favourite['BookID'], copy['BookID']), suppress='UNIQUE')
-                                total += 1
     except Exception:
         msg = f'Unhandled exception in de_duplicate: {traceback.format_exc()}'
         logger.warning(msg)
     finally:
         db.close()
+    if total > 0:
+        update_totals(authorid)
     logger.info(f"Deleted {total} duplicate {plural(total, 'entry')} for {authorname}")
 
 
@@ -945,6 +998,22 @@ def update_totals(authorid):
             f"Updated totals for [{authorname}] {new_value_dict['HaveBooks']}/{new_value_dict['TotalBooks']}")
     except Exception as e:
         logger.error(str(e))
+        db.close()
+
+
+def update_all_totals():
+    """ Recalculate and update book totals (Have, Unignored, Total) for all authors in database """
+    logger = logging.getLogger(__name__)
+    db = database.DBConnection()
+    try:
+        authors = db.select("SELECT AuthorID FROM authors")
+        if authors:
+            logger.debug(f"Recalculating totals for {len(authors)} authors")
+            for author in authors:
+                update_totals(author['AuthorID'])
+    except Exception as e:
+        logger.error(f"Error in update_all_totals: {e}")
+    finally:
         db.close()
 
 
