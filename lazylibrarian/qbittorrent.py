@@ -220,20 +220,6 @@ def get_progress(hashid):
     qbclient = get_client()
     if not qbclient:
         return -2, 'error connecting', False
-    failure = ''
-    try:
-        preferences = qbclient.preferences()
-    except Exception as e:
-        dlcommslogger.error(f"Failed to get_progress: {e}")
-        preferences = {}
-        failure = str(e)
-    dlcommslogger.debug(str(preferences))
-    max_ratio = 0.0
-    if 'max_ratio_enabled' in preferences and 'max_ratio' in preferences and preferences['max_ratio_enabled']:
-        max_ratio = float(preferences['max_ratio'])
-    max_seeding_time = 0
-    if preferences.get('max_seeding_time_enabled') and 'max_seeding_time' in preferences:
-        max_seeding_time = int(preferences['max_seeding_time'])
     try:
         torrent = find_torrent(qbclient, hashid)
     except Exception as e:
@@ -242,10 +228,6 @@ def get_progress(hashid):
 
     if torrent:
         state = torrent.get('state', '')
-        if 'ratio' in torrent:
-            ratio = float(torrent['ratio'])
-        else:
-            ratio = 0.0
         if 'progress' in torrent:
             try:
                 progress = int(100 * float(torrent['progress']))
@@ -253,18 +235,22 @@ def get_progress(hashid):
                 progress = 0
         else:
             progress = 0
-        finished = False
 
-        # state was changed from pausedUP to stoppedUP in web API 2.11.0, but wiki doesn't reflect change
+        # qBittorrent enforces the seeding policy (share-ratio / seeding-time limits, including
+        # any per-provider seed_ratio/seed_duration we set when adding) itself, so we delegate the
+        # "should we keep seeding?" decision to the client's reported state rather than
+        # re-evaluating limits here. While a completed torrent is still being seeded it reports an
+        # active upload state (uploading / stalledUP / forcedUP / queuedUP). Once the client stops
+        # seeding it -- because a limit was reached, a stop-condition fired, or the user stopped it
+        # -- the state becomes stoppedUP (pausedUP before web API 2.11.0). We therefore treat the
+        # torrent as finished exactly when the client has stopped seeding it: this honours
+        # KEEP_SEEDING while the client is still seeding, yet lets a completed-but-stopped torrent
+        # be processed instead of being stuck in 'Seeding' forever.
         # See: https://qbittorrent-api.readthedocs.io/en/latest/apidoc/definitions.html
-        if state == 'pausedUP' or state == 'stoppedUP':
-            ratio_met = max_ratio > 0 and ratio >= max_ratio
-            seeding_time = torrent.get('seeding_time', 0)
-            time_met = max_seeding_time > 0 and seeding_time >= max_seeding_time * 60
-            if ratio_met or time_met:
-                finished = True
+        finished = state == 'pausedUP' or state == 'stoppedUP'
+        dlcommslogger.debug(f"{hashid} state={state} progress={progress} finished={finished}")
         return progress, state, finished
-    return -1, failure if failure else 'error hash not found', False
+    return -1, 'error hash not found', False
 
 
 def configured_categories():

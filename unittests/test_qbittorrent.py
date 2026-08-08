@@ -637,5 +637,55 @@ class AddDuplicateTest(LLTestCase):
         self.qbclient.torrents.assert_not_called()
 
 
+class GetProgressTest(LLTestCase):
+    """ get_progress delegates the 'keep seeding?' decision to the client's state.
+
+    A completed torrent is only 'finished' once qBittorrent has stopped seeding it
+    (stoppedUP, or pausedUP before web API 2.11.0); while it is still uploading it must
+    stay unfinished so KEEP_SEEDING is honoured, and it must never hang in 'Seeding'
+    just because no share-ratio/seeding-time limit happens to be configured.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.qbclient = mock.Mock()
+        patcher = mock.patch.object(qbittorrent, 'get_client', return_value=self.qbclient)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _progress_for(self, state):
+        self.qbclient.torrents.return_value = [_torrent(state=state)]
+        return qbittorrent.get_progress(EXISTING_HASH)
+
+    def test_stopped_is_finished(self):
+        _progress, _state, finished = self._progress_for('stoppedUP')
+        self.assertTrue(finished)
+
+    def test_paused_is_finished(self):
+        # pre-2.11.0 web api name for a stopped-seeding torrent
+        _progress, _state, finished = self._progress_for('pausedUP')
+        self.assertTrue(finished)
+
+    def test_active_seeding_states_are_not_finished(self):
+        for state in ('uploading', 'stalledUP', 'forcedUP', 'queuedUP'):
+            _progress, _state, finished = self._progress_for(state)
+            self.assertFalse(finished, state)
+
+    def test_downloading_is_not_finished(self):
+        _progress, _state, finished = self._progress_for('downloading')
+        self.assertFalse(finished)
+
+    def test_progress_is_scaled_to_percent(self):
+        self.qbclient.torrents.return_value = [_torrent(state='stoppedUP', progress=0.5)]
+        progress, _state, _finished = qbittorrent.get_progress(EXISTING_HASH)
+        self.assertEqual(progress, 50)
+
+    def test_unknown_hash_returns_not_found(self):
+        self.qbclient.torrents.return_value = []
+        progress, _msg, finished = qbittorrent.get_progress(EXISTING_HASH)
+        self.assertEqual(progress, -1)
+        self.assertFalse(finished)
+
+
 if __name__ == '__main__':
     unittest.main()
