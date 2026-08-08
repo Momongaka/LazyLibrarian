@@ -41,6 +41,7 @@ from lazylibrarian.config2 import CONFIG
 from lazylibrarian.download_client import (
     check_contents,
     delete_task,
+    get_download_content_path,
     get_download_folder,
     get_download_name,
     get_download_progress,
@@ -428,6 +429,13 @@ class BookState:
             # For other torrent clients, combine base folder with download name
             elif general_folder and download_name:
                 self.download_folder = os.path.join(general_folder, download_name)
+                # qBittorrent (and some clients) rename the torrent 'name' independently of the
+                # on-disk content folder, so the name-based path may not exist. Fall back to the
+                # client's actual content path so we process the real files with the known BookID.
+                if not os.path.isdir(self.download_folder):
+                    content = get_download_content_path(self.source, self.download_id)
+                    if content:
+                        self.download_folder = content if os.path.isdir(content) else os.path.dirname(content)
             elif general_folder:
                 # Fallback: use general folder as-is
                 self.download_folder = general_folder
