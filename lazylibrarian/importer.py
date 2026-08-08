@@ -939,7 +939,7 @@ def de_duplicate(authorid):
     logger.info(f"Deleted {total} duplicate {plural(total, 'entry')} for {authorname}")
 
 
-def update_totals(authorid):
+def update_totals(authorid, quiet=False):
     logger = logging.getLogger(__name__)
     if not authorid:
         logger.error("update_totals called with no authorid")
@@ -994,8 +994,9 @@ def update_totals(authorid):
                 db.action('UPDATE series SET Have=?, Total=? WHERE SeriesID=?',
                           (check_int(series['Have'], 0), check_int(series['Total'], 0), series['Series']))
         db.close()
-        logger.debug(
-            f"Updated totals for [{authorname}] {new_value_dict['HaveBooks']}/{new_value_dict['TotalBooks']}")
+        if not quiet:
+            logger.debug(
+                f"Updated totals for [{authorname}] {new_value_dict['HaveBooks']}/{new_value_dict['TotalBooks']}")
     except Exception as e:
         logger.error(str(e))
         db.close()
@@ -1010,7 +1011,8 @@ def update_all_totals():
         if authors:
             logger.debug(f"Recalculating totals for {len(authors)} authors")
             for author in authors:
-                update_totals(author['AuthorID'])
+                update_totals(author['AuthorID'], quiet=True)
+            logger.debug("Update totals complete")
     except Exception as e:
         logger.error(f"Error in update_all_totals: {e}")
     finally:
