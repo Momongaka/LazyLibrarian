@@ -1281,7 +1281,10 @@ def get_book_pubdate(bookid, refresh=False):
         return bookdate, False
 
     url = '/'.join([CONFIG['GB_URL'],
-                    f"books/v1/volumes/{bookid}?key={CONFIG['GB_API']}"])
+                    f"books/v1/volumes/{bookid}"])
+    if CONFIG['GB_API']:
+        url += f"?key={CONFIG['GB_API']}"
+
     jsonresults, in_cache = json_request(url)
     if not jsonresults:
         logger.debug(f'No results found for {bookid}')
