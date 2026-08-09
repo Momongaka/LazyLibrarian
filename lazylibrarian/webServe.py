@@ -298,6 +298,9 @@ def serve_template(templatename, **kwargs):
                     if ':' in values:
                         user, pwd = values.split(':', 1)
                         res = db.match('SELECT * from users where UserName=? and Password=?', (user, md5_utf8(pwd)))
+                    if res:
+                        cherrypy.response.cookie['ll_uid'] = res['UserID']
+                        cherrypy.response.cookie['ll_prefs'] = res['Prefs']
                 if not res and CONFIG.get_bool('PROXY_AUTH'):
                     logger.debug('Proxy Auth enabled')
                     user = cherrypy.request.headers.get(CONFIG.get_str('PROXY_AUTH_USER'))
@@ -507,21 +510,22 @@ class WebInterface:
     def check_permitted(required_perm):
         adminlogger = logging.getLogger('special.admin')
         userid = ''
-        cookie = cherrypy.request.cookie
-        if cookie and 'll_uid' in list(cookie.keys()):
-            cookie_userid = cookie['ll_uid'].value
-            perm = 0
-            db = database.DBConnection()
-            res = db.match('SELECT * from users where UserID=?', (cookie_userid,))
-            if res:
-                perm = check_int(res['Perms'], 0)
-                userid = res['UserID']
-            else:
-                adminlogger.debug(f"No match for userid [{cookie_userid}]")
-                clear_our_cookies()
-            db.close()
-        else:
+        if not CONFIG.get_bool('USER_ACCOUNTS'):
             perm = lazylibrarian.perm_admin
+        else:
+            perm = 0
+            cookie = cherrypy.request.cookie
+            if cookie and 'll_uid' in list(cookie.keys()):
+                cookie_userid = cookie['ll_uid'].value
+                db = database.DBConnection()
+                res = db.match('SELECT * from users where UserID=?', (cookie_userid,))
+                if res:
+                    perm = check_int(res['Perms'], 0)
+                    userid = res['UserID']
+                else:
+                    adminlogger.debug(f"No match for userid [{cookie_userid}]")
+                    clear_our_cookies()
+                db.close()
 
         if perm & required_perm:
             return
