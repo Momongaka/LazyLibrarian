@@ -507,29 +507,24 @@ class WebInterface:
     def check_permitted(required_perm):
         adminlogger = logging.getLogger('special.admin')
         userid = ''
-        if not CONFIG.get_bool('USER_ACCOUNTS'):
-            perm = lazylibrarian.perm_admin
-        else:
-            cookie = cherrypy.request.cookie
+        cookie = cherrypy.request.cookie
+        if cookie and 'll_uid' in list(cookie.keys()):
+            cookie_userid = cookie['ll_uid'].value
             perm = 0
-            if cookie and 'll_uid' in list(cookie.keys()):
-                cookie_userid = cookie['ll_uid'].value
-                db = database.DBConnection()
-                res = db.match('SELECT * from users where UserID=?', (cookie_userid,))
-                if res:
-                    perm = check_int(res['Perms'], 0)
-                    userid = res['UserID']
-                else:
-                    adminlogger.debug(f"No match for userid [{cookie_userid}]")
-                    clear_our_cookies()
-                db.close()
+            db = database.DBConnection()
+            res = db.match('SELECT * from users where UserID=?', (cookie_userid,))
+            if res:
+                perm = check_int(res['Perms'], 0)
+                userid = res['UserID']
+            else:
+                adminlogger.debug(f"No match for userid [{cookie_userid}]")
+                clear_our_cookies()
+            db.close()
+        else:
+            perm = lazylibrarian.perm_admin
 
         if perm & required_perm:
             return
-
-        if not userid:
-            root = CONFIG['HTTP_ROOT'].rstrip('/') if CONFIG['HTTP_ROOT'] else ''
-            raise cherrypy.HTTPRedirect(f"{root}/auth/login")
 
         _, method, _ = get_info_on_caller(depth=1)
         TELEMETRY.record_usage_data()
@@ -548,6 +543,11 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def index(self):
+        raise cherrypy.HTTPRedirect("home")
+
+    @cherrypy.expose
+    @require_auth()
+    def login(self):
         raise cherrypy.HTTPRedirect("home")
 
     @cherrypy.expose
