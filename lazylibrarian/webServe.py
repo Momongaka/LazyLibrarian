@@ -1580,8 +1580,9 @@ class WebInterface:
                 serversidelogger.debug(f"User subscribes to {len(res)} series")
                 for series in res:
                     myseries.append(series['WantID'])
-                cmd += " and series.seriesID in (?)"
-                args.append(", ".join(f"'{w}'" for w in myseries))
+                if myseries:
+                    cmd += " and series.seriesID in (?)"
+                    args.append(", ".join(f"'{w}'" for w in myseries))
             cmd += " GROUP BY series.seriesID order by AuthorName,SeriesName"
 
             serversidelogger.debug(f"get_series {cmd}: {str(args)}")
@@ -1596,6 +1597,7 @@ class WebInterface:
             if len(rowlist):
                 for row in rowlist:  # iterate through the sqlite3.Row objects
                     entry = list(row)  # turn sqlite objects into lists
+
                     rows.append(entry)  # add the rowlist to the masterlist
 
                 if sSearch:
@@ -1846,19 +1848,28 @@ class WebInterface:
                             set_readinglist('Abandoned', userid, abandoned)
 
                 elif action == 'Subscribe':
-                    cookie = cherrypy.request.cookie
-                    if cookie and 'll_uid' in list(cookie.keys()):
-                        userid = cookie['ll_uid'].value
-                        res = db.match("SELECT * from subscribers WHERE UserID=? and Type=? and WantID=?",
-                                       (userid, 'series', seriesid))
-                        if res:
-                            logger.debug(f"User {userid} is already subscribed to {seriesid}")
-                            failed += 1
+                    match = db.match('SELECT SeriesID from series WHERE SeriesID=?', (seriesid,))
+                    if not match:
+                        logger.debug(f"Subscribe failed, series {seriesid} not found")
+                        failed += 1
+                    else:
+                        cookie = cherrypy.request.cookie
+                        if cookie and 'll_uid' in list(cookie.keys()):
+                            userid = cookie['ll_uid'].value
+                            res = db.match("SELECT * from subscribers WHERE UserID=? and Type=? and WantID=?",
+                                           (userid, 'series', seriesid))
+                            if res:
+                                logger.debug(f"User {userid} is already subscribed to {seriesid}")
+                                failed += 1
+                            else:
+                                db.action('INSERT into subscribers (UserID, Type, WantID) VALUES (?, ?, ?)',
+                                          (userid, 'series', seriesid))
+                                logger.debug(f"Subscribe {userid} to series {seriesid}")
+                                passed += 1
                         else:
-                            db.action('INSERT into subscribers (UserID, Type, WantID) VALUES (?, ?, ?)',
-                                      (userid, 'series', seriesid))
-                            logger.debug(f"Subscribe {userid} to series {seriesid}")
-                            passed += 1
+                            logger.debug(f"No userid, cannot subscribe to {seriesid}")
+                            failed += 1
+
                 elif action == 'Unsubscribe':
                     cookie = cherrypy.request.cookie
                     if cookie and 'll_uid' in list(cookie.keys()):
@@ -2315,13 +2326,13 @@ class WebInterface:
         authid_key = 'AuthorID'
         bookid_key = 'BookID'
 
-        api_sources = []
-        for item in lazylibrarian.INFOSOURCES.keys():
+        apisources = []
+        for i in lazylibrarian.INFOSOURCES.keys():
             # source, authorid, bookid
-            info_source = lazylibrarian.INFOSOURCES[item]
-            api_sources.append([info_source, info_source['author_key'], info_source['book_key']])
+            infosource = lazylibrarian.INFOSOURCES[i]
+            apisources.append([infosource, infosource['author_key'], infosource['book_key']])
 
-        for itm in api_sources:
+        for itm in apisources:
             if CONFIG['BOOK_API'] == itm[0]:
                 authid_key = itm[1]
                 bookid_key = itm[2]
@@ -3425,10 +3436,9 @@ class WebInterface:
                     this_source = lazylibrarian.INFOSOURCES[source]
                 else:
                     logger.error(f"Invalid source {source} in add_book")
-                    source = CONFIG['BOOK_API']
+                    this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
             else:
-                source = CONFIG['BOOK_API']
-            this_source = lazylibrarian.INFOSOURCES[source]
+                this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
             api = this_source['api']
             api = api()
             t = threading.Thread(target=api.add_bookid_to_db,
@@ -3772,14 +3782,14 @@ class WebInterface:
         if booktype is not None:
             preftype = booktype
 
-        api_sources = []
-        for item in lazylibrarian.INFOSOURCES.keys():
+        apisources = []
+        for i in lazylibrarian.INFOSOURCES.keys():
             # source, authorid, bookid
-            info_source = lazylibrarian.INFOSOURCES[item]
-            api_sources.append([info_source, info_source['author_key'], info_source['book_key']])
+            infosource = lazylibrarian.INFOSOURCES[i]
+            apisources.append([infosource, infosource['author_key'], infosource['book_key']])
 
         bookid_key = 'BookID'
-        for itm in api_sources:
+        for itm in apisources:
             if CONFIG['BOOK_API'] == itm[0]:
                 bookid_key = itm[2]
                 break
@@ -4232,7 +4242,7 @@ class WebInterface:
                         else:
                             # sometimes get yyyy, sometimes yyyy-mm, sometimes yyyy-mm-dd
                             if len(bookdate) <= 4:  # eg 412 BC = -412 or 400 AD = 400
-                                y = check_int(bookdate, positive=False)
+                                y = check_int(bookdate, default=0, positive=False)
                             elif len(bookdate) in [7, 10]:
                                 y = check_year(bookdate[:4])
                                 if y and len(bookdate) == 7:
@@ -6556,8 +6566,8 @@ class WebInterface:
                         genres = entry[1]
                         tags = {}
                         cnt = 1
-                        for itm in get_list(genres):
-                            tags[f'/Genre_{cnt}'] = itm
+                        for i in get_list(genres):
+                            tags[f'/Genre_{cnt}'] = i
                             cnt += 1
                         try:
                             res = write_pdf_tags(issuefile, title, issue['IssueDate'], tags)
@@ -6801,8 +6811,8 @@ class WebInterface:
                         genres = mag[1]
                         tags = {}
                         cnt = 1
-                        for itm in get_list(genres):
-                            tags[f'/Genre_{cnt}'] = itm
+                        for i in get_list(genres):
+                            tags[f'/Genre_{cnt}'] = i
                             cnt += 1
                         try:
                             res = write_pdf_tags(issue['IssueFile'], title, issue["IssueDate"], tags)

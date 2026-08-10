@@ -785,6 +785,7 @@ def collate_fuzzy(string1, string2):
 
 def de_duplicate(authorid):
     logger = logging.getLogger(__name__)
+    matchlogger = logging.getLogger('special.matching')
     db = database.DBConnection()
     author = db.match("SELECT AuthorName from authors where AuthorID=?", (authorid,))
     db.connection.create_collation('fuzzy', collate_fuzzy)
@@ -800,30 +801,34 @@ def de_duplicate(authorid):
     if author:
         authorname = author['AuthorName']
 
-    def merge_copies(copies):
+    def merge_copies(copys, pass_msg):
         nonlocal total
-        if not copies or len(copies) <= 1:
+        if not copys or len(copys) <= 1:
             return 0
-        copies = [dict(c) for c in copies]
+        logger.debug(f"Merge {len(copys)} copies {pass_msg}")
+        for c in copys:
+            matchlogger.debug(f"{c['BookName']}")
+
+        copys = [dict(c) for c in copys]
         favourite = {}
-        for copy in copies:
+        for copy in copys:
             if (copy['Status'] in ['Open', 'Have'] or
                     copy['AudioStatus'] in ['Open', 'Have']):
                 favourite = copy
                 break
         if not favourite:
-            for copy in copies:
+            for copy in copys:
                 if (copy['Status'] in ['Wanted'] or
                         copy['AudioStatus'] in ['Wanted']):
                     favourite = copy
                     break
         if not favourite:
-            for copy in copies:
+            for copy in copys:
                 if copy['Status'] not in ['Ignored'] and copy['AudioStatus'] not in ['Ignored']:
                     favourite = copy
                     break
-        if not favourite and copies:
-            favourite = copies[0]
+        if not favourite and copys:
+            favourite = copys[0]
         if not favourite:
             return 0
         logger.debug(f"Favourite {favourite['BookID']} {favourite['BookName']} "
@@ -835,7 +840,7 @@ def de_duplicate(authorid):
             s = str(val).strip().lower()
             return s in ['0000', '0000-00-00', '0000-00', '0', '0.0', 'unknown', 'none', 'null']
 
-        for copy in copies:
+        for copy in copys:
             if copy['BookID'] != favourite['BookID']:
                 members = db.select("SELECT SeriesID,SeriesNum from member WHERE BookID=?",
                                     (copy['BookID'],))
@@ -848,9 +853,9 @@ def de_duplicate(authorid):
                                   suppress='UNIQUE')
                 for key in booktable_keys:
                     if is_empty(favourite[key]) and not is_empty(copy[key]):
-                        cmd = f"UPDATE books SET {key}=? WHERE BookID=?"
+                        action = f"UPDATE books SET {key}=? WHERE BookID=?"
                         logger.debug(f"Copy {key} from {copy['BookID']}: {copy['BookName']}")
-                        db.action(cmd, (copy[key], favourite['BookID']))
+                        db.action(action, (copy[key], favourite['BookID']))
                         favourite[key] = copy[key]
                         if copy['Status'] not in ['Ignored'] and copy['AudioStatus'] not in ['Ignored']:
                             if key == 'BookFile' and favourite['Status'] not in ['Open', 'Have']:
@@ -882,7 +887,7 @@ def de_duplicate(authorid):
             res = db.select(f"SELECT count({id_key}), {id_key} FROM books WHERE AuthorID=? AND {id_key} IS NOT NULL AND {id_key} != '' GROUP BY {id_key} HAVING ( count({id_key}) > 1 )", (authorid,))
             for item in res:
                 copies = db.select(f"SELECT * FROM books WHERE AuthorID=? AND {id_key}=?", (authorid, item[1]))
-                merge_copies(copies)
+                merge_copies(copies, 'pass_1')
 
         # Pass 2: Merge by full title (BookName + BookSub) fuzzy comparison
         all_books = db.select("SELECT * FROM books WHERE AuthorID=?", (authorid,))
@@ -911,7 +916,7 @@ def de_duplicate(authorid):
                     # Reload records in case one was deleted by previous iteration
                     current_copies = db.select("SELECT * FROM books WHERE BookID IN (?, ?)", (b1['BookID'], b2['BookID']))
                     if len(current_copies) > 1:
-                        merge_copies(current_copies)
+                        merge_copies(current_copies, 'pass_2')
 
         # Pass 3: Existing bookname NOCASE and FUZZY collation check
         for collation in ['NOCASE', 'FUZZY']:
@@ -927,7 +932,7 @@ def de_duplicate(authorid):
                 for item in res:
                     copies = db.select(f"SELECT * from books where AuthorID=? and BookName=? COLLATE {collation}",
                                        (authorid, item[1]))
-                    merge_copies(copies)
+                    merge_copies(copies, f'pass_3 {collation}')
 
     except Exception:
         msg = f'Unhandled exception in de_duplicate: {traceback.format_exc()}'
@@ -1026,7 +1031,10 @@ def update_all_totals():
     """ Recalculate and update book totals (Have, Unignored, Total) for all authors in database """
     logger = logging.getLogger(__name__)
     db = database.DBConnection()
+    jobname =  'UPDATEALLTOTALS'
     try:
+        logger.debug(f"Storing start time for {jobname}")
+        db.upsert("jobs", {'Start': time.time()}, {'Name': jobname})
         authors = db.select("SELECT AuthorID FROM authors")
         if authors:
             logger.debug(f"Recalculating totals for {len(authors)} authors")
@@ -1039,6 +1047,8 @@ def update_all_totals():
     except Exception as e:
         logger.error(f"Error in update_all_totals: {e}")
     finally:
+        logger.debug(f"Storing finish time for {jobname}")
+        db.upsert("jobs", {'Finish': time.time()}, {'Name': jobname})
         db.close()
 
 
@@ -1075,11 +1085,11 @@ def move_book_to_author(bookid, old_authorid, new_authorid):
     update_totals(old_authorid)
     update_totals(new_authorid)
 
-    _rewrite_opf_creator(bookid, new_authorid, logger)
+    _rewrite_opf_creator(bookid, logger)
     logger.debug(f"Moved book {bookid} from author {old_authorid} to {new_authorid}")
 
 
-def _rewrite_opf_creator(bookid, new_authorid, logger):
+def _rewrite_opf_creator(bookid, logger):
     from lazylibrarian.filesystem import opf_file, path_isfile, remove_file, safe_move
     from lazylibrarian.opfedit import opf_read, opf_write
 

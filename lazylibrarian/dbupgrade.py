@@ -612,8 +612,7 @@ def check_db(upgradelog=None):
             lazylibrarian.UPDATE_MSG = 'Removing authors with no listed books'
             authors = db.select('SELECT AuthorID FROM authors WHERE TotalBooks=0')
             if authors:
-                for author in authors:  # check we haven't mis-counted
-                    update_totals(author['authorid'])
+                # update_all_totals()  # shouldn't be needed now as update_all_totals task runs periodically
                 authors = db.select('SELECT AuthorID FROM authors WHERE TotalBooks=0')
                 if authors:
                     cnt += len(authors)
