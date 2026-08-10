@@ -16,6 +16,7 @@ import re
 import threading
 import time
 import traceback
+import unicodedata
 from urllib.parse import quote, quote_plus, urlencode
 
 from rapidfuzz import fuzz
@@ -1340,10 +1341,21 @@ def isbnlang(isbn):
 
 
 def language_from_words(words):
+    if not words:
+        return 0, 0
+    logger = logging.getLogger(__name__)
+    words_clean = str(words).strip()
+    normalized = unicodedata.normalize('NKFD', words_clean).encode('ASCII', 'ignore').decode('utf-8')
+    if re.match(r"^[a-zA-Z0-9\s\.,\'\":\-\?!#;\(\)&@%~+=_/\\\[\]–—]+$", normalized):
+        # Check if title contains non-English European articles/words (e.g. La, Les, Das, El, Der, Die, Un, Une, Con, Pour)
+        non_english = re.search(r'\b(la|le|les|des|du|el|los|las|un|une|der|die|das|und|mit|auf|aus|con|pour|sur|della|degli|delle)\b', words_clean, re.IGNORECASE)
+        if not non_english:
+            logger.debug(f"Assumed en:0.8 for {words}")
+            return 'en', 0.8
+
     # couldn't be loaded, or configured off
     if not Translator or not CONFIG.get_bool('GOOGLE_TRANS_ID'):
         return 0, 0
-    logger = logging.getLogger(__name__)
     logging.getLogger('googletrans').setLevel(logging.CRITICAL)
     logging.getLogger('asyncio').setLevel(logging.CRITICAL)
     logging.getLogger('hpack').setLevel(logging.CRITICAL)
@@ -1354,7 +1366,7 @@ def language_from_words(words):
             return result
 
     try:
-        res = asyncio.run(asyncio.wait_for(lang_detect(words), timeout=10))
+        res = asyncio.run(asyncio.wait_for(lang_detect(words), timeout=2))
         logger.debug(f"Detected {res.lang}:{res.confidence} for {words}")
         return res.lang, res.confidence
     except (asyncio.TimeoutError, Exception) as e:
