@@ -151,8 +151,15 @@ class AuthController:
             logger.debug(f"{username} added as a new admin user")
             res = db.match('SELECT UserID,Prefs from users where UserName=?', (username,))
         logger.info(f'{username} successfully logged in.')
-        # cherrypy.response.cookie['ll_uid'] = res['UserID']
-        # cherrypy.response.cookie['ll_prefs'] = res['Prefs']
+        # Set the ll_uid cookie directly rather than relying solely on LOGINUSER being
+        # consumed by serve_template() on the next request: several page handlers
+        # (books/audio/magazines/series/comics) call check_permitted() before ever
+        # calling serve_template(), so without this the cookie never gets set in time
+        # and the very first post-login page load 403s / redirect-loops back to login.
+        cherrypy.response.cookie['ll_uid'] = res['UserID']
+        cherrypy.response.cookie['ll_uid']['path'] = '/'
+        cherrypy.response.cookie['ll_prefs'] = res['Prefs']
+        cherrypy.response.cookie['ll_prefs']['path'] = '/'
         lazylibrarian.LOGINUSER = f"!{res['UserID']}"
         db.close()
 
@@ -180,10 +187,16 @@ class AuthController:
         error_msg = check_credentials(current_username, current_password)
         if error_msg:
             return self.get_loginform(current_username, error_msg, from_page)
-        # noinspection PyUnresolvedReferences
-        cherrypy.session.regenerate()  # pylint: disable=no-member
-        # noinspection PyUnresolvedReferences
-        cherrypy.session[SESSION_KEY] = cherrypy.request.login = current_username  # pylint: disable=no-member
+        # cherrypy.session only exists when the sessions tool is active for this request.
+        # webStart.py only enables tools.sessions.on when USER_ACCOUNTS is off (form/basic
+        # auth mode) - with USER_ACCOUNTS on, the DB-backed ll_uid cookie set by on_login()
+        # below is the actual auth mechanism, so touching cherrypy.session unconditionally
+        # here raised AttributeError on every successful login in that mode.
+        if cherrypy.request.config.get('tools.sessions.on', False):
+            # noinspection PyUnresolvedReferences
+            cherrypy.session.regenerate()  # pylint: disable=no-member
+            # noinspection PyUnresolvedReferences
+            cherrypy.session[SESSION_KEY] = cherrypy.request.login = current_username  # pylint: disable=no-member
         self.on_login(current_username, current_password)
         root = CONFIG['HTTP_ROOT'].rstrip('/')
         if root and not from_page.startswith(root):
@@ -192,10 +205,12 @@ class AuthController:
 
     @cherrypy.expose
     def logout(self, from_page="/"):
-        # noinspection PyUnresolvedReferences
-        sess = cherrypy.session  # pylint: disable=no-member
-        username = sess.get(SESSION_KEY, None)
-        sess[SESSION_KEY] = None
+        username = None
+        if cherrypy.request.config.get('tools.sessions.on', False):
+            # noinspection PyUnresolvedReferences
+            sess = cherrypy.session  # pylint: disable=no-member
+            username = sess.get(SESSION_KEY, None)
+            sess[SESSION_KEY] = None
         if username:
             cherrypy.request.login = None
             self.on_logout(username)
