@@ -136,6 +136,8 @@
             "dom": "<'row'<'col-xs-6'l><'col-xs-6'f>><'row'<'col-sm-12'tr>><'row'<'col-sm-5'i><'col-sm-7'p>>",
             "bAutoWidth": false,
             "stateSave": true,
+            "stateSaveParams": function (settings, data) { data.perm = ${perm}; },
+            "stateLoadParams": function (settings, data) { return data.perm === ${perm}; },
             "order": [[ 2, 'asc' ]],
             "rowId": 0,
             "columnDefs":[

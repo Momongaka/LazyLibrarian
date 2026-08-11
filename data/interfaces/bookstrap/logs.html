@@ -85,6 +85,8 @@
                     %endif
                 ],
                  "stateSave": true,
+                "stateSaveParams": function (settings, data) { data.perm = ${perm}; },
+                "stateLoadParams": function (settings, data) { return data.perm === ${perm}; },
                 "order": [[ 0, 'desc' ]],
                 "oLanguage": {
                     "sSearch":"Filter: ",

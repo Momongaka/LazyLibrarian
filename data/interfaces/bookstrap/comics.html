@@ -126,6 +126,8 @@
             {
                 "bAutoWidth": false,
                 "stateSave": true,
+                "stateSaveParams": function (settings, data) { data.perm = ${perm}; },
+                "stateLoadParams": function (settings, data) { return data.perm === ${perm}; },
                 "order": [[ 2, 'asc']],
                 "rowId": 0,
                 "columnDefs":

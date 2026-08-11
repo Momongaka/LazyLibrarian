@@ -178,6 +178,8 @@
                 "order": [[3, 'desc']],
                 "bAutoWidth": false,
                 "stateSave": true,
+                "stateSaveParams": function (settings, data) { data.perm = ${perm}; },
+                "stateLoadParams": function (settings, data) { return data.perm === ${perm}; },
                 "rowId": 0,
                 "columnDefs":
                     [{ targets: 'no-sort', orderable: false },
