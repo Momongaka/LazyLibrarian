@@ -1705,7 +1705,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def series_members(self, seriesid, ignored=False):
-        self.check_permitted(lazylibrarian.perm_series)
+        self.check_permitted(lazylibrarian.perm_series, redirect_unauth=True)
         db = database.DBConnection()
         cmd = ("SELECT SeriesName,series.SeriesID,AuthorName,seriesauthors.AuthorID from "
                "series,authors,seriesauthors where authors.AuthorID=seriesauthors.AuthorID and "
@@ -2078,7 +2078,7 @@ class WebInterface:
     def config_update(self, **kwargs):
         """ Update config based on settings in the UI """
         logger = logging.getLogger(__name__)
-        self.check_permitted(lazylibrarian.perm_config)
+        self.check_permitted(lazylibrarian.perm_config, redirect_unauth=True)
         db = database.DBConnection()
         adminmsg = ''
         if 'user_accounts' in kwargs and kwargs['user_accounts']:
@@ -2323,7 +2323,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def search(self, searchfor, btnsearch=None):
-        self.check_permitted(lazylibrarian.perm_search)
+        self.check_permitted(lazylibrarian.perm_search, redirect_unauth=True)
         logger = logging.getLogger('special.searching')
         logger.debug(f"Search {btnsearch}: {searchfor}")
         searchresults = None
@@ -2509,7 +2509,7 @@ class WebInterface:
     @require_auth()
     def author_page(self, authorid, book_lang=None, library='eBook', ignored=False, **args):
         global lastauthor
-        self.check_permitted(lazylibrarian.perm_ebook + lazylibrarian.perm_audio)
+        self.check_permitted(lazylibrarian.perm_ebook + lazylibrarian.perm_audio, redirect_unauth=True)
         db = database.DBConnection()
         user = 0
         email = ''
@@ -2892,7 +2892,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def booksearch(self, author=None, title=None, bookid=None, action=''):
-        self.check_permitted(lazylibrarian.perm_search)
+        self.check_permitted(lazylibrarian.perm_search, redirect_unauth=True)
         self.label_thread('BOOKSEARCH')
         if '_title' in action:
             searchterm = title
@@ -5264,7 +5264,7 @@ class WebInterface:
     def comicissue_page(self, comicid):
         global lastcomic
         logger = logging.getLogger(__name__)
-        self.check_permitted(lazylibrarian.perm_comics)
+        self.check_permitted(lazylibrarian.perm_comics, redirect_unauth=True)
         db = database.DBConnection()
         try:
             mag_data = db.match('SELECT * from comics WHERE ComicID=?', (comicid,))
@@ -5439,7 +5439,7 @@ class WebInterface:
         # noinspection PyGlobalUndefined
         global comicresults
         logger = logging.getLogger(__name__)
-        self.check_permitted(lazylibrarian.perm_search)
+        self.check_permitted(lazylibrarian.perm_search, redirect_unauth=True)
         TELEMETRY.record_usage_data()
         comicresults = []
         if not title or title == 'None':
@@ -6206,7 +6206,7 @@ class WebInterface:
     @require_auth()
     def issue_page(self, title, response=''):
         global lastmagazine
-        self.check_permitted(lazylibrarian.perm_magazines)
+        self.check_permitted(lazylibrarian.perm_magazines, redirect_unauth=True)
         logger = logging.getLogger(__name__)
         db = database.DBConnection()
         res = db.match('SELECT Title from magazines where Title=? COLLATE NOCASE', (title,))
@@ -6309,7 +6309,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def past_issues(self, mag=None, **kwargs):
-        self.check_permitted(lazylibrarian.perm_magazines)
+        self.check_permitted(lazylibrarian.perm_magazines, redirect_unauth=True)
         if not mag or mag == 'None':
             title = "Past Issues"
         else:
@@ -7066,7 +7066,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def update(self):
-        self.check_permitted(lazylibrarian.perm_force)
+        self.check_permitted(lazylibrarian.perm_force, redirect_unauth=True)
         logger = logging.getLogger(__name__)
         self.label_thread('UPDATING')
         logger.debug('(webServe-Update) - Performing update')
@@ -7291,7 +7291,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def shutdown(self):
-        self.check_permitted(lazylibrarian.perm_admin)
+        self.check_permitted(lazylibrarian.perm_admin, redirect_unauth=True)
         self.label_thread('SHUTDOWN')
         # lazylibrarian.config_write()
         remove_file(os.path.join(DIRS.CACHEDIR, 'alive.png'))
@@ -7303,7 +7303,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def restart(self):
-        self.check_permitted(lazylibrarian.perm_admin)
+        self.check_permitted(lazylibrarian.perm_admin, redirect_unauth=True)
         self.label_thread('RESTART')
         remove_file(os.path.join(DIRS.CACHEDIR, 'alive.png'))
         lazylibrarian.SIGNAL = 'restart'
@@ -7416,7 +7416,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def logs(self):
-        self.check_permitted(lazylibrarian.perm_logs)
+        self.check_permitted(lazylibrarian.perm_logs, redirect_unauth=True)
         return serve_template(templatename="logs.html", title="Log", lineList=[])  # lazylibrarian.LOGLIST)
 
     # noinspection PyUnusedLocal
@@ -7456,7 +7456,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def history(self):
-        self.check_permitted(lazylibrarian.perm_history)
+        self.check_permitted(lazylibrarian.perm_history, redirect_unauth=True)
         return serve_template(templatename="history.html", title="History", history=[])
 
     # noinspection PyUnusedLocal
@@ -8544,7 +8544,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def manage(self, **kwargs):
-        self.check_permitted(lazylibrarian.perm_managebooks)
+        self.check_permitted(lazylibrarian.perm_managebooks, redirect_unauth=True)
         types = []
         if CONFIG.get_bool('EBOOK_TAB'):
             types.append('eBook')
@@ -9039,7 +9039,7 @@ class WebInterface:
 
     def send_file(self, myfile, name=None, email=False):
         logger = logging.getLogger(__name__)
-        self.check_permitted(lazylibrarian.perm_download)
+        self.check_permitted(lazylibrarian.perm_download, redirect_unauth=True)
         userid = ''
         if CONFIG.get_bool('USER_ACCOUNTS'):
             cookie = cherrypy.request.cookie

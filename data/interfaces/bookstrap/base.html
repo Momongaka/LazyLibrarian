@@ -7,6 +7,7 @@
 <!doctype html>
 <html>
   <head>
+    <base href="${(CONFIG['HTTP_ROOT'].rstrip('/') if CONFIG['HTTP_ROOT'] else '')}/">
     <meta http-equiv="content-type" content="text/html; charset=UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <title>LazyLibrarian - ${title}</title>
@@ -411,7 +412,7 @@
                 callback: function (result) {
                   if (result) { $.get("logout", { },
                       function (data) {
-                         window.location = "${CONFIG['HTTP_ROOT'] or ''}/login";
+                         window.location = "${CONFIG['HTTP_ROOT'] or ''}/auth/login";
                       }); }
                 }
             });
