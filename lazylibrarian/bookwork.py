@@ -1345,7 +1345,7 @@ def language_from_words(words):
         return 0, 0
     logger = logging.getLogger(__name__)
     words_clean = str(words).strip()
-    normalized = unicodedata.normalize('NKFD', words_clean).encode('ASCII', 'ignore').decode('utf-8')
+    normalized = unicodedata.normalize('NFKD', words_clean).encode('ASCII', 'ignore').decode('utf-8')
     if re.match(r"^[a-zA-Z0-9\s\.,\'\":\-\?!#;\(\)&@%~+=_/\\\[\]–—]+$", normalized):
         # Check if title contains non-English European articles/words (e.g. La, Les, Das, El, Der, Die, Un, Une, Con, Pour)
         non_english = re.search(r'\b(la|le|les|des|du|el|los|las|un|une|der|die|das|und|mit|auf|aus|con|pour|sur|della|degli|delle)\b', words_clean, re.IGNORECASE)
