@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shutil
+import threading
 from collections import Counter
 from collections.abc import Generator
 from configparser import ConfigParser
@@ -46,6 +47,7 @@ class LLConfigHandler(ConfigDict):
         self.initialize_logger()
         self.arrays = {}
         self.defaults = defaults
+        self._save_lock = threading.Lock()
         self._copydefaults(defaults)
         self.configfilename = ''
         self.load_configfile(configfile)
@@ -339,43 +341,53 @@ class LLConfigHandler(ConfigDict):
         currentname = thread_name()
         thread_name("CONFIG2_WRITE")
         try:
-            self.logger.debug(f'Saving configuration to {self.configfilename}')
-            savecount = self.save_config_to_filename(syspath(f"{self.configfilename}.new"), save_all)
-            if savecount == 0:
-                return 0
-            if savecount < 0:
-                self.logger.error("Error saving config")
+            with self._save_lock:
+                self.logger.debug(f'Saving configuration to {self.configfilename}')
+                savecount = self.save_config_to_filename(syspath(f"{self.configfilename}.new"), save_all)
+                if savecount == 0:
+                    return 0
+                if savecount < 0:
+                    self.logger.error("Error saving config")
+                    return -1
+                import os
+
+                msg = ''
+                # Keep two generations of backup: a single bad save (e.g. process killed
+                # mid-write, or config.ini missing at load time) should not also destroy
+                # the last known-good backup.
+                try:
+                    os.remove(syspath(f"{self.configfilename}.bak2"))
+                except OSError as e:
+                    if e.errno != 2:  # doesn't exist is ok
+                        self.logger.warning(
+                            f'{type(e).__name__} deleting backup file:{self.configfilename} .bak2 {e.strerror}')
+                try:
+                    os.rename(syspath(f"{self.configfilename}.bak"), syspath(f"{self.configfilename}.bak2"))
+                except OSError as e:
+                    if e.errno != 2:  # doesn't exist is ok as wouldn't exist until second save
+                        self.logger.warning(
+                            f'Unable to rotate backup file: {self.configfilename} .bak {type(e).__name__} {e.strerror}')
+                try:
+                    os.rename(syspath(self.configfilename), syspath(f"{self.configfilename}.bak"))
+                except OSError as e:
+                    if e.errno != 2:  # doesn't exist is ok as wouldn't exist until first save
+                        msg = f'Unable to backup config file: {self.configfilename} {type(e).__name__} {e.strerror}'
+                        self.logger.warning(msg)
+                try:
+                    os.rename(syspath(f"{self.configfilename}.new"), syspath(self.configfilename))
+                except OSError as e:
+                    msg = f'Unable to rename new config file: {self.configfilename} {type(e).__name__} {e.strerror}'
+                    self.logger.warning(msg)
+
+                if not msg:
+                    if section:
+                        msg = f'Config file {self.configfilename} has been saved with {savecount} items ' \
+                                  f'(Triggered by {section})'
+                    else:
+                        msg = f'Config file {self.configfilename} has been saved with {savecount} items'
+                    self.logger.info(msg)
+                    return savecount
                 return -1
-            import os
-
-            msg = ''
-            try:
-                os.remove(syspath(f"{self.configfilename}.bak"))
-            except OSError as e:
-                if e.errno != 2:  # doesn't exist is ok
-                    msg = f'{type(e).__name__} deleting backup file:{self.configfilename} .bak {e.strerror}'
-                    self.logger.warning(msg)
-            try:
-                os.rename(syspath(self.configfilename), syspath(f"{self.configfilename}.bak"))
-            except OSError as e:
-                if e.errno != 2:  # doesn't exist is ok as wouldn't exist until first save
-                    msg = f'Unable to backup config file: {self.configfilename} {type(e).__name__} {e.strerror}'
-                    self.logger.warning(msg)
-            try:
-                os.rename(syspath(f"{self.configfilename}.new"), syspath(self.configfilename))
-            except OSError as e:
-                msg = f'Unable to rename new config file: {self.configfilename} {type(e).__name__} {e.strerror}'
-                self.logger.warning(msg)
-
-            if not msg:
-                if section:
-                    msg = f'Config file {self.configfilename} has been saved with {savecount} items ' \
-                              f'(Triggered by {section})'
-                else:
-                    msg = f'Config file {self.configfilename} has been saved with {savecount} items'
-                self.logger.info(msg)
-                return savecount
-            return -1
         finally:
             from lazylibrarian.telemetry import record_usage_data
             record_usage_data()
