@@ -269,7 +269,7 @@
                       <li><a href="profile" class="navbarele" id="profile">User</a></li>
                     %endif
                     %if lazylibrarian.SHOWLOGOUT == 1:
-                      <li>&nbsp<button class="button btn btn-primary" type="button" value="removeme" id="removeme">  Logout</button></li>
+                      <li>&nbsp<button class="button btn btn-primary" type="button" value="logoutbtn" id="logoutbtn">  Logout</button></li>
                     %endif
                   %endif
                 %endif
@@ -395,7 +395,7 @@
         });
       });
 
-        $('#removeme').click(function () {
+        $('#logoutbtn').click(function () {
             bootbox.confirm({
                 message: "Are you sure you want to logout?",
                 buttons: {
