@@ -67,9 +67,10 @@
                     }
                 },
                 callback: function (result) {
-                  if (result) { $.get("remove_comic", {'comicid': '${config['ComicID']}' },
-                      function (data) { }); }
-                    window.location = "comics"
+                  if (result) {
+                      $.get("remove_comic", {'comicid': '${config['ComicID']}' });
+                      window.location = "comics";
+                  }
                 }
             });
         });    });
