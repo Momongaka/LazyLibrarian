@@ -411,7 +411,7 @@
                 callback: function (result) {
                   if (result) { $.get("logout", { },
                       function (data) {
-                         window.location = "${CONFIG['HTTP_ROOT'] or ''}/auth/login";
+                         window.location = "${CONFIG['HTTP_ROOT'] or ''}/login";
                       }); }
                 }
             });
