@@ -55,7 +55,7 @@ from lazylibrarian import (
     utorrent,
     versioncheck,
 )
-from lazylibrarian.auth import AuthController, require_auth
+from lazylibrarian.auth import SESSION_KEY, AuthController, require_auth
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.bookrename import name_vars
 from lazylibrarian.bookwork import add_series_members, delete_empty_series, set_series
@@ -507,7 +507,7 @@ class WebInterface:
         return True
 
     @staticmethod
-    def check_permitted(required_perm):
+    def check_permitted(required_perm, redirect_unauth=False):
         adminlogger = logging.getLogger('special.admin')
         userid = ''
         if not CONFIG.get_bool('USER_ACCOUNTS'):
@@ -529,6 +529,18 @@ class WebInterface:
 
         if perm & required_perm:
             return
+
+        if redirect_unauth and not userid and CONFIG.get_bool('USER_ACCOUNTS') and not CONFIG.get_bool('PROXY_AUTH'):
+            # Only used by the small set of top-level page handlers that are reachable
+            # as a HOMEPAGE target and call check_permitted() before serve_template() ever
+            # gets a chance to render its own login.html fallback (books/audio/magazines/
+            # series/comics) - NOT a general check_permitted() behavior change, so the many
+            # AJAX/action endpoints that also call check_permitted() are unaffected and keep
+            # returning a plain 403 rather than a redirect a JS fetch() would otherwise
+            # transparently follow and try to parse as JSON.
+            root = CONFIG['HTTP_ROOT'].rstrip('/') if CONFIG['HTTP_ROOT'] else ''
+            get_params = quote(cherrypy.request.request_line.split()[1])
+            raise cherrypy.HTTPRedirect(f"{root}/auth/login?from_page={get_params}")
 
         _, method, _ = get_info_on_caller(depth=1)
         TELEMETRY.record_usage_data()
@@ -861,6 +873,12 @@ class WebInterface:
             db.close()
         clear_our_cookies()
         lazylibrarian.LOGINUSER = None
+        if cherrypy.request.config.get('tools.sessions.on', False):
+            # Only active when USER_ACCOUNTS is off (form/basic auth mode) - webStart.py never
+            # enables the sessions tool when USER_ACCOUNTS is on, so cherrypy.session doesn't
+            # exist as an attribute in that mode and touching it unconditionally raises
+            # AttributeError, crashing every logout.
+            cherrypy.session[SESSION_KEY] = None
         if cherrypy.request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return "OK"
         root = CONFIG['HTTP_ROOT'].rstrip('/') if CONFIG['HTTP_ROOT'] else ''
@@ -1668,7 +1686,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def series(self, authorid=None, which_status=None, active=False):
-        self.check_permitted(lazylibrarian.perm_series)
+        self.check_permitted(lazylibrarian.perm_series, redirect_unauth=True)
         title = "Series"
         if authorid:
             db = database.DBConnection()
@@ -2967,7 +2985,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def audio(self, booklang=None, book_filter=''):
-        self.check_permitted(lazylibrarian.perm_audio)
+        self.check_permitted(lazylibrarian.perm_audio, redirect_unauth=True)
         user = 0
         email = ''
         db = database.DBConnection()
@@ -2990,7 +3008,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def books(self, booklang=None, book_filter=''):
-        self.check_permitted(lazylibrarian.perm_ebook)
+        self.check_permitted(lazylibrarian.perm_ebook, redirect_unauth=True)
         user = 0
         email = ''
         db = database.DBConnection()
@@ -5085,7 +5103,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def comics(self, comic_filter=''):
-        self.check_permitted(lazylibrarian.perm_comics)
+        self.check_permitted(lazylibrarian.perm_comics, redirect_unauth=True)
         cookie = cherrypy.request.cookie
         if cookie and 'll_uid' in list(cookie.keys()):
             user = cookie['ll_uid'].value
@@ -5780,7 +5798,7 @@ class WebInterface:
     @cherrypy.expose
     @require_auth()
     def magazines(self, mag_filter=''):
-        self.check_permitted(lazylibrarian.perm_magazines)
+        self.check_permitted(lazylibrarian.perm_magazines, redirect_unauth=True)
         db = database.DBConnection()
         cookie = cherrypy.request.cookie
         if cookie and 'll_uid' in list(cookie.keys()):
