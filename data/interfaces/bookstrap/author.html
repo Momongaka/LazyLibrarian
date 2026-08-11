@@ -317,9 +317,10 @@
                     }
                 },
                 callback: function (result) {
-                  if (result) { $.get("remove_author", {'authorid': '${author['AuthorID']}' },
-                      function (data) { }); }
-                window.location = "authors"
+                  if (result) {
+                      $.get("remove_author", {'authorid': '${author['AuthorID']}' });
+                      window.location = "authors";
+                  }
                 }
             });
         });
