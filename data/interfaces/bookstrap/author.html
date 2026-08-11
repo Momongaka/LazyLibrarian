@@ -6,7 +6,7 @@
 <%def name="headerIncludes()">
     <div id="subhead_container">
         <form id="subhead_menu" class="form-inline">
-        %if perm&lazylibrarian.perm_force:
+        %if perm&lazylibrarian.perm_status:
             %if author['Status'] == 'Paused':
                 <a href="resume_author?authorid=${author['AuthorID']}" class="btn btn-sm btn-primary"><i class="fa fa-pause"></i> Paused</a>
             %else:
@@ -20,12 +20,17 @@
                 %endif
               %endif
             %endif
+        %endif
+        %if perm&lazylibrarian.perm_force:
             <a href="refresh_author?authorid=${author['AuthorID']}" class="btn btn-sm btn-primary"><i class="fa fa-sync"></i> Refresh Author</a>
             <a href="library_scan_author?authorid=${author['AuthorID']}&library=eBook" class="btn btn-sm btn-primary"><i class="fa fa-sync"></i> eBook Scan</a>
             %if CONFIG.get_int('AUDIO_TAB') > 0:
                 <a href="library_scan_author?authorid=${author['AuthorID']}&library=AudioBook" class="btn btn-sm btn-primary"><i class="fa fa-sync"></i> AudioBook Scan</a>
             %endif
+        %endif
+        %if perm&lazylibrarian.perm_edit:
             <button class="button btn btn-sm btn-primary" type="button" value="removeme" id="removeme"><i class="fa fa-times"></i> Remove Author</button>
+        %endif
             %if ignored == 'True':
               %if library == 'AudioBook':
                 <a href="author_page?authorid=${author['AuthorID']}&ignored=False&library=AudioBook" class="btn btn-sm btn-primary"><i class="fa fa-book"></i> Show Active</a>
@@ -39,7 +44,6 @@
                 <a href="author_page?authorid=${author['AuthorID']}&ignored=True" class="btn btn-sm btn-primary"><i class="fa fa-ban"></i> Show Ignored</a>
               %endif
             %endif
-        %endif
         %if showseries >= 1:
             %if perm&lazylibrarian.perm_series:
               <a href="series?authorid=${author['AuthorID']}" class="btn btn-sm btn-primary"><i class="fa fa-book"></i> Series</a>
