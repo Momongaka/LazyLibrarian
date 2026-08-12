@@ -11,6 +11,7 @@
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+import re
 import time
 import traceback
 import unicodedata
@@ -35,7 +36,7 @@ from lazylibrarian.bookwork import (
     set_genres,
     set_series,
 )
-from lazylibrarian.cache import gr_xml_request, html_request
+from lazylibrarian.cache import gr_xml_request
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.formatter import (
     book_series,
@@ -914,27 +915,6 @@ class GoodReads:
                             if originalpubdate:
                                 bookdate = originalpubdate
 
-                            if (not bookdate or bookdate == '0000') and booklink:
-                                result, in_cache = html_request(booklink)
-                                try:
-                                    pubdate = result.split(b"publicationInfo")[1].split(b"<")[0]
-                                    pubdate = make_unicode(pubdate)
-                                except (IndexError, AttributeError):
-                                    pubdate = ''
-
-                                # Expected publication November 17, 2026
-                                # First published October 2, 2001
-                                dateparts = lazylibrarian.magazinescan.get_dateparts(pubdate)
-                                if dateparts['style']:
-                                    pubdate = dateparts['dbdate']
-                                    bookdate = date_format(pubdate)
-                                else:
-                                    for keyword in ["ublication ", "ublished "]:
-                                        if keyword in pubdate:
-                                            pubdate = pubdate.split(keyword)[1]
-                                            bookdate = date_format(make_unicode(pubdate))
-                                            break
-
                             # Leave alone if locked
                             if locked:
                                 locked_count += 1
@@ -967,6 +947,12 @@ class GoodReads:
                                         gbupdate.append('Genres')
                                     if gbupdate:
                                         self.logger.debug(f"Updated {', '.join(gbupdate)} from googlebooks")
+
+                                if (not bookdate or bookdate == '0000') and bookname:
+                                    title_match = re.search(r'\b(1[89]\d\d|20\d\d)\b', bookname)
+                                    if title_match and check_year(title_match.group(1), past=1800, future=1):
+                                        bookdate = title_match.group(1)
+                                        self.logger.debug(f"Extracted pubdate {bookdate} from title for {bookid}")
 
                                 threadname = thread_name()
                                 reason = f"[{threadname}] {reason}"
