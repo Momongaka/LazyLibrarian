@@ -4,6 +4,7 @@ import http.client
 import json
 import logging
 import platform
+import re
 import threading
 import time
 import traceback
@@ -27,6 +28,7 @@ from lazylibrarian.config2 import CONFIG
 from lazylibrarian.filesystem import DIRS, syspath
 from lazylibrarian.formatter import (
     check_int,
+    check_year,
     date_format,
     format_author_name,
     get_list,
@@ -1067,7 +1069,10 @@ query FindAuthor { authors_by_pk(id: [authorid])
         bookdict['bookdesc'] = book_data.get('description', '')
         bookdict['bookid'] = str(book_data.get('id', ''))
         bookdict['bookdate'] = book_data.get('release_date', '')
-        if not bookdict['bookdate']:
+        year_match = re.search(r'\d{4}', bookdict['bookdate']) if bookdict['bookdate'] else None
+        if not bookdict['bookdate'] or (year_match and not check_year(year_match.group(), past=1800, future=1)):
+            # empty, or an implausible year (eg a typo'd future date) - skip rather than
+            # warn-and-passthrough, matching NO_FUTURE handling elsewhere
             bookdict['bookdate'] = ''
         else:
             bookdict['bookdate'] = date_format(bookdict['bookdate'],
@@ -1157,7 +1162,10 @@ query FindAuthor { authors_by_pk(id: [authorid])
         bookdict['bookdesc'] = book_data.get('description', '')
         bookdict['bookid'] = str(book_data.get('id', ''))
         bookdict['bookdate'] = book_data.get('release_date', '')
-        if not bookdict['bookdate']:
+        year_match = re.search(r'\d{4}', bookdict['bookdate']) if bookdict['bookdate'] else None
+        if not bookdict['bookdate'] or (year_match and not check_year(year_match.group(), past=1800, future=1)):
+            # empty, or an implausible year (eg a typo'd future date) - skip rather than
+            # warn-and-passthrough, matching NO_FUTURE handling elsewhere
             bookdict['bookdate'] = ''
         else:
             bookdict['bookdate'] = date_format(bookdict['bookdate'],

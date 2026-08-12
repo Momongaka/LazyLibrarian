@@ -12,6 +12,7 @@
 
 import contextlib
 import logging
+import re
 import time
 import traceback
 from urllib.parse import quote_plus
@@ -38,6 +39,7 @@ from lazylibrarian.config2 import CONFIG
 from lazylibrarian.formatter import (
     check_float,
     check_int,
+    check_year,
     date_format,
     format_author_name,
     get_list,
@@ -609,8 +611,14 @@ class OpenLibrary:
                     if not publish_date and first_publish_year:
                         publish_date = [str(first_publish_year)]
                     if publish_date:
-                        publish_date = date_format(publish_date[0], context=f"{auth_name}/{title}",
-                                                   datelang=CONFIG['DATE_LANG'])
+                        year_match = re.search(r'\d{4}', publish_date[0])
+                        if year_match and not check_year(year_match.group(), past=1800, future=1):
+                            # implausible year (eg a typo'd future date) - skip rather than
+                            # warn-and-passthrough, matching NO_FUTURE handling elsewhere
+                            publish_date = ''
+                        else:
+                            publish_date = date_format(publish_date[0], context=f"{auth_name}/{title}",
+                                                       datelang=CONFIG['DATE_LANG'])
 
                     rejected = []
                     wantedlanguages = get_list(CONFIG['IMP_PREFLANG'])
