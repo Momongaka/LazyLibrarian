@@ -476,6 +476,16 @@ class GoodReads:
             isbn_count = 0
             cover_time = 0
             isbn_time = 0
+            # GoodReads' CDN throttles rapid successive page-scrape/API requests
+            # (observed live: 10 fetches in a row with no delay between them all
+            # failed with a 202/cloudfront error or an AWS WAF challenge, even
+            # though a single isolated request succeeds fine) - cap live lookups
+            # per refresh and space them out below, so covers/dates converge
+            # gradually across refreshes instead of a whole batch failing together.
+            cover_lookups_this_refresh = 0
+            cover_lookups_cap = 10
+            pubdate_lookups_this_refresh = 0
+            pubdate_lookups_cap = 10
             auth_start = time.time()
             # these are reject reasons we might want to override, so optionally add to database as "ignored"
             ignorable = ['future', 'date', 'isbn', 'set', 'word', 'publisher']
@@ -900,7 +910,8 @@ class GoodReads:
                                 added = today()
                                 locked = False
 
-                            if not originalpubdate or len(originalpubdate) < 5:
+                            if (not originalpubdate or len(originalpubdate) < 5) and \
+                                    pubdate_lookups_this_refresh < pubdate_lookups_cap:
                                 # already set with language code or existing book?
                                 newdate, in_cache = get_book_pubdate(bookid)
                                 if not originalpubdate:
@@ -910,6 +921,8 @@ class GoodReads:
                                     self.logger.debug(f"Extended date info found: {newdate}")
                                 if not in_cache:
                                     api_hits += 1
+                                    pubdate_lookups_this_refresh += 1
+                                    time.sleep(2)
 
                             if originalpubdate:
                                 bookdate = originalpubdate
@@ -1037,13 +1050,16 @@ class GoodReads:
                                     elif not existing:
                                         update_value_dict["ScanResult"] = reason
 
-                                    if 'nocover' in bookimg or 'nophoto' in bookimg:
+                                    if ('nocover' in bookimg or 'nophoto' in bookimg) and \
+                                            cover_lookups_this_refresh < cover_lookups_cap:
                                         # try to get a cover from another source
                                         start = time.time()
                                         link, source = get_book_cover(bookid, ignore='goodreads')
                                         if source != 'cache':
                                             cover_count += 1
                                             cover_time += (time.time() - start)
+                                            cover_lookups_this_refresh += 1
+                                            time.sleep(2)
                                         if link:
                                             update_value_dict["BookImg"] = link
                                     elif bookimg and bookimg.startswith('http'):
