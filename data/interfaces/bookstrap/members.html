@@ -122,7 +122,7 @@
             %else:
             <td class="hidden"></td>
             %endif
-            <td class="bookart text-center hidden-xs"><a href="${result['BookImg']}" target="_blank" rel="noreferrer"><img src="${result['BookImg']}" class="bookcover-xs img-responsive" alt="Cover"></a></td>
+            <td class="bookart text-center hidden-xs"><button onclick="bookinfo(${result['BookID']})" class="button btn-link" type="button"><img src="${result['BookImg']}" class="bookcover-xs img-responsive" alt="Cover"></button></td>
             <td class="bookname">
             <button onclick="bookinfo(${result['BookID']})" class="button btn-link text-left" type="button">${result['BookName']}</button><br>
               %if 'GoodReads' in result['BookLink']:

@@ -322,28 +322,11 @@
         else { submitFormAjax(); }
     }
 
-    function bookinfo(bookid) {
-        $.get('bookdesc', {'bookid': bookid},
-        function(data) {
-            var $textAndPic = $('<div></div>');
-            $textAndPic.append('<img src="./cache/book/' + bookid + '.jpg" />');
-            var res = data.split('^');
-            var title = res[0]
-            var desc = res[1]
-            $textAndPic.append('<br>' + desc + ' <br />');
-            bootbox.dialog({
-                size: "large",
-                title: title,
-                message: $textAndPic,
-                buttons: {
-                   primary: {
-                        label: "Close",
-                        className: 'btn-primary'
-                    }
-                }
-            });
-        });
-    };
+    // bookinfo() is defined globally in base.html - not redefined here. This copy
+    // parsed bookdesc()'s response as 2 parts (title/desc); the actual response is
+    // 3 parts (img/title/desc), so this copy was already broken - dead code, since
+    // base.html declares its own version later in the DOM and JS redeclaration
+    // means that's the one that actually runs on every page. See base.html.
 
     var timer = 2000;
     if( timer > 0 )
