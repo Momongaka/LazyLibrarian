@@ -789,8 +789,8 @@ class GoodReads:
                         if not amatch:
                             continue
 
-                        cmd = ("SELECT AuthorName,BookName,AudioStatus,books.Status,ScanResult FROM books,authors "
-                               "WHERE authors.AuthorID = books.AuthorID AND BookID=?")
+                        cmd = ("SELECT AuthorName,BookName,AudioStatus,books.Status,ScanResult,BookFile,AudioFile,"
+                               "books.Manual FROM books,authors WHERE authors.AuthorID = books.AuthorID AND BookID=?")
                         match = db.match(cmd, (bookid,))
                         not_rejectable = None
                         if match:
@@ -798,6 +798,31 @@ class GoodReads:
                             if author_name_result != match['AuthorName']:
                                 rejected.append(['author', (f"Different author for this bookid [{author_name_result}]"
                                                             f"[{match['AuthorName']}]")])
+                                # This is a fatal rejection (see the `rejected` handling below, 'author'
+                                # is not in `ignorable`) so the usual upsert path never runs and this
+                                # book would otherwise sit unchanged forever, still attributed to an
+                                # author the source no longer agrees with. Set it Ignored so it stops
+                                # being actively wanted/searched under a stale attribution - but don't
+                                # touch it if the user already has the file or has it manually locked,
+                                # since re-attribution doesn't mean the file itself is wrong.
+                                match_locked = match['Manual']
+                                if match_locked is None:
+                                    match_locked = False
+                                elif str(match_locked).isdigit():
+                                    match_locked = bool(int(match_locked))
+                                if not match_locked:
+                                    updates = {}
+                                    if match['Status'] not in ('Have', 'Open') or not match['BookFile']:
+                                        if match['Status'] != 'Ignored':
+                                            updates['Status'] = 'Ignored'
+                                    if match['AudioStatus'] not in ('Have', 'Open') or not match['AudioFile']:
+                                        if match['AudioStatus'] != 'Ignored':
+                                            updates['AudioStatus'] = 'Ignored'
+                                    if updates:
+                                        db.upsert("books", updates, {"BookID": bookid})
+                                        self.logger.warning(
+                                            f"Bookid {bookid} [{match['BookName']}] no longer matches author "
+                                            f"[{match['AuthorName']}] (now [{author_name_result}]) - set {updates}")
                             elif bookname != match['BookName']:
                                 # same bookid and author, assume goodreads fixed the title, use the new title
                                 db.action("UPDATE books SET BookName=? WHERE BookID=?", (bookname, bookid))
