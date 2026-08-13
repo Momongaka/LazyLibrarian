@@ -371,7 +371,7 @@ def get_book_cover(bookid=None, src=None, ignore=''):
         if item and item['BookImg']:
             coverlink = item['BookImg']
             coverfile = os.path.join(cachedir, coverlink.replace('cache/', ''))
-            if coverlink != 'images/nocover.png' and 'nocover' in coverlink or 'nophoto' in coverlink:
+            if coverlink != 'images/nocover.png' and ('nocover' in coverlink or 'nophoto' in coverlink):
                 coverfile = os.path.join(DIRS.DATADIR, 'images', 'nocover.png')
                 coverlink = 'images/nocover.png'
                 db.action("UPDATE books SET BookImg=? WHERE BookID=?", (coverlink, bookid))
