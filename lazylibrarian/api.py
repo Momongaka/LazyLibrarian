@@ -43,6 +43,7 @@ from lazylibrarian.bookwork import (
     get_series_members,
     get_work_series,
     isbn_from_words,
+    language_from_words,
     set_all_book_authors,
     set_all_book_series,
     set_genres,
@@ -342,6 +343,7 @@ cmd_dict = {'help': (0, 'list available commands. Time consuming commands take a
             'listsecondaries': (0, 'list all authors that are not primary author of any book in the database'),
             'deletesecondaries': (1, 'delete all secondary authors in the database'),
             'isbnwords': (0, 'find an isbn for a title'),
+            'langwords': (0, 'find language from a title'),
             'getDownloadProgress': (0, '[&source=] [&downloadid=] [&limit=] show active download progress'),
             'cleanMagLibrary': (0, 'Clean the library, removing entries for missing issues')
             }
@@ -3231,6 +3233,13 @@ class Api:
             self.data = 'Missing parameter: words'
             return
         self.data = isbn_from_words(kwargs['words'])
+
+    def _langwords(self, **kwargs):
+        TELEMETRY.record_usage_data()
+        if 'words' not in kwargs:
+            self.data = 'Missing parameter: words'
+            return
+        self.data = language_from_words(kwargs['words'])
 
     def _getauthorinfo(self, **kwargs):
         TELEMETRY.record_usage_data()
