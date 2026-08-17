@@ -44,7 +44,6 @@ from lazylibrarian.formatter import (
     check_int,
     check_year,
     clean_name,
-    date_format,
     format_author_name,
     get_list,
     is_valid_isbn,
@@ -812,11 +811,9 @@ class GoodReads:
                                     match_locked = bool(int(match_locked))
                                 if not match_locked:
                                     updates = {}
-                                    if match['Status'] not in ('Have', 'Open') or not match['BookFile']:
-                                        if match['Status'] != 'Ignored':
+                                    if (match['Status'] not in ('Have', 'Open') or not match['BookFile']) and match['Status'] != 'Ignored':
                                             updates['Status'] = 'Ignored'
-                                    if match['AudioStatus'] not in ('Have', 'Open') or not match['AudioFile']:
-                                        if match['AudioStatus'] != 'Ignored':
+                                    if (match['AudioStatus'] not in ('Have', 'Open') or not match['AudioFile']) and match['AudioStatus'] != 'Ignored':
                                             updates['AudioStatus'] = 'Ignored'
                                     if updates:
                                         db.upsert("books", updates, {"BookID": bookid})
