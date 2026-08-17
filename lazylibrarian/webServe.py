@@ -248,8 +248,10 @@ def serve_template(templatename, **kwargs):
             return template.render(perm=0, message="Database upgrade in progress, please wait...",
                                    title="Database Upgrade", timer=5, style=style)
 
-        adminlogger.debug(str(cherrypy.request.headers))
+        adminlogger.debug(f"Request headers: {str(cherrypy.request.headers)}")
+        adminlogger.debug(f"Request cookie: {str(cherrypy.request.cookie)}")
         if not CONFIG.get_bool('USER_ACCOUNTS'):
+            adminlogger.debug("User accounts are NOT active")
             perm = lazylibrarian.perm_admin
             try:
                 template = _hplookup.get_template(templatename)
@@ -257,6 +259,7 @@ def serve_template(templatename, **kwargs):
                 clear_mako_cache()
                 template = _hplookup.get_template(templatename)
         else:
+            adminlogger.debug(f"User accounts are active, Login user is {lazylibrarian.LOGINUSER}")
             username = ''  # anyone logged in yet?
             userid = 0
             perm = 0
@@ -269,8 +272,9 @@ def serve_template(templatename, **kwargs):
                 lazylibrarian.LOGINUSER = lazylibrarian.LOGINUSER.strip('!')
                 res = db.match('SELECT * from users where UserID=?', (lazylibrarian.LOGINUSER,))
                 if res:
-                    cherrypy.response.cookie['ll_uid'] = lazylibrarian.LOGINUSER
-                    userid = lazylibrarian.LOGINUSER
+                    cherrypy.response.cookie['ll_uid'] = res['UserID']
+                    cherrypy.response.cookie['ll_prefs'] = res['Prefs']
+                    userid = res['UserID']
                     if formauth:
                         logger.debug(f"Auth-login for {res['UserName']}")
                     else:
@@ -284,28 +288,38 @@ def serve_template(templatename, **kwargs):
                 lazylibrarian.LOGINUSER = None
 
             else:
-                cookie = cherrypy.request.cookie
                 authorization = cherrypy.request.headers.get('Authorization')
+                if authorization:
+                    adminlogger.debug(f"Authorization header: {authorization}")
+                cookie = cherrypy.request.cookie
                 if cookie and 'll_uid' in list(cookie.keys()):
+                    adminlogger.debug(f"Cookie UserID: {cookie['ll_uid'].value}")
                     res = db.match('SELECT * from users where UserID=?', (cookie['ll_uid'].value,))
-                    if not res:
+                    if res:
+                        cherrypy.response.cookie['ll_uid'] = res['UserID']
+                        cherrypy.response.cookie['ll_prefs'] = res['Prefs']
+                    else:
+                        adminlogger.debug(f"No user for uid {cookie['ll_uid'].value}")
                         clear_our_cookies()
                 elif authorization and authorization.startswith('Basic '):
                     auth_bytes = authorization.split('Basic ')[1].encode('ascii')
                     value_bytes = base64.b64decode(auth_bytes)
                     values = value_bytes.decode('ascii')
                     res = {}
+                    user = ''
                     if ':' in values:
                         user, pwd = values.split(':', 1)
                         res = db.match('SELECT * from users where UserName=? and Password=?', (user, md5_utf8(pwd)))
                     if res:
                         cherrypy.response.cookie['ll_uid'] = res['UserID']
                         cherrypy.response.cookie['ll_prefs'] = res['Prefs']
+                    else:
+                        adminlogger.debug(f"No user for basic auth {user} or invalid password")
                 if not res and CONFIG.get_bool('PROXY_AUTH'):
-                    logger.debug('Proxy Auth enabled')
+                    adminlogger.debug('Proxy Auth enabled')
                     user = cherrypy.request.headers.get(CONFIG.get_str('PROXY_AUTH_USER'))
                     if user:
-                        logger.debug(f"{CONFIG.get_str('PROXY_AUTH_USER')}: {user}")
+                        adminlogger.debug(f"{CONFIG.get_str('PROXY_AUTH_USER')}: {user}")
                         res = db.match('SELECT * from users where UserName=?', (user,))
                         if res:
                             logger.debug(f"{user} is a registered user")
@@ -313,6 +327,8 @@ def serve_template(templatename, **kwargs):
                             cherrypy.response.cookie['ll_prefs'] = res['Prefs']
                             db.action("UPDATE users SET Last_Login=?,Login_Count=? WHERE UserID=?",
                                       (str(int(time.time())), int(res['Login_Count']) + 1, res['UserID']))
+                        else:
+                            adminlogger.debug(f"{user} is NOT a registered user")
                         if not res and CONFIG.get_bool('PROXY_REGISTER'):
                             logger.debug(f"User {user} not registered, trying to add...")
                             fullname = cherrypy.request.headers.get(CONFIG.get_str('PROXY_AUTH_NAME'))
@@ -354,6 +370,7 @@ def serve_template(templatename, **kwargs):
                         cnt = db.match("select count(*) as counter from users")
                     if cnt and cnt['counter'] == 1 and CONFIG.get_bool('SINGLE_USER') and \
                             templatename not in ["register.html", "response.html", "opds.html"]:
+                        logger.debug(f"Single user login for {res['UserID']}")
                         res = db.match('SELECT * from users')
                         cherrypy.response.cookie['ll_uid'] = res['UserID']
                         cherrypy.response.cookie['ll_prefs'] = res['Prefs']
@@ -377,12 +394,14 @@ def serve_template(templatename, **kwargs):
                     if remote_ip in whitelist:
                         # exact match
                         to_whitelist = True
+                        adminlogger.debug(f"Whitelisted login from {remote_ip}")
                     for white in whitelist:
                         # allow ranges in the format 192.168.1.1/24
                         white_parts = white.split('.')
                         if (len(white_parts) == 4 and white_parts[3] == '1/24' and
                                 remote_ip.startswith('.'.join(white_parts[:3]))):
                             to_whitelist = True
+                            adminlogger.debug(f"Whitelisted login from {white}")
                             break
                     if to_whitelist:
                         columns = db.select('PRAGMA table_info(users)')
@@ -445,7 +464,7 @@ def serve_template(templatename, **kwargs):
                 else:
                     templatename = "login.html"
 
-            adminlogger.debug(f"User {username}: {perm} {userprefs} {usertheme} {templatename}")
+            adminlogger.debug(f"User: {username} Perm: {perm} Prefs: {userprefs} Theme: {usertheme} Template: {templatename}")
 
             theme = usertheme.split('_', 1)[0]
             if theme and theme != CONFIG['HTTP_LOOK']:
@@ -2269,6 +2288,14 @@ class WebInterface:
                 new_datetype = kwargs.get(f'datetype[{title}]')
                 if new_datetype != datetype:
                     new_value_dict['DateType'] = new_datetype
+                    # if changed from issuenum to date or vice-versa,
+                    # check was a date (contains '-') and now expect IssueNum
+                    # check was issuenum (all digit) and now expect date
+                    # reset latest-issue to force scanning for new style issue names
+                    if (('I' in new_datetype and '-' in mag['IssueDate']) or
+                        (new_datetype and 'I' not in new_datetype and mag['IssueDate'].isdigit())):
+                            new_value_dict['IssueDate'] = ''
+                            logger.debug(f"Reset IssueDate for {mag['Title']} as datestyle changed to {new_datetype}")
                 new_coverpage = check_int(kwargs.get(f"coverpage[{title}]"), 1)
                 if new_coverpage != coverpage:
                     new_value_dict['CoverPage'] = new_coverpage
