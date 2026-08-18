@@ -116,14 +116,14 @@ def add_author_name_to_db(author=None, refresh=False, addbooks=None, reason=None
             return "", "", False
 
     db = database.DBConnection()
+    check_exist_author = None
     try:
         # Check if the author exists, and import the author if not,
         req_author = author
         author, exists = get_preferred_author_name(req_author)
         if exists:
             check_exist_author = db.match('SELECT * FROM authors where AuthorName=?', (author,))
-        else:
-            check_exist_author = None
+
         if not exists and (CONFIG.get_bool('ADD_AUTHOR') or reason.startswith('API')):
             logger.debug(f'Author {author} not found in database, adding...')
             # no match for supplied author, but we're allowed to add new ones
@@ -194,7 +194,7 @@ def add_author_name_to_db(author=None, refresh=False, addbooks=None, reason=None
                                 f"Failed to match author [{author}] to authorname [{match_name}] fuzz [{match_fuzz}]")
 
             if not author_info:
-                return "", "", False
+                return "", "", "", False
 
             # To save loading hundreds of books by unknown authors at GR or GB, ignore unknown
             if "unknown" not in author.lower() and 'anonymous' not in author.lower() and \
@@ -250,16 +250,25 @@ def add_author_name_to_db(author=None, refresh=False, addbooks=None, reason=None
                           (', '.join(akas), check_exist_author['AuthorID']))
         else:
             logger.debug(f"Failed to match author [{author}] in database")
-            return "", "", False
+            return "", "", "", False
     finally:
         db.close()
-    return check_exist_author['AuthorName'], check_exist_author['AuthorID'], new
+        return check_exist_author['AuthorName'], check_exist_author['AuthorID'], check_exist_author['asin'], new
+
+
+def merge(author, src_dict, src_key, api_name):
+    if src_dict:
+        author[src_key] = src_dict['authorid']
+        for k, v in src_dict.items():
+            if not author.get(k) or (v and CONFIG['BOOK_API'] == api_name):
+                author[k] = v
 
 
 def get_all_author_details(authorid='', authorname=None):
     # fetch as much data as you can on an author using all configured sources
     #
     logger = logging.getLogger(__name__)
+    # this keys in this dict must match the database columns
     author = {}
     ol_id = gr_id = hc_id = au_id = None
     gr_name = ol_name = hc_name = au_name = ''
@@ -267,7 +276,7 @@ def get_all_author_details(authorid='', authorname=None):
 
     db = database.DBConnection()
     match = db.match(
-        'SELECT ol_id, gr_id, hc_id, au_id, authorname FROM authors WHERE authorid=?',
+        'SELECT ol_id, gr_id, hc_id, au_id, asin, authorname FROM authors WHERE authorid=?',
         (authorid,)
     )
     if match:
@@ -278,7 +287,7 @@ def get_all_author_details(authorid='', authorname=None):
         if not authorname:
             authorname = match['authorname']
 
-    if CONFIG['OL_API'] and (CONFIG['BOOK_API'] in ['OpenLibrary', 'GoogleBooks', 'Audible'] or CONFIG.get_bool('MULTI_SOURCE')):
+    if CONFIG['OL_API'] and (CONFIG['BOOK_API'] in ['OpenLibrary', 'GoogleBooks'] or CONFIG.get_bool('MULTI_SOURCE')):
         if not ol_id and authorid.startswith('OL'):
             ol_id = authorid
         if not ol_id and authorname and 'unknown' not in authorname.lower() and 'anonymous' not in authorname.lower():
@@ -296,6 +305,19 @@ def get_all_author_details(authorid='', authorname=None):
             if not authorname and 'authorname' in ol_author:
                 authorname = ol_author['authorname']
 
+    if CONFIG['BOOK_API'] == 'Audible' or CONFIG.get_bool('MULTI_SOURCE'):
+        asin = None
+        if not au_id and authorname and 'unknown' not in authorname.lower() and 'anonymous' not in authorname.lower():
+            au = Audible(authorname)
+            au_author = au.find_author_id()
+            if au_author:
+                au_id = au_author['authorid']
+                asin = au_author['asin']
+        if au_id:
+            au = Audible(au_id)
+            au_author = au.get_author_info(authorid=au_id, asin=asin)
+            if not authorname and 'authorname' in au_author:
+                authorname = au_author['authorname']
 
     if CONFIG['HC_API'] and (CONFIG['BOOK_API'] in ['HardCover', 'GoogleBooks'] or CONFIG.get_bool('MULTI_SOURCE')):
         # if not hc_id and not CONFIG['GR_API'] and authorid.isnumeric():  # could be gr or hc, won't be both!
@@ -315,6 +337,7 @@ def get_all_author_details(authorid='', authorname=None):
             if not authorname and 'authorname' in hc_author:
                 authorname = hc_author['authorname']
 
+# make this compare to GOODREADS
     if CONFIG['GR_API'] and (CONFIG['BOOK_API'] not in ['OpenLibrary', 'HardCover'] or
                              CONFIG.get_bool('MULTI_SOURCE')):
         # if not CONFIG['HC_API'] and not gr_id and authorid.isnumeric():  # could be gr or hc, won't be both!
@@ -332,29 +355,22 @@ def get_all_author_details(authorid='', authorname=None):
             #    authorname = gr_author['authorname']
     # ---------- Audible ----------
     if CONFIG.get_bool('MULTI_SOURCE'):
+        asin = None
         if not au_id and authorname and 'unknown' not in authorname.lower() and 'anonymous' not in authorname.lower():
             au = Audible(authorname)
             au_author = au.find_author_id()
             if au_author:
                 au_id = au_author['authorid']
+                asin = au_author['asin']
         if au_id:
             au = Audible(au_id)
-            au_author = au.get_author_info(authorid=au_id)
-            if not authorname and 'authorname' in au_author:
-                authorname = au_author['authorname']
+            au_author = au.get_author_info(authorid=au_id, asin=asin)
 
     # which source do we prefer
-    def merge(src_dict, src_key, api_name):
-        if src_dict:
-            author[src_key] = src_dict['authorid']
-            for k, v in src_dict.items():
-                if not author.get(k) or (v and CONFIG['BOOK_API'] == api_name):
-                    author[k] = v
-
-    merge(ol_author, 'ol_id', 'OpenLibrary')
-    merge(gr_author, 'gr_id', 'GoodReads')
-    merge(hc_author, 'hc_id', 'HardCover')
-    merge(au_author, 'au_id', 'Audible')
+    merge(author, ol_author, 'ol_id', 'OpenLibrary')
+    merge(author, gr_author, 'gr_id', 'GoodReads')
+    merge(author, hc_author, 'hc_id', 'HardCover')
+    merge(author, au_author, 'au_id', 'Audible')
 
     if author:
         if authorid:
@@ -366,8 +382,8 @@ def get_all_author_details(authorid='', authorname=None):
                 author['authorid'] = ol_author['authorid']
             elif CONFIG['BOOK_API'] == 'GoodReads' and gr_author.get('authorid'):
                 author['authorid'] = gr_author['authorid']
-            elif CONFIG['BOOK_API'] == 'Audible' and au_author.get('authorid'):
-                author['authorid'] = au_author['authorid']
+            elif CONFIG['BOOK_API'] == 'Audible' and au_author.get('authorasin'):
+                author['asin'] = au_author['authorasin']
 
         # Handle AKAs
         akas = get_list(author.get('AKA', ''), ',')
@@ -405,6 +421,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
         thread_name("AddAuthorToDB")
     db = database.DBConnection()
     ret_id = None
+    asin = None
 
     try:
         new_author = True
@@ -417,6 +434,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
         if dbauthor:
             new_author = False
             authorid = dbauthor['AuthorID']
+            asin = dbauthor['asin']
             authorname = dbauthor['AuthorName']
         elif authorname and 'unknown' not in authorname.lower() and 'anonymous' not in authorname.lower():
             dbauthor = db.match("SELECT * from authors WHERE AuthorName=?", (authorname,))
@@ -428,6 +446,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
                 if dbauthor:
                     new_author = False
                     authorid = dbauthor['AuthorID']
+                    asin = dbauthor['asin']
                     authorname = dbauthor['AuthorName']
 
         if new_author or refresh:
@@ -465,7 +484,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
             logger.warning(f"No author info found for {authorid}:{authorname}:{reason}")
             if authorid:
                 db.action("UPDATE authors SET Updated=? WHERE AuthorID=?", (int(time.time()), authorid))
-            return ret_id
+            return ret_id, asin
 
         if authorname and current_author['authorname'] != authorname:
             dbauthor = db.match("SELECT * from authors WHERE AuthorName=?", (current_author['authorname'],))
@@ -477,7 +496,7 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
                 if aka and aka not in akas:
                     akas.append(aka)
                     db.action("UPDATE authors SET AKA=? WHERE AuthorID=?", (', '.join(akas), dbauthor['authorid']))
-                return dbauthor['authorid']
+                return dbauthor['authorid'], dbauthor['asin']
             else:
                 logger.warning(
                     f"Updating authorname for {current_author['authorid']} (new:{current_author['authorname']} "
@@ -609,9 +628,10 @@ def add_author_to_db(authorname=None, refresh=False, authorid='', addbooks=True,
                    f"status {entry_status}")
             logger.info(msg)
             ret_id = current_author['authorid']
+            asin = current_author['asin']
         else:
             logger.warning(f"Authorid {authorid} ({authorname}) not found in database")
-        return ret_id
+        return ret_id, asin
 
     except Exception:
         msg = f'Unhandled exception: {traceback.format_exc()}'

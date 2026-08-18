@@ -84,40 +84,40 @@ class GoodReads:
                     for item in rootxml.iter('books'):
                         contents = item.attrib
                     for author in resultxml:
-                        try:
-                            if author.find('original_publication_year').text is None:
-                                bookdate = "0000"
-                            elif check_year(author.find('original_publication_year').text, past=1800, future=0):
-                                bookdate = author.find('original_publication_year').text
-                                try:
-                                    bookmonth = check_int(author.find('original_publication_month').text, 0)
-                                    bookday = check_int(author.find('original_publication_day').text, 0)
-                                    if bookmonth and bookday:
-                                        bookdate = "%s-%02d-%02d" % (bookdate, bookmonth, bookday)
-                                except (KeyError, AttributeError):
-                                    pass
-                            else:
-                                bookdate = "0000"
-                        except (KeyError, AttributeError):
-                            bookdate = "0000"
-
-                        try:
-                            author_name_result = author.find('./best_book/author/name').text
-                            # Goodreads sometimes puts extra whitespace in the author names!
-                            author_name_result = ' '.join(author_name_result.split())
-                        except (KeyError, AttributeError):
-                            author_name_result = ""
-
-                        booksub = ""
-                        bookpub = ""
-                        booklang = "Unknown"
-
-                        try:
-                            bookimg = author.find('./best_book/image_url').text
-                            if not bookimg or 'nocover' in bookimg or 'nophoto' in bookimg:
-                                bookimg = 'images/nocover.png'
-                        except (KeyError, AttributeError):
-                            bookimg = 'images/nocover.png'
+                        # try:
+                        #     if author.find('original_publication_year').text is None:
+                        #         bookdate = "0000"
+                        #     elif check_year(author.find('original_publication_year').text, past=1800, future=0):
+                        #         bookdate = author.find('original_publication_year').text
+                        #         try:
+                        #             bookmonth = check_int(author.find('original_publication_month').text, 0)
+                        #             bookday = check_int(author.find('original_publication_day').text, 0)
+                        #             if bookmonth and bookday:
+                        #                 bookdate = "%s-%02d-%02d" % (bookdate, bookmonth, bookday)
+                        #         except (KeyError, AttributeError):
+                        #             pass
+                        #     else:
+                        #         bookdate = "0000"
+                        # except (KeyError, AttributeError):
+                        #     bookdate = "0000"
+                        #
+                        # try:
+                        #     author_name_result = author.find('./best_book/author/name').text
+                        #     # Goodreads sometimes puts extra whitespace in the author names!
+                        #     author_name_result = ' '.join(author_name_result.split())
+                        # except (KeyError, AttributeError):
+                        #     author_name_result = ""
+                        #
+                        # booksub = ""
+                        # bookpub = ""
+                        # booklang = "Unknown"
+                        #
+                        # try:
+                        #     bookimg = author.find('./best_book/image_url').text
+                        #     if not bookimg or 'nocover' in bookimg or 'nophoto' in bookimg:
+                        #         bookimg = 'images/nocover.png'
+                        # except (KeyError, AttributeError):
+                        #     bookimg = 'images/nocover.png'
 
                         try:
                             bookrate = check_float(author.find('average_rating').text, 0)
@@ -134,24 +134,24 @@ class GoodReads:
                         bookisbn = ''
                         workid = ''
 
-                        try:
-                            booklink = '/'.join([CONFIG['GR_URL'],
-                                                 f"book/show/{author.find('./best_book/id').text}"])
-                        except (KeyError, AttributeError):
-                            booklink = ""
-
-                        try:
-                            authorid = author.find('./best_book/author/id').text
-                        except (KeyError, AttributeError):
-                            authorid = ""
-
-                        try:
-                            if author.find('./best_book/title').text is None:
-                                book_title = ""
-                            else:
-                                book_title = author.find('./best_book/title').text
-                        except (KeyError, AttributeError):
-                            book_title = ""
+                        # try:
+                        #     booklink = '/'.join([CONFIG['GR_URL'],
+                        #                          f"book/show/{author.find('./best_book/id').text}"])
+                        # except (KeyError, AttributeError):
+                        #     booklink = ""
+                        #
+                        # try:
+                        #     authorid = author.find('./best_book/author/id').text
+                        # except (KeyError, AttributeError):
+                        #     authorid = ""
+                        #
+                        # try:
+                        #     if author.find('./best_book/title').text is None:
+                        #         book_title = ""
+                        #     else:
+                        #         book_title = author.find('./best_book/title').text
+                        # except (KeyError, AttributeError):
+                        #     book_title = ""
 
                         if searchauthorname:
                             author_fuzz = fuzz.token_sort_ratio(author_name_result, searchauthorname)

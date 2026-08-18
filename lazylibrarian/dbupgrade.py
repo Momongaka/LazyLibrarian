@@ -130,9 +130,11 @@ from lazylibrarian.scheduling import restart_jobs, SchedulerCommand
 # 89 add audible ID to books
 # 90 add audible ID to authors
 # 91 add audible ID to series
+# 92 add asin to books
+# 93 add asin to authors
 
 
-db_current_version = 91
+db_current_version = 93
 
 
 def upgrade_needed():
@@ -1474,6 +1476,18 @@ def update_schema(db, upgradelog):
         lazylibrarian.UPDATE_MSG = 'Adding Audible ID to series'
         upgradelog.write(f"{time.ctime()} v91: {lazylibrarian.UPDATE_MSG}\n")
         db.action('ALTER TABLE series ADD COLUMN au_id TEXT')
+
+    if not has_column(db, "books", "asin"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding ASIN to books'
+        upgradelog.write(f"{time.ctime()} v92: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE books ADD COLUMN asin TEXT')
+
+    if not has_column(db, "authors", "asin"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding ASIN to authors'
+        upgradelog.write(f"{time.ctime()} v93: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE authors ADD COLUMN asin TEXT')
 
     if changes:
         upgradelog.write(f"{time.ctime()} Changed: {changes}\n")

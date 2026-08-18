@@ -543,16 +543,17 @@ def process_alternate(source_dir=None, library='eBook'):
                 if authmatch:
                     logger.debug(f"Author {authorname} found in database")
                     authorid = authmatch['authorid']
+                    asin = authmatch['asin']
                 else:
                     logger.debug(f"Author {authorname} not found, adding to database")
                     if authorid:
-                        ret_id = add_author_to_db(authorid=authorid, addbooks=CONFIG.get_bool('NEWAUTHOR_BOOKS'),
+                        ret_id, asin = add_author_to_db(authorid=authorid, authorname=authorname, addbooks=CONFIG.get_bool('NEWAUTHOR_BOOKS'),
                                                   reason=f"process_alternate: {bookname}")
                         if ret_id and ret_id != authorid:
                             logger.debug(f"Authorid mismatch {authorid}/{ret_id}")
                             authorid = ret_id
                     else:
-                        aname, authorid, _ = add_author_name_to_db(author=authorname,
+                        aname, authorid, asin, _ = add_author_name_to_db(author=authorname,
                                                                    reason=f"process_alternate: {bookname}",
                                                                    title=bookname)
                         if aname and aname != authorname:
@@ -572,7 +573,7 @@ def process_alternate(source_dir=None, library='eBook'):
                     results = search_for(searchterm)
                     for result in results:
                         if result['book_fuzz'] >= CONFIG.get_int('MATCH_RATIO') \
-                                and result['authorid'] == authorid:
+                                and (result['authorid'] == authorid or result['authorid'] == asin):
                             match = result
                             break
                     if not match:  # no match on full searchterm, try splitting out subtitle and series
@@ -584,7 +585,7 @@ def process_alternate(source_dir=None, library='eBook'):
                             results = search_for(searchterm)
                             for result in results:
                                 if result['book_fuzz'] >= CONFIG.get_int('MATCH_RATIO') \
-                                        and result['authorid'] == authorid:
+                                        and (result['authorid'] == authorid or result['authorid'] == asin):
                                     match = result
                                     break
                     if match:
@@ -620,7 +621,7 @@ def process_alternate(source_dir=None, library='eBook'):
                     msg = (f"Closest match ({round(results[0]['author_fuzz'], 2)}% "
                            f"{round(results[0]['book_fuzz'], 2)}%) "
                            f"{results[0]['authorname']}: {results[0]['bookname']}")
-                    if results[0]['authorid'] != authorid:
+                    if results[0]['authorid'] != authorid and results[0]['authorid'] != asin:
                         msg += ' wrong authorid'
                     logger.warning(msg)
                 if 'IMPORTALT' in threading.current_thread().name:
