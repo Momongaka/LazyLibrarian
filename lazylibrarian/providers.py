@@ -16,28 +16,49 @@ import os
 import re
 import threading
 import time
-from typing import Dict
+from copy import deepcopy
 from urllib.parse import urlencode, urlparse
 from xml.etree import ElementTree
-from copy import deepcopy
+
+try:
+    import xmltodict
+except ImportError:
+    xmltodict = None
 
 from bs4 import BeautifulSoup
 
 import lazylibrarian
 import lib.feedparser as feedparser
 from lazylibrarian import database
+from lazylibrarian.annas import anna_search, block_annas
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.cache import fetch_url
 from lazylibrarian.config2 import CONFIG, wishlist_type
 from lazylibrarian.configtypes import ConfigDict
-from lazylibrarian.directparser import direct_gen, direct_bok, bok_grabs
-from lazylibrarian.filesystem import DIRS, path_isfile, syspath, remove_file
-from lazylibrarian.formatter import age, today, plural, clean_name, unaccented, get_list, check_int, \
-    make_unicode, seconds_to_midnight, make_utf8bytes, month2num, md5_utf8
+from lazylibrarian.directparser import bok_grabs, direct_bok, direct_gen
+from lazylibrarian.filesystem import DIRS, path_isfile, remove_file, syspath
+from lazylibrarian.formatter import (
+    age,
+    check_int,
+    clean_name,
+    get_list,
+    make_unicode,
+    md5_utf8,
+    month2num,
+    plural,
+    seconds_to_midnight,
+    today,
+    unaccented,
+)
 from lazylibrarian.ircbot import irc_query, irc_results
 from lazylibrarian.soulseek import slsk_search
-from lazylibrarian.annas import anna_search
-from lazylibrarian.torrentparser import torrent_kat, torrent_tpb, torrent_tdl, torrent_lime, torrent_abb
+from lazylibrarian.torrentparser import (
+    torrent_abb,
+    torrent_kat,
+    torrent_lime,
+    torrent_tdl,
+    torrent_tpb,
+)
 
 
 def test_provider(name: str, host=None, api=None):
@@ -99,7 +120,6 @@ def test_provider(name: str, host=None, api=None):
                 return direct_gen(book, prov=provider['NAME'].lower(), test=True), name
 
     if name == 'BOK':
-        logger.debug(f"Testing provider {name}")
         if host:
             CONFIG.set_str('BOK_HOST', host)
         if api:
@@ -107,6 +127,7 @@ def test_provider(name: str, host=None, api=None):
             CONFIG.set_str('BOK_EMAIL', email)
             CONFIG.set_str('BOK_PASS', pwd)
             CONFIG.set_str('BOK_SEARCH_LANG', langs)
+        logger.debug(f"Testing provider {name}:{CONFIG['BOK_HOST']}")
         return direct_bok(book, prov=name, test=True), "ZLibrary"
 
     if name.startswith('rss_'):
@@ -204,10 +225,9 @@ def test_provider(name: str, host=None, api=None):
 
                     if provider['BOOKSEARCH']:
                         success, error_msg = newznab_plus(book, provider, 'book', 'torznab', True)
-                        if not success:
-                            if cancel_search_type('book', error_msg, provider):
-                                caps_changed.append([provider, 'BOOKSEARCH', ''])
-                                success, _ = newznab_plus(book, provider, 'generalbook', 'torznab', True)
+                        if not success and cancel_search_type('book', error_msg, provider):
+                            caps_changed.append([provider, 'BOOKSEARCH', ''])
+                            success, _ = newznab_plus(book, provider, 'generalbook', 'torznab', True)
                     else:
                         success, _ = newznab_plus(book, provider, 'generalbook', 'torznab', True)
 
@@ -244,12 +264,12 @@ def test_provider(name: str, host=None, api=None):
                             for item in provider:
                                 if provider[item] != provider_copy[item]:
                                     caps_changed.append([provider, item, provider_copy[item]])
+
                     if provider['BOOKSEARCH']:
                         success, error_msg = newznab_plus(book, provider, 'book', 'newznab', True)
-                        if not success:
-                            if cancel_search_type('book', error_msg, provider):
-                                caps_changed.append([provider, 'BOOKSEARCH', ''])
-                                success, _ = newznab_plus(book, provider, 'generalbook', 'newznab', True)
+                        if not success and cancel_search_type('book', error_msg, provider):
+                            caps_changed.append([provider, 'BOOKSEARCH', ''])
+                            success, _ = newznab_plus(book, provider, 'generalbook', 'newznab', True)
                     else:
                         success, _ = newznab_plus(book, provider, 'generalbook', 'newznab', True)
                     return success, provider['DISPNAME']
@@ -291,8 +311,7 @@ def test_provider(name: str, host=None, api=None):
                         logger.debug(f"Removing File: {resultfile}")
                         remove_file(resultfile)  # remove the test search .zip
                         return len(results), name
-                    else:
-                        return False, name
+                    return False, name
         except IndexError:
             pass
         except Exception as e:
@@ -373,7 +392,7 @@ def get_capabilities(provider: ConfigDict, force=False):
         logger.debug(f"Using stored capabilities for {provider['HOST']}")
     else:
         host = provider['HOST']
-        if not str(host[:4]) == "http":
+        if str(host[:4]) != "http":
             host = f"http://{host}"
         if host[-1:] == '/':
             host = host[:-1]
@@ -416,7 +435,6 @@ def get_capabilities(provider: ConfigDict, force=False):
                         success = False
             else:
                 logger.debug(f'Unable to retry capabilities, no apikey for {url}')
-
         if not success:
             logger.warning(f"Unable to get capabilities for {url}: No data returned")
             # might be a temporary error
@@ -436,7 +454,10 @@ def get_capabilities(provider: ConfigDict, force=False):
                 # CONFIG.save_config_and_backup_old(section=provider['NAME'])
         elif data is not None:
             logger.debug(f"Parsing xml for capabilities of {url}")
-            #
+            if xmltodict:
+                dlcommslogger = logging.getLogger('special.dlcomms')
+                data_dict = xmltodict.parse(source_xml)
+                dlcommslogger.debug(data_dict)
             # book search isn't mentioned in the caps xml returned by
             # nzbplanet,jackett,oznzb,usenet-crawler, so we can't use it as a test
             # but the newznab+ ones usually support t=book and categories in 7000 range
@@ -456,12 +477,8 @@ def get_capabilities(provider: ConfigDict, force=False):
                 if item:
                     item.reset_to_default()
             search = data.find('searching/search')
-            if search is not None:
-                # noinspection PyUnresolvedReferences
-                if 'available' in search.attrib:
-                    # noinspection PyUnresolvedReferences
-                    if search.attrib['available'] == 'yes':
-                        provider['GENERALSEARCH'] = 'search'
+            if search is not None and 'available' in search.attrib and search.attrib['available'] == 'yes':
+                provider['GENERALSEARCH'] = 'search'
             limits = data.find('limits')
             if limits is not None:
                 try:
@@ -473,22 +490,31 @@ def get_capabilities(provider: ConfigDict, force=False):
                     logger.debug(f"Error getting apilimit from {provider['HOST']}: {type(e).__name__} {str(e)}")
 
             categories = data.iter('category')
+            ebooksubs = ''
+            magsubs = ''
+            comicsubs = ''
+            audiosubs = ''
             for cat in categories:
                 if 'name' in cat.attrib:
-                    if cat.attrib['name'].lower() == 'audio':
-                        provider['AUDIOCAT'] = cat.attrib['id']
+                    if cat.attrib['name'].lower().startswith('audio'):
+                        if not provider['AUDIOCAT']:
+                            provider['AUDIOCAT'] = cat.attrib['id']
                         subcats = cat.iter('subcat')
                         if not subcats:
                             subcats = cat.iter('subCategories')
                         for subcat in subcats:
                             if 'audiobook' in subcat.attrib['name'].lower():
-                                provider['AUDIOCAT'] = subcat.attrib['id']
-
-                    elif cat.attrib['name'].lower() == 'books':
-                        provider['BOOKCAT'] = cat.attrib['id']
+                                if audiosubs:
+                                    audiosubs += ','
+                                audiosubs += subcat.attrib['id']
+                    elif cat.attrib['name'].lower().startswith('books'):
+                        if not provider['BOOKCAT']:
+                            provider['BOOKCAT'] = cat.attrib['id']
                         # if no specific magazine/comic subcategory, use books
-                        provider['MAGCAT'] = cat.attrib['id']
-                        provider['COMICCAT'] = cat.attrib['id']
+                        if not provider['MAGCAT']:
+                            provider['MAGCAT'] = cat.attrib['id']
+                        if not provider['COMICCAT']:
+                            provider['COMICCAT'] = cat.attrib['id']
                         # set default booksearch
                         if provider['BOOKCAT'] == '7000':
                             # looks like newznab+, should support book-search
@@ -497,27 +523,22 @@ def get_capabilities(provider: ConfigDict, force=False):
                             # looks like nZEDb, probably no book-search
                             provider['BOOKSEARCH'] = ''  # but check in case we got some settings back
                         search = data.find('searching/book-search')
-                        if search is not None:
+                        if search is not None and 'available' in search.attrib:
                             # noinspection PyUnresolvedReferences
-                            if 'available' in search.attrib:
-                                # noinspection PyUnresolvedReferences
-                                if (search.attrib['available'] == 'yes' and
-                                        ('supportedParams' not in search.attrib or
-                                         ('author' in search.attrib['supportedParams'] and
-                                          'title' in search.attrib['supportedParams']))):
-                                    # only use book search if author and title are supported
-                                    # (if supportedParams are specified)
-                                    provider['BOOKSEARCH'] = 'book'
-                                else:
-                                    provider['BOOKSEARCH'] = ''
+                            if (search.attrib['available'] == 'yes' and
+                                    ('supportedParams' not in search.attrib or
+                                     ('author' in search.attrib['supportedParams'] and
+                                      'title' in search.attrib['supportedParams']))):
+                                # only use book search if author and title are supported
+                                # (if supportedParams are specified)
+                                provider['BOOKSEARCH'] = 'book'
+                            else:
+                                provider['BOOKSEARCH'] = ''
                         # subcategories override main category (not in addition to)
                         # but allow multile subcategories (mags->english, mags->french)
                         subcats = cat.iter('subcat')
                         if not subcats:
                             subcats = cat.iter('subCategories')
-                        ebooksubs = ''
-                        magsubs = ''
-                        comicsubs = ''
                         for subcat in subcats:
                             if 'ebook' in subcat.attrib['name'].lower():
                                 if ebooksubs:
@@ -531,12 +552,14 @@ def get_capabilities(provider: ConfigDict, force=False):
                                 if comicsubs:
                                     comicsubs += ','
                                 comicsubs += subcat.attrib['id']
-                        if ebooksubs:
-                            provider['BOOKCAT'] = ebooksubs
-                        if magsubs:
-                            provider['MAGCAT'] = magsubs
-                        if comicsubs:
-                            provider['COMICCAT'] = comicsubs
+            if ebooksubs:
+                provider['BOOKCAT'] = ebooksubs
+            if magsubs:
+                provider['MAGCAT'] = magsubs
+            if comicsubs:
+                provider['COMICCAT'] = comicsubs
+            if audiosubs:
+                provider['AUDIOCAT'] = audiosubs
             logger.info(
                 f"Categories: Books {provider['BOOKCAT']} : Mags {provider['MAGCAT']} : Audio "
                 f"{provider['AUDIOCAT']} : Comic {provider['COMICCAT']} : BookSearch '{provider['BOOKSEARCH']}'")
@@ -557,20 +580,6 @@ def iterate_over_znab_sites(book=None, search_type=None):
     iterateproviderslogger.debug(f"ZNAB: Book:{book}, SearchType:{search_type}")
     resultslist = []
     providers = 0
-    caps_changed = []
-    for provider in CONFIG.providers('NEWZNAB'):
-        if provider['ENABLED']:
-            provider_copy = deepcopy(provider)
-            updated = get_capabilities(provider_copy)
-            if updated:
-                for item in provider:
-                    if provider[item] != provider_copy[item]:
-                        caps_changed.append([provider, item, provider_copy[item]])
-    for item in caps_changed:
-        item[0][item[1]] = item[2]
-    if caps_changed:
-        CONFIG.save_config_and_backup_old(section='Capabilities')
-
     last_used = []
     api_count = []
     try:
@@ -623,7 +632,7 @@ def iterate_over_znab_sites(book=None, search_type=None):
                         logger.debug(f'Querying provider {dispname}')
                         resultslist += newznab_plus(book, provider, search_type, "nzb")[1]
     except RuntimeError:
-        logger.debug(f"Error iterating newznab")
+        logger.debug("Error iterating newznab")
 
     for item in last_used:
         logger.debug(f"Updating LASTUSED for {item[0]['NAME']}")
@@ -631,21 +640,6 @@ def iterate_over_znab_sites(book=None, search_type=None):
     for item in api_count:
         logger.debug(f"Updating APICOUNT for {item[0]['NAME']}")
         item[0].set_int('APICOUNT', item[1])
-
-    caps_changed = []
-    # can't update while iterating so copy and update after
-    for provider in CONFIG.providers('TORZNAB'):
-        if provider['ENABLED']:
-            provider_copy = deepcopy(provider)
-            updated = get_capabilities(provider_copy)
-            if updated:
-                for item in provider:
-                    if provider[item] != provider_copy[item]:
-                        caps_changed.append([provider, item, provider_copy[item]])
-    for item in caps_changed:
-        item[0][item[1]] = item[2]
-    if caps_changed:
-        CONFIG.save_config_and_backup_old(section='Capabilities')
 
     last_used = []
     api_count = []
@@ -699,7 +693,7 @@ def iterate_over_znab_sites(book=None, search_type=None):
                         logger.debug(f'Querying provider {dispname}')
                         resultslist += newznab_plus(book, provider, search_type, "torznab")[1]
     except RuntimeError:
-        logger.debug(f"Error iterating torznab")
+        logger.debug("Error iterating torznab")
 
     for item in last_used:
         logger.debug(f"Updating LASTUSED for {item[0]['NAME']}")
@@ -777,6 +771,7 @@ def iterate_over_direct_sites(book=None, search_type=None):
     iterateproviderslogger.debug(f"Direct: Book:{book}, SearchType:{search_type}")
     resultslist = []
     providers = 0
+    book['searchtype'] = search_type
     if search_type not in ['mag', 'comic'] and not search_type.startswith('general'):
         authorname, bookname = get_searchterm(book, search_type)
         if 'title' in search_type:
@@ -813,7 +808,7 @@ def iterate_over_direct_sites(book=None, search_type=None):
                         resultslist += results
                         providers += 1
     except RuntimeError:
-        logger.debug(f"Error iterating gen")
+        logger.debug("Error iterating gen")
 
     prov = 'BOK'
     if CONFIG[prov]:
@@ -909,11 +904,17 @@ def iterate_over_direct_sites(book=None, search_type=None):
             ignored = True
         if not ignored:
             logger.debug(f'Querying {provider}')
-            results, error = anna_search(book)
+            searchtype = 'ebook'
+            if 'audio' in search_type:
+                searchtype = 'audio'
+            if 'mag' in search_type:
+                searchtype = 'mag'
+            results, error = anna_search(book, searchtype)
             if error:
                 dl_limit = CONFIG.get_int('ANNA_DLLIMIT')
                 count = lazylibrarian.TIMERS['ANNA_REMAINING']
                 if dl_limit and count <= 0:
+                    lazylibrarian.TIMERS['ANNA_REMAINING'] = 0
                     block_annas(dl_limit)
                 else:
                     # use a short delay for site unavailable etc
@@ -1132,7 +1133,7 @@ def ny_times(host=None, feednr=None, priority=0, dispname=None, types='E', test=
     logger = logging.getLogger(__name__)
     results = []
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
 
     url = host
@@ -1189,7 +1190,7 @@ def amazon(host=None, feednr=None, priority=0, dispname=None, types='E', test=Fa
     logger = logging.getLogger(__name__)
     results = []
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
 
     if '/charts/' in host:
@@ -1217,7 +1218,7 @@ def amazon(host=None, feednr=None, priority=0, dispname=None, types='E', test=Fa
             booknames = []
             for item in titles:
                 booknames.append(item.text.replace('\n', '').strip())
-            temp_res = list(zip(authnames, booknames))
+            temp_res = list(zip(authnames, booknames, strict=True))
             # suppress blanks and duplicates
             for item in temp_res:
                 if item[0] and item[1] and item not in res:
@@ -1250,7 +1251,7 @@ def publishersweekly(host=None, feednr=None, priority=0, dispname=None, types='E
     logger = logging.getLogger(__name__)
     results = []
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
 
     url = host
@@ -1308,7 +1309,7 @@ def appsnprorg(host=None, feednr=None, priority=0, dispname=None, types='E', tes
     basehost = host
     booknames = []
     authnames = []
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
 
     url = host
@@ -1341,7 +1342,7 @@ def appsnprorg(host=None, feednr=None, priority=0, dispname=None, types='E', tes
             booknames.append(temp_dic["title"])
             authnames.append(temp_dic["author"])
             isbn.append(temp_dic["isbn"])
-        temp_res = list(zip(authnames, booknames, isbn))
+        temp_res = list(zip(authnames, booknames, isbn, strict=True))
         for item in temp_res:
             if item[0] and item[1] and item not in res:
                 res.append(item)
@@ -1375,7 +1376,7 @@ def penguinrandomhouse(host=None, feednr=None, priority=0, dispname=None, types=
     logger = logging.getLogger(__name__)
     results = []
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
 
     if '/books/' in host:
@@ -1422,7 +1423,7 @@ def penguinrandomhouse(host=None, feednr=None, priority=0, dispname=None, types=
                         authnames.append(tmp)
                 for item in titles:
                     booknames.append(item.text.replace('\n', '').strip())
-                temp_res = list(zip(authnames, booknames))
+                temp_res = list(zip(authnames, booknames, strict=True))
                 for item in temp_res:
                     if item[0] and item[1] and item not in res:
                         res.append(item)
@@ -1453,7 +1454,7 @@ def barnesandnoble(host=None, feednr=None, priority=0, dispname=None, types='E',
     logger = logging.getLogger(__name__)
     results = []
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
     provider = "barnesandnoble"
 
@@ -1481,7 +1482,7 @@ def barnesandnoble(host=None, feednr=None, priority=0, dispname=None, types='E',
             booknames = []
             for item in titles:
                 booknames.append(str(item.contents[1]).split('title="')[1].split('"')[0].strip())
-            temp_res = list(zip(authnames, booknames))
+            temp_res = list(zip(authnames, booknames, strict=True))
             # suppress blanks and duplicates
             for item in temp_res:
                 if item[0] and item[1] and item not in res:
@@ -1513,7 +1514,7 @@ def bookdepository(host=None, feednr=None, priority=0, dispname=None, types='E',
     logger = logging.getLogger(__name__)
     results = []
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
     provider = "bookdepository"
     page = 1
@@ -1554,7 +1555,7 @@ def bookdepository(host=None, feednr=None, priority=0, dispname=None, types='E',
                 booknames = []
                 for item in titles:
                     booknames.append(item.text.strip())
-                temp_res = list(zip(authnames, booknames))
+                temp_res = list(zip(authnames, booknames, strict=True))
                 for item in temp_res:
                     if item[0] and item[1] and item not in res:
                         res.append(item)
@@ -1591,7 +1592,7 @@ def indigo(host=None, feednr=None, priority=0, dispname=None, types='E', test=Fa
     logger = logging.getLogger(__name__)
     results = []
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
     provider = "indigo"
     # The first page is 0
@@ -1623,14 +1624,13 @@ def indigo(host=None, feednr=None, priority=0, dispname=None, types='E', test=Fa
             # Test if page result is empty
             if soup.text.strip() == "[]" or soup.text.strip() == "<feff>":
                 return len(results)
-            else:
-                next_page = True
+            next_page = True
 
             # replace weird character , delete new line
             apiresult = apiresult.replace('\n', '').strip().replace(':', ': ').replace("“", "'").replace("”", "'")
 
             # conver to list of dict
-            apilist = list(eval(apiresult))
+            apilist = list(json.loads(apiresult))
 
             # List containt word without quote
             titles = []
@@ -1644,7 +1644,7 @@ def indigo(host=None, feednr=None, priority=0, dispname=None, types='E', test=Fa
 
             if len(authors) == len(titles):
                 res = []
-                temp_res = list(zip(authors, titles, isbn))
+                temp_res = list(zip(authors, titles, isbn, strict=True))
                 # suppress blanks and duplicates
                 for item in temp_res:
                     if item[0] and item[1] and item not in res:
@@ -1679,7 +1679,7 @@ def listopia(host=None, feednr=None, priority=0, dispname=None, types='E', test=
     results = []
     maxpage = priority
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
 
     page = 1
@@ -1742,10 +1742,9 @@ def listopia(host=None, feednr=None, priority=0, dispname=None, types='E', test=
             return len(results)
 
         page += 1
-        if maxpage:
-            if page > maxpage:
-                logger.warning('Maximum results page reached, still more results available')
-                next_page = False
+        if maxpage and page > maxpage:
+            logger.warning('Maximum results page reached, still more results available')
+            next_page = False
 
     logger.debug(f"Found {len(results)} {plural(len(results), 'result')} from {host}")
     return results
@@ -1755,7 +1754,7 @@ def mam(host=None, feednr=None, priority=0, dispname=None, types='E', test=False
     logger = logging.getLogger(__name__)
     results = []
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
 
     url = host
@@ -1846,58 +1845,75 @@ def goodreads(host=None, feednr=None, priority=0, dispname=None, types='E', test
     logger = logging.getLogger(__name__)
     results = []
     basehost = host
-    if not str(host)[:4] == "http":
+    if str(host)[:4] != "http":
         host = f"http://{host}"
 
     url = host
+    maxpage = priority
+    page = 1
+    next_page = True
 
-    result, success = fetch_url(url)
+    while next_page:
+        if page > 1:
+            if '?' in host:
+                url = f"{host}&page={page}"
+            else:
+                url = f"{host}?page={page}"
 
-    if success:
-        data = feedparser.parse(result)
-    else:
-        logger.error(f'Error fetching data from {host}: {result}')
-        if not test:
-            BLOCKHANDLER.block_provider(basehost, result)
-        data = None
+        result, success = fetch_url(url)
+        next_page = False
 
-    if data:
-        logger.debug(f'Parsing results from {url}')
-        provider = data['feed']['link']
-        if not dispname:
-            dispname = provider
-        logger.debug(f"rss {provider} returned {len(data.entries)} {plural(len(data.entries), 'result')}")
-        for post in data.entries:
-            title = ''
-            book_id = ''
-            author_name = ''
-            isbn = ''
-            if 'title' in post:
-                title = post.title
-            if 'book_id' in post:
-                book_id = post.book_id
-            if 'author_name' in post:
-                author_name = post.author_name
-            if 'isbn' in post:
-                isbn = post.isbn
-            if title and author_name:
-                results.append({
-                    'rss_prov': provider,
-                    'rss_feed': feednr,
-                    'rss_title': title,
-                    'rss_author': author_name,
-                    'rss_bookid': book_id,
-                    'rss_isbn': isbn,
-                    'priority': priority,
-                    'dispname': dispname,
-                    'types': types,
-                    'label': label,
-                })
-        logger.debug(f"Found {len(results)} {plural(len(results), 'result')} from {host}")
-    else:
-        logger.debug(f'No data returned from {host}')
-    if test:
-        return len(results)
+        if success:
+            data = feedparser.parse(result)
+        else:
+            logger.error(f'Error fetching data from {host}: {result}')
+            if not test:
+                BLOCKHANDLER.block_provider(basehost, result)
+            data = None
+
+        if data:
+            logger.debug(f'Parsing results from {url}')
+            provider = data['feed']['link']
+            if not dispname:
+                dispname = provider
+            logger.debug(f"rss {provider} returned {len(data.entries)} {plural(len(data.entries), 'result')}")
+            for post in data.entries:
+                title = ''
+                book_id = ''
+                author_name = ''
+                isbn = ''
+                if 'title' in post:
+                    title = post.title
+                if 'book_id' in post:
+                    book_id = post.book_id
+                if 'author_name' in post:
+                    author_name = post.author_name
+                if 'isbn' in post:
+                    isbn = post.isbn
+                if title and author_name:
+                    results.append({
+                        'rss_prov': provider,
+                        'rss_feed': feednr,
+                        'rss_title': title,
+                        'rss_author': author_name,
+                        'rss_bookid': book_id,
+                        'rss_isbn': isbn,
+                        'priority': priority,
+                        'dispname': dispname,
+                        'types': types,
+                        'label': label,
+                    })
+                    next_page = True
+        if test:
+            logger.debug(f"Test found {len(results)} {plural(len(results), 'result')} from {host}")
+            return len(results)
+
+        page += 1
+        if maxpage and page > maxpage:
+            logger.warning('Maximum results page reached, still more results available')
+            next_page = False
+
+    logger.debug(f"Found {len(results)} {plural(len(results), 'result')} from {host}")
     return results
 
 
@@ -1911,7 +1927,7 @@ def rss(host=None, feednr=None, priority=0, dispname=None, types='E', test=False
     result = ''
 
     url = str(host)
-    if not str(url)[:4] == "http" and not str(url)[:4] == "file":
+    if str(url)[:4] != "http" and str(url)[:4] != "file":
         url = f"http://{url}"
 
     if str(url)[:4] == "http":
@@ -1921,7 +1937,7 @@ def rss(host=None, feednr=None, priority=0, dispname=None, types='E', test=False
         file_path = urlparse(url).path
         # noinspection PyBroadException
         try:
-            with open(syspath(file_path), "r") as rss_provider:
+            with open(syspath(file_path)) as rss_provider:
                 success = True
                 result = rss_provider.read()
         except Exception:
@@ -1962,11 +1978,11 @@ def rss(host=None, feednr=None, priority=0, dispname=None, types='E', test=False
                         size = f['length']
                         torrent = f['href']
                         break
-                    elif 'x-nzb' in f['type']:
+                    if 'x-nzb' in f['type']:
                         size = f['length']
                         nzb = f['href']
                         break
-                    elif f['href'].startswith('magnet'):
+                    if f['href'].startswith('magnet'):
                         magnet = f['href']
                         if 'length' in f:
                             size = f['length']
@@ -1979,23 +1995,20 @@ def rss(host=None, feednr=None, priority=0, dispname=None, types='E', test=False
                 url = torrent
                 tortype = 'torrent'
 
-            if magnet:
-                if not url or (url and CONFIG.get_bool('PREFER_MAGNET')):
-                    url = magnet
-                    tortype = 'magnet'
+            if magnet and not url or (url and CONFIG.get_bool('PREFER_MAGNET')):
+                url = magnet
+                tortype = 'magnet'
 
             if nzb:  # prefer nzb over torrent/magnet
                 url = nzb
                 tortype = 'nzb'
 
-            if not url:
-                if 'link' in post:
-                    url = post.link
+            if not url and 'link' in post:
+                url = post.link
 
             tor_date = 'Fri, 01 Jan 1970 00:00:00 +0100'
-            if 'newznab_attr' in post:
-                if post.newznab_attr['name'] == 'usenetdate':
-                    tor_date = post.newznab_attr['value']
+            if 'newznab_attr' in post and post.newznab_attr['name'] == 'usenetdate':
+                tor_date = post.newznab_attr['value']
 
             if not size:
                 size = 1000
@@ -2034,7 +2047,7 @@ def cancel_search_type(search_type: str, error_msg: str, provider: ConfigDict, e
 
         if not match:
             errorlist = ['no such function', 'unknown parameter', 'unknown function', 'bad_gateway',
-                         'bad request', 'bad_request', 'incorrect parameter', 'does not support']
+                         'bad request', 'bad_request', 'incorrect parameter', 'does not support', 'validation failed']
 
             errormsg = make_unicode(error_msg).lower()
 
@@ -2054,17 +2067,16 @@ def cancel_search_type(search_type: str, error_msg: str, provider: ConfigDict, e
             if msg:
                 for providertype in ['NEWZNAB', 'TORZNAB']:
                     for prov in CONFIG.providers(providertype):
-                        if prov['HOST'] == provider['HOST']:
-                            if not prov['MANUAL']:
-                                logger.error(f"Disabled {msg}={prov[msg]} for {prov['DISPNAME']}")
-                                prov[msg] = ""
-                                # CONFIG.save_config_and_backup_old(section=prov['NAME'])
-                                return True
+                        if prov['HOST'] == provider['HOST'] and not prov['MANUAL']:
+                            logger.error(f"Disabled {msg}={prov[msg]} for {prov['DISPNAME']}")
+                            prov[msg] = ""
+                            # CONFIG.save_config_and_backup_old(section=prov['NAME'])
+                            return True
             logger.error(f"Unable to disable searchtype [{search_type}] for {provider['DISPNAME']}")
     return False
 
 
-def newznab_plus(book: Dict, provider: ConfigDict, search_type: str, search_mode=None, test=False):
+def newznab_plus(book: dict, provider: ConfigDict, search_type: str, search_mode=None, test=False):
     """
     Generic NewzNabplus query function
     takes in host+key+type and returns the result set regardless of who
@@ -2086,151 +2098,149 @@ def newznab_plus(book: Dict, provider: ConfigDict, search_type: str, search_mode
 
     if not params:
         return False, []
+    if str(host[:4]) != "http":
+        host = f"http://{host}"
+    if host[-1:] == '/':
+        host = host[:-1]
+    if host[-4:] == '/api':
+        url = f"{host}?{urlencode(params)}"
     else:
-        if not str(host[:4]) == "http":
-            host = f"http://{host}"
-        if host[-1:] == '/':
-            host = host[:-1]
-        if host[-4:] == '/api':
-            url = f"{host}?{urlencode(params)}"
-        else:
-            url = f"{host}/api?{urlencode(params)}"
+        url = f"{host}/api?{urlencode(params)}"
 
-        sterm = make_unicode(book['searchterm'])
+    sterm = make_unicode(book['searchterm'])
 
-        rootxml = None
-        logger.debug(f"URL = {url}")
-        result, success = fetch_url(url, raw=True)
+    rootxml = None
+    logger.debug(f"URL = {url}")
+    result, success = fetch_url(url, raw=True)
 
-        if test:
-            try:
-                result = result.decode('utf-8')
-            except UnicodeDecodeError:
-                result = result.decode('latin-1')
-            except AttributeError:
-                pass
+    if test:
+        try:
+            result = result.decode('utf-8')
+        except UnicodeDecodeError:
+            result = result.decode('latin-1')
+        except AttributeError:
+            pass
 
-            if result.startswith('<') and result.endswith('/>') and "error code" in result:
-                result = result[1:-2]
-                success = False
-            if not success:
-                logger.debug(result)
-                return success, result
-
-        if success:
-            try:
-                rootxml = ElementTree.fromstring(result)
-            except Exception as e:
-                logger.error(f'Error parsing data from {host}: {type(e).__name__} {str(e)}')
-                logger.debug(repr(result))
-                rootxml = None
-                success = False
-        else:
-            try:
-                result = result.decode('utf-8')
-            except UnicodeDecodeError:
-                result = result.decode('latin-1')
-            except AttributeError:
-                pass
-
-            if not result or result == "''":
-                result = "Got an empty response"
-            logger.error(f'Error reading data from {host}: {result}')
-
+        if result.startswith('<') and result.endswith('/>') and "error code" in result:
+            result = result[1:-2]
+            success = False
         if not success:
-            if '429' in result:
-                # too many requests...
-                BLOCKHANDLER.block_provider(provider['HOST'], "Too Many Requests", delay=30)
-            else:
-                # maybe the host doesn't support the search type
-                cancelled = cancel_search_type(search_type, result, provider)
-                if not cancelled:  # it was some other problem
-                    BLOCKHANDLER.block_provider(provider['HOST'], result)
+            logger.debug(result)
+            return success, result
 
-        if success and rootxml is not None:
-            # to debug because of api
-            logger.debug(f'Parsing results from <a href="{url}">{host}</a>')
-            if rootxml.tag == 'error':
-                # noinspection PyTypeChecker
-                errormsg = rootxml.get('description', default='unknown error')
-                errormsg = errormsg[:200]  # sometimes get huge error messages from jackett
-                errorcode = int(rootxml.get('code', default=900))  # 900 is "Unknown Error"
-                logger.error(f"{host} - {errormsg}")
-                # maybe the host doesn't support the search type
-                cancelled = cancel_search_type(search_type, errormsg, provider, errorcode)
-                if not cancelled:  # it was some other problem
-                    BLOCKHANDLER.block_provider(provider['HOST'], errormsg)
+    if success:
+        try:
+            rootxml = ElementTree.fromstring(result)
+        except Exception as e:
+            logger.error(f'Error parsing data from {host}: {type(e).__name__} {str(e)}')
+            logger.debug(repr(result))
+            rootxml = None
+            success = False
+    else:
+        try:
+            result = result.decode('utf-8')
+        except UnicodeDecodeError:
+            result = result.decode('latin-1')
+        except AttributeError:
+            pass
 
-                if search_type == 'book' and cancelled:
-                    return newznab_plus(book, provider, 'generalbook', search_mode, test)
-            else:
-                channel = rootxml.find('channel')
-                if channel:
-                    for item in channel:
-                        if 'apilimits' in str(item):
-                            limits = item
-                            apimax = limits.get('apimax')
-                            if apimax:
-                                provider.set_int('APILIMIT', int(apimax))
-                            apicurrent = limits.get('apicurrent')
-                            if apicurrent:
-                                provider.set_int('APICOUNT', int(apicurrent))
-                            logger.debug(
-                                f"{provider['DISPNAME']} used {provider['APICOUNT']} of {provider['APILIMIT']}")
-                            break
-                resultxml = rootxml.iter('item')
-                nzbcount = 0
-                maxage = CONFIG.get_int('USENET_RETENTION')
-                for nzb in resultxml:
-                    try:
-                        thisnzb = return_results_by_search_type(book, nzb, host, search_mode, provider.
-                                                                get_int('DLPRIORITY'))
-                        thisnzb['dispname'] = provider['DISPNAME']
-                        if search_type in ['book', 'shortbook', 'titlebook']:
-                            thisnzb['booksearch'] = provider['BOOKSEARCH']
+        if not result or result == "''":
+            result = "Got an empty response"
+        logger.error(f'Error reading data from {host}: {result}')
 
-                        if 'seeders' in thisnzb:
-                            if 'SEEDERS' not in provider:
-                                # might have provider in newznab instead of torznab slot?
-                                logger.warning(f"{provider['DISPNAME']} does not support seeders")
-                            else:
-                                # its torznab, check if minimum seeders relevant
-                                if check_int(thisnzb['seeders'], 0) >= check_int(provider['SEEDERS'], 0):
-                                    nzbcount += 1
-                                    results.append(thisnzb)
-                                else:
-                                    logger.debug(
-                                        f"Rejecting {thisnzb['nzbtitle']} has {thisnzb['seeders']} "
-                                        f"{plural(thisnzb['seeders'], 'seeder')}")
+    if not success:
+        if '429' in result:
+            # too many requests...
+            BLOCKHANDLER.block_provider(provider['HOST'], "Too Many Requests", delay=30)
+        else:
+            # maybe the host doesn't support the search type
+            cancelled = cancel_search_type(search_type, result, provider)
+            if not cancelled:  # it was some other problem
+                BLOCKHANDLER.block_provider(provider['HOST'], result)
+
+    if success and rootxml is not None:
+        # to debug because of api
+        logger.debug(f'Parsing results from <a href="{url}">{host}</a>')
+        if rootxml.tag == 'error':
+            # noinspection PyTypeChecker
+            errormsg = rootxml.get('description', default='unknown error')
+            errormsg = errormsg[:200]  # sometimes get huge error messages from jackett
+            errorcode = int(rootxml.get('code', default=900))  # 900 is "Unknown Error"
+            logger.error(f"{host} - {errormsg}")
+            # maybe the host doesn't support the search type
+            cancelled = cancel_search_type(search_type, errormsg, provider, errorcode)
+            if not cancelled:  # it was some other problem
+                BLOCKHANDLER.block_provider(provider['HOST'], errormsg)
+
+            if search_type == 'book' and cancelled:
+                return newznab_plus(book, provider, 'generalbook', search_mode, test)
+        else:
+            channel = rootxml.find('channel')
+            if channel:
+                for item in channel:
+                    if 'apilimits' in str(item):
+                        limits = item
+                        apimax = limits.get('apimax')
+                        if apimax:
+                            provider.set_int('APILIMIT', int(apimax))
+                        apicurrent = limits.get('apicurrent')
+                        if apicurrent:
+                            provider.set_int('APICOUNT', int(apicurrent))
+                        logger.debug(
+                            f"{provider['DISPNAME']} used {provider['APICOUNT']} of {provider['APILIMIT']}")
+                        break
+            resultxml = rootxml.iter('item')
+            nzbcount = 0
+            maxage = CONFIG.get_int('USENET_RETENTION')
+            for nzb in resultxml:
+                try:
+                    thisnzb = return_results_by_search_type(book, nzb, host, search_mode, provider.
+                                                            get_int('DLPRIORITY'))
+                    thisnzb['dispname'] = provider['DISPNAME']
+                    if search_type in ['book', 'shortbook', 'titlebook']:
+                        thisnzb['booksearch'] = provider['BOOKSEARCH']
+
+                    if 'seeders' in thisnzb:
+                        if 'SEEDERS' not in provider:
+                            # might have provider in newznab instead of torznab slot?
+                            logger.warning(f"{provider['DISPNAME']} does not support seeders")
                         else:
-                            # its newznab, check if too old
-                            if not maxage:
+                            # its torznab, check if minimum seeders relevant
+                            if check_int(thisnzb['seeders'], 0) >= check_int(provider['SEEDERS'], 0):
                                 nzbcount += 1
                                 results.append(thisnzb)
                             else:
-                                # example nzbdate format: Mon, 27 May 2013 02:12:09 +0200
-                                nzbdate = thisnzb['nzbdate']
-                                try:
-                                    parts = nzbdate.split(' ')
-                                    nzbage = age('%04d-%02d-%02d' % (int(parts[3]), month2num(parts[2]),
-                                                                     int(parts[1])))
-                                except Exception as e:
-                                    logger.warning(
-                                        f"Unable to get age from [{thisnzb['nzbdate']}] {type(e).__name__} {str(e)}")
-                                    nzbage = 0
-                                if nzbage <= maxage:
-                                    nzbcount += 1
-                                    results.append(thisnzb)
-                                else:
-                                    logger.debug(f"{thisnzb['nzbtitle']} is too old ({nzbage} {plural(nzbage, 'day')})")
+                                logger.debug(
+                                    f"Rejecting {thisnzb['nzbtitle']} has {thisnzb['seeders']} "
+                                    f"{plural(thisnzb['seeders'], 'seeder')}")
+                    else:
+                        # its newznab, check if too old
+                        if not maxage:
+                            nzbcount += 1
+                            results.append(thisnzb)
+                        else:
+                            # example nzbdate format: Mon, 27 May 2013 02:12:09 +0200
+                            nzbdate = thisnzb['nzbdate']
+                            try:
+                                parts = nzbdate.split(' ')
+                                nzbage = age(f'{int(parts[3]):04d}-{month2num(parts[2]):02d}-{int(parts[1]):02d}')
+                            except Exception as e:
+                                logger.warning(
+                                    f"Unable to get age from [{thisnzb['nzbdate']}] {type(e).__name__} {str(e)}")
+                                nzbage = 0
+                            if nzbage <= maxage:
+                                nzbcount += 1
+                                results.append(thisnzb)
+                            else:
+                                logger.debug(f"{thisnzb['nzbtitle']} is too old ({nzbage} {plural(nzbage, 'day')})")
 
-                    except IndexError:
-                        logger.debug(f'No results from {host} for {sterm}')
-                logger.debug(f'Found {nzbcount} results at {host} for: {sterm}')
-        else:
-            logger.debug(f'No data returned from {host} for {sterm}')
-        if test:
-            return len(results), host
+                except IndexError:
+                    logger.debug(f'No results from {host} for {sterm}')
+            logger.debug(f'Found {nzbcount} results at {host} for: {sterm}')
+    else:
+        logger.debug(f'No data returned from {host} for {sterm}')
+    if test:
+        return len(results), host
     return True, results
 
 
@@ -2244,22 +2254,22 @@ def return_search_structure(provider: ConfigDict, api_key, book, search_type, se
                 params = {
                     "t": provider['GENERALSEARCH'],
                     "apikey": api_key,
-                    "q": make_utf8bytes(f"@title {bookname} @authors {authorname}")[0],
+                    "q": (f"@title {bookname} @authors {authorname}").encode(),
                     "cat": provider['BOOKCAT']
                 }
             else:
                 params = {
                     "t": provider['BOOKSEARCH'],
                     "apikey": api_key,
-                    "title": make_utf8bytes(unaccented(bookname))[0],
-                    "author": make_utf8bytes(authorname)[0],
+                    "title": bookname.encode("utf-8"),
+                    "author": authorname.encode("utf-8"),
                     "cat": provider['BOOKCAT']
                 }
         elif provider['GENERALSEARCH'] and provider['BOOKCAT']:  # if not, try general search
             params = {
                 "t": provider['GENERALSEARCH'],
                 "apikey": api_key,
-                "q": make_utf8bytes(f"{authorname} {bookname}")[0],
+                "q": (f"{authorname} {bookname}").encode(),
                 "cat": provider['BOOKCAT']
             }
     elif search_type in ["audio", "shortaudio"]:
@@ -2268,15 +2278,15 @@ def return_search_structure(provider: ConfigDict, api_key, book, search_type, se
             params = {
                 "t": provider['AUDIOSEARCH'],
                 "apikey": api_key,
-                "title": make_utf8bytes(bookname)[0],
-                "author": make_utf8bytes(authorname)[0],
+                "title": bookname.encode("utf-8"),
+                "author": authorname.encode("utf-8"),
                 "cat": provider['AUDIOCAT']
             }
         elif provider['GENERALSEARCH'] and provider['AUDIOCAT']:  # if not, try general search
             params = {
                 "t": provider['GENERALSEARCH'],
                 "apikey": api_key,
-                "q": make_utf8bytes(f"{authorname} {bookname}")[0],
+                "q": (f"{authorname} {bookname}").encode(),
                 "cat": provider['AUDIOCAT']
             }
     elif search_type == "mag":
@@ -2285,14 +2295,14 @@ def return_search_structure(provider: ConfigDict, api_key, book, search_type, se
                 "t": provider['MAGSEARCH'],
                 "apikey": api_key,
                 "cat": provider['MAGCAT'],
-                "q": make_utf8bytes(book['searchterm'].replace(':', ''))[0],
+                "q": book['searchterm'].replace(':', '').encode("utf-8"),
             }
         elif provider['GENERALSEARCH'] and provider['MAGCAT']:
             params = {
                 "t": provider['GENERALSEARCH'],
                 "apikey": api_key,
                 "cat": provider['MAGCAT'],
-                "q": make_utf8bytes(book['searchterm'].replace(':', ''))[0],
+                "q": book['searchterm'].replace(':', '').encode("utf-8"),
             }
     else:
         if provider['GENERALSEARCH']:
@@ -2308,7 +2318,7 @@ def return_search_structure(provider: ConfigDict, api_key, book, search_type, se
             params = {
                 "t": provider['GENERALSEARCH'],
                 "apikey": api_key,
-                "q": make_utf8bytes(searchterm)[0],
+                "q": searchterm.encode("utf-8"),
             }
     if params:
         if provider['EXTENDED']:
@@ -2331,7 +2341,7 @@ def return_search_structure(provider: ConfigDict, api_key, book, search_type, se
     return params
 
 
-def return_results_by_search_type(book: Dict, nzbdetails, host=None, search_mode=None, priority=0) -> Dict:
+def return_results_by_search_type(book: dict, nzbdetails, host=None, search_mode=None, priority=0) -> dict:
     """
     # searchType has multiple query params for t=, which return different results sets.
     # books have a dedicated check, so will use that.
@@ -2478,9 +2488,8 @@ def return_results_by_search_type(book: Dict, nzbdetails, host=None, search_mode
     }
     if seeders is not None:  # only if torznab
         result_fields['seeders'] = check_int(seeders, 0)
-    if comments:  # torznab may have a provider page link here
-        if comments.startswith('http'):
-            result_fields['prov_page'] = comments
+    if comments and comments.startswith('http'):  # torznab may have a provider page link here
+        result_fields['prov_page'] = comments
 
     logger.debug(f"Result fields from NZB are {str(result_fields)}")
     return result_fields

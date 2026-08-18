@@ -1,9 +1,9 @@
 import logging
+from http.client import HTTPSConnection
+from urllib.parse import urlencode
 
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
-from urllib.parse import urlencode
-from http.client import HTTPSConnection
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 
 class ProwlNotifier:
@@ -50,12 +50,11 @@ class ProwlNotifier:
             if request_status == 200:
                 logger.info('Prowl notifications sent.')
                 return True
-            elif request_status == 401:
+            if request_status == 401:
                 logger.info(f'Prowl auth failed: {response.reason}')
                 return False
-            else:
-                logger.info('Prowl notification failed.')
-                return False
+            logger.info('Prowl notification failed.')
+            return False
 
         except Exception as e:
             logger.warning(f'Error sending to Prowl: {e}')
@@ -68,13 +67,16 @@ class ProwlNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG.get_bool('PROWL_ONSNATCH'):
             if fail:
-                self._send_prowl(prowl_api=None, prowl_priority=None, event=notifyStrings[NOTIFY_FAIL], message=title)
+                self._send_prowl(prowl_api=None, prowl_priority=None, event=notify_strings[NOTIFY_FAIL],
+                                 message=title)
             else:
-                self._send_prowl(prowl_api=None, prowl_priority=None, event=notifyStrings[NOTIFY_SNATCH], message=title)
+                self._send_prowl(prowl_api=None, prowl_priority=None, event=notify_strings[NOTIFY_SNATCH],
+                                 message=title)
 
     def notify_download(self, title):
         if CONFIG.get_bool('PROWL_ONDOWNLOAD'):
-            self._send_prowl(prowl_api=None, prowl_priority=None, event=notifyStrings[NOTIFY_DOWNLOAD], message=title)
+            self._send_prowl(prowl_api=None, prowl_priority=None, event=notify_strings[NOTIFY_DOWNLOAD],
+                             message=title)
 
     # noinspection PyUnusedLocal
     def test_notify(self, title="Test"):

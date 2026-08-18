@@ -12,6 +12,7 @@
         <a href="force_search?source=magazines" class="button btn btn-sm btn-primary"><i class="fa fa-search"></i> Search</a>
         <a href="force_process?source=magazines" class="button btn btn-sm btn-primary"><i class="fa fa-cogs"></i> Run Post-Processor</a>
         <a href="magazine_scan" class="button btn btn-sm btn-primary"><i class="fa fa-bolt"></i> Library Scan</a>
+        <a href="clean_magazine_library" class="button btn btn-sm btn-primary"><i class="fa fa-broom"></i> Library Clean</a>
         <a href="past_issues?which_status=Skipped" class="button btn btn-sm btn-primary"><i class="fa fa-calendar-alt"></i> Past Issues</a>
         %endif
         <a href="mag_wall" class="button btn btn-sm btn-primary"><i class="fa fa-calendar-check"></i> Recent Issues</a>
@@ -69,6 +70,7 @@
             <option value="Delete">Delete</option>
             <option value="tag">Tag issues</option>
             <option value="Scan">Scan issues</option>
+            <option value="Search">Search issues</option>
             %endif
             %if CONFIG['USER_ACCOUNTS']:
             <option value="Subscribe">Subscribe</option>
@@ -125,12 +127,14 @@
         var selected = [];
         var intjob = 0;
         $('#magfilter').val(getUrlVars()['mag_filter']);
-
+        $('#w_width').val(window.innerWidth);
         var oTable = $('#book_table').DataTable(
             {
                 "dom": "<'row'<'col-xs-6'l><'col-xs-6'f>><'row'<'col-sm-12'tr>><'row'<'col-sm-5'i><'col-sm-7'p>>",
                 "bAutoWidth": false,
                 "stateSave": true,
+                "stateSaveParams": function (settings, data) { data.perm = ${perm}; },
+                "stateLoadParams": function (settings, data) { return data.perm === ${perm}; },
                 "order": [[ 2, 'asc']],
                 "rowId": 0,
                 "columnDefs":
@@ -144,7 +148,7 @@
                     { targets: [1],
                         'class': 'text-center',
                         'render': function(data, type, row) {
-                        return '<a href="' + data + '" target="_blank" rel="noreferrer"><img src="' + data + '" alt="Cover" class="bookcover-sm img-responsive"></a>';} },
+                        return '<a href="' + row[9] + '" target="_blank" rel="noreferrer"><img src="' + data + '" alt="Cover" class="bookcover-sm img-responsive"></a>';} },
                     { targets: [2],
                         'class': 'text-center',
                         'render': function(data, type, row) {
@@ -254,7 +258,6 @@
                 var column = oTable.column( $(this).attr('data-column') );
                 column.visible( ! column.visible() );
             } );
-        $('#w_width').val(window.innerWidth);
     });
 
     function validateForm() {
@@ -380,4 +383,3 @@
     }
   </script>
 </%def>
-

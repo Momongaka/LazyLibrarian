@@ -12,7 +12,7 @@ from shutil import rmtree
 from typing import List
 
 import lazylibrarian
-from lazylibrarian import dbupgrade
+from lazylibrarian.dbupgrade import upgrade_needed, db_upgrade
 from lazylibrarian.configenums import Access
 from lazylibrarian.filesystem import DIRS, path_isdir
 from lazylibrarian.startup import StartupLazyLibrarian
@@ -36,7 +36,7 @@ class LLTestCase(unittest.TestCase):
 
     @classmethod
     def clearGlobals(cls):
-        # Clear configuration variables to ahve a clean slate for any further test runs
+        # Clear configuration variables to have a clean slate for any further test runs
         lazylibrarian.DAEMON = False
         lazylibrarian.SIGNAL = None
         lazylibrarian.SYS_ENCODING = ''
@@ -60,9 +60,9 @@ class LLTestCase(unittest.TestCase):
 
     @classmethod
     def prepareTestDB(cls):
-        curr_ver = dbupgrade.upgrade_needed()
+        curr_ver = upgrade_needed()
         if curr_ver:
-            dbupgrade.db_upgrade(curr_ver)
+            db_upgrade(curr_ver)
 
     @classmethod
     def removetestDB(cls):
@@ -176,7 +176,6 @@ class LLTestCaseWithStartup(LLTestCase):
                 rmtree(CONFIG['LOGDIR'], ignore_errors=False)
             except Exception as e:
                 print(str(e))
-
 
 
 def false_method() -> bool:

@@ -141,8 +141,8 @@
     </div>
     %if perm&lazylibrarian.perm_status or CONFIG['USER_ACCOUNTS']:
     <div class="form-group">
-      <label for="mark_books" class="control-label">Mark selected ${library}s as</label>
-      <select id="mark_books" class="mark_books form-control input-sm" name="action">
+      <label for="mark_as" class="control-label">Mark selected ${library}s as</label>
+      <select id="mark_as" class="mark_as form-control input-sm" name="action">
         %if whichStatus != 'Wanted':
           %if CONFIG.get_int('EBOOK_TAB') > 0:
             <option value="WantEbook">eBook Wanted</option>
@@ -518,6 +518,8 @@
                 "dom": "<'row'<'col-xs-6'l><'col-xs-6'f>><'row'<'col-sm-12'tr>><'row'<'col-sm-5'i><'col-sm-7'p>>",
                 "bAutoWidth": false,
                 "stateSave": true,
+                "stateSaveParams": function (settings, data) { data.perm = ${perm}; },
+                "stateLoadParams": function (settings, data) { return data.perm === ${perm}; },
                 "order": [[ 2, 'asc' ]],
                 "rowId": 0,
                 "columnDefs":[
@@ -627,28 +629,11 @@
         } );
     });
 
-    function bookinfo(bookid) {
-        $.get('bookdesc', {'bookid': bookid},
-        function(data) {
-            var $textAndPic = $('<div></div>');
-            $textAndPic.append('<img src="./cache/book/' + bookid + '.jpg" class="box-shadow img-responsive" />');
-            var res = data.split('^');
-            var title = res[0]
-            var desc = res[1]
-            $textAndPic.append('<br>' + desc + ' <br />');
-            bootbox.dialog({
-                size: "large",
-                title: title,
-                message: $textAndPic,
-                buttons: {
-                   primary: {
-                        label: "Close",
-                        className: 'btn-primary'
-                    }
-                }
-            });
-        });
-    };
+    // bookinfo() is defined globally in base.html - not redefined here. This copy
+    // parsed bookdesc()'s response as 2 parts (title/desc); the actual response is
+    // 3 parts (img/title/desc), so this copy was already broken - dead code, since
+    // base.html declares its own version later in the DOM and JS redeclaration
+    // means that's the one that actually runs on every page. See base.html.
 
     function submitFormAjax() {
         var form = document.getElementById("mark_books");
@@ -699,7 +684,7 @@
                         label: 'OK',
                         className: 'btn-primary',
                         callback: function() {
-                            window.location.reload(data.redirect);
+                            window.location = data.redirect
                         }
                     }
                 }

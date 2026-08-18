@@ -15,12 +15,12 @@
 #   Hold a few basic routines used widely, until they can be moved out
 
 
+import logging
 import os
 import sys
 import threading
-import logging
 
-from lazylibrarian import config2
+# from lazylibrarian import config2
 from lazylibrarian.filesystem import syspath
 
 # Transient globals NOT stored in config
@@ -38,6 +38,7 @@ STOPTHREADS = False  # Part of the scheduling state machine. Should move to a sc
 
 # These are globals
 UPDATE_MSG = ''
+INFOSOURCES = {}
 TIMERS = {
             'NO_TOR_MSG': 0,
             'NO_RSS_MSG': 0,
@@ -60,7 +61,6 @@ TIMERS = {
         }
 IGNORED_AUTHORS = 0
 PRIMARY_AUTHORS = 1
-SCAN_BOOKS = 0
 CACHE_HIT = 0
 CACHE_MISS = 0
 IRC_CACHE_EXPIRY = 2 * 3600
@@ -184,7 +184,7 @@ def daemonize():
         if pid != 0:
             sys.exit(0)
     except OSError as e:
-        raise RuntimeError(f"1st fork failed: {e.strerror} [{e.errno}]")
+        raise RuntimeError(f"1st fork failed: {e.strerror} [{e.errno}]") from e
 
     os.setsid()  # @UndefinedVariable - only available in UNIX
 
@@ -198,18 +198,15 @@ def daemonize():
         if pid != 0:
             sys.exit(0)
     except OSError as e:
-        raise RuntimeError(f"2nd fork failed: {e.strerror} [{e.errno}]")
+        raise RuntimeError(f"2nd fork failed: {e.strerror} [{e.errno}]") from e
 
-    dev_null = open('/dev/null', 'r')
-    os.dup2(dev_null.fileno(), sys.stdin.fileno())
+    with open('/dev/null') as dev_null:
+        os.dup2(dev_null.fileno(), sys.stdin.fileno())
 
-    si = open('/dev/null', "r")
-    so = open('/dev/null', "a+")
-    se = open('/dev/null', "a+")
-
-    os.dup2(si.fileno(), sys.stdin.fileno())
-    os.dup2(so.fileno(), sys.stdout.fileno())
-    os.dup2(se.fileno(), sys.stderr.fileno())
+    with open('/dev/null') as si, open('/dev/null', "a+") as so, open('/dev/null', "a+") as se:
+        os.dup2(si.fileno(), sys.stdin.fileno())
+        os.dup2(so.fileno(), sys.stdout.fileno())
+        os.dup2(se.fileno(), sys.stderr.fileno())
 
     pid = os.getpid()
     logger.debug(f"Daemonized to PID {pid}")
@@ -218,4 +215,3 @@ def daemonize():
         logger.debug(f"Writing PID {pid} to {PIDFILE}")
         with open(syspath(PIDFILE), 'w') as pidfile:
             pidfile.write(f"{pid}\n")
-

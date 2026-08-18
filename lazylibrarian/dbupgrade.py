@@ -10,7 +10,6 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import with_statement
 
 import datetime
 import logging
@@ -20,19 +19,16 @@ import time
 import traceback
 import uuid
 from shutil import copyfile
-import threading
 
 import lazylibrarian
 from lazylibrarian import database
 from lazylibrarian.bookwork import set_genres
-from lazylibrarian.multiauth import get_authors_from_book_files
-from lazylibrarian.common import path_exists
-from lazylibrarian.common import pwd_generator
+from lazylibrarian.common import path_exists, pwd_generator
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, syspath, setperm
-from lazylibrarian.formatter import plural, md5_utf8, get_list, check_int
+from lazylibrarian.filesystem import DIRS, setperm, splitext, syspath
+from lazylibrarian.formatter import check_int, get_list, md5_utf8, plural
 from lazylibrarian.importer import update_totals
-from lazylibrarian.scheduling import restart_jobs, SchedulerCommand
+from lazylibrarian.scheduling import SchedulerCommand, restart_jobs
 
 # database version history:
 # 0 original version or new empty database
@@ -127,14 +123,17 @@ from lazylibrarian.scheduling import restart_jobs, SchedulerCommand
 # 86 add language to magazine table
 # 87 add hc_token to users table
 # 88 add bookauthors table
-# 89 add audible ID to books
-# 90 add audible ID to authors
-# 91 add audible ID to series
-# 92 add asin to books
-# 93 add asin to authors
+# 89 add dnb_id to book table
+# 90 add Origin to wanted table
+# 91 add Category to wanted table
+# 92 add ran_id to author and books table
+# 93 add audible ID to books
+# 94 add audible ID to authors
+# 95 add audible ID to series
+# 96 add asin to books
+# 97 add asin to authors
 
-
-db_current_version = 93
+db_current_version = 97
 
 
 def upgrade_needed():
@@ -192,7 +191,9 @@ def db_upgrade(current_version: int, restartjobs: bool = False):
                     logger.debug(f'Database integrity check: {result}')
                 else:
                     logger.error(f'Database integrity check: {result}')
-                    # should probably abort now if result is not "ok"
+                    logger.error('Aborting database upgrade on corrupt database')
+                    db.close()
+                    return
 
             if db_version < current_version:
                 if db_version:
@@ -220,28 +221,28 @@ def db_upgrade(current_version: int, restartjobs: bool = False):
                               'UnignoredBooks INTEGER DEFAULT 0, Manual TEXT, GRfollow TEXT, ' +
                               'LastBookID TEXT, Updated INTEGER DEFAULT 0, Reason TEXT, About TEXT, AKA TEXT)')
                     db.action(
-                        f"CREATE TABLE wanted (BookID TEXT, NZBurl TEXT, NZBtitle TEXT, NZBdate TEXT, NZBprov TEXT, "
-                        f"Status TEXT, NZBsize TEXT, AuxInfo TEXT, NZBmode TEXT, Source TEXT, DownloadID TEXT, "
-                        f"DLResult TEXT)")
+                        "CREATE TABLE wanted (BookID TEXT, NZBurl TEXT, NZBtitle TEXT, NZBdate TEXT, NZBprov TEXT, "
+                        "Status TEXT, NZBsize TEXT, AuxInfo TEXT, NZBmode TEXT, Source TEXT, DownloadID TEXT, "
+                        "DLResult TEXT)")
                     db.action(
-                        f"CREATE TABLE magazines (Title TEXT UNIQUE, Regex TEXT, Status TEXT, MagazineAdded TEXT, "
-                        f"LastAcquired TEXT, IssueDate TEXT, IssueStatus TEXT, Reject TEXT, LatestCover TEXT, "
-                        f"DateType TEXT, CoverPage INTEGER DEFAULT 1)")
+                        "CREATE TABLE magazines (Title TEXT UNIQUE, Regex TEXT, Status TEXT, MagazineAdded TEXT, "
+                        "LastAcquired TEXT, IssueDate TEXT, IssueStatus TEXT, Reject TEXT, LatestCover TEXT, "
+                        "DateType TEXT, CoverPage INTEGER DEFAULT 1)")
                     db.action('CREATE TABLE languages (isbn TEXT, lang TEXT)')
                     db.action(
-                        f"CREATE TABLE stats (authorname text, GR_book_hits int, GR_lang_hits int, LT_lang_hits int, "
-                        f"GB_lang_change, cache_hits int, bad_lang int, bad_char int, uncached int, duplicates int)")
+                        "CREATE TABLE stats (authorname text, GR_book_hits int, GR_lang_hits int, LT_lang_hits int, "
+                        "GB_lang_change, cache_hits int, bad_lang int, bad_char int, uncached int, duplicates int)")
                     db.action(
-                        f"CREATE TABLE series (SeriesID INTEGER UNIQUE, SeriesName TEXT, Status TEXT,"
-                        f" Have INTEGER DEFAULT 0, Total INTEGER DEFAULT 0, Updated INTEGER DEFAULT 0, Reason TEXT)")
+                        "CREATE TABLE series (SeriesID INTEGER UNIQUE, SeriesName TEXT, Status TEXT,"
+                        " Have INTEGER DEFAULT 0, Total INTEGER DEFAULT 0, Updated INTEGER DEFAULT 0, Reason TEXT)")
                     db.action('CREATE TABLE downloads (Count INTEGER DEFAULT 0, Provider TEXT)')
                     db.action(
-                        f"CREATE TABLE users (UserID TEXT UNIQUE, UserName TEXT UNIQUE, Password TEXT, Email TEXT, "
-                        f"Name TEXT, Perms INTEGER DEFAULT 0, HaveRead TEXT, ToRead TEXT, CalibreRead TEXT, "
-                        f"CalibreToRead TEXT, BookType TEXT, SendTo TEXT, Last_Login TEXT, "
-                        f"Login_Count INTEGER DEFAULT 0)")
+                        "CREATE TABLE users (UserID TEXT UNIQUE, UserName TEXT UNIQUE, Password TEXT, Email TEXT, "
+                        "Name TEXT, Perms INTEGER DEFAULT 0, HaveRead TEXT, ToRead TEXT, CalibreRead TEXT, "
+                        "CalibreToRead TEXT, BookType TEXT, SendTo TEXT, Last_Login TEXT, "
+                        "Login_Count INTEGER DEFAULT 0)")
                     db.action('CREATE TABLE isbn (Words TEXT, ISBN TEXT)')
-                    db.action(f"CREATE TABLE genres (GenreID INTEGER PRIMARY KEY AUTOINCREMENT, GenreName TEXT UNIQUE)")
+                    db.action("CREATE TABLE genres (GenreID INTEGER PRIMARY KEY AUTOINCREMENT, GenreName TEXT UNIQUE)")
                     db.action('CREATE TABLE comics (ComicID TEXT UNIQUE, Title TEXT, Status TEXT, ' +
                               'Added TEXT, LastAcquired TEXT, Updated TEXT, LatestIssue TEXT, IssueStatus TEXT, ' +
                               'LatestCover TEXT, SearchTerm TEXT, Start TEXT, First INTEGER, Last INTEGER, ' +
@@ -258,30 +259,30 @@ def db_upgrade(current_version: int, restartjobs: bool = False):
                               'ScanResult TEXT, OriginalPubDate TEXT, Requester TEXT, AudioRequester TEXT, ' +
                               'LT_WorkID TEXT, Narrator TEXT)')
                     db.action(
-                        f"CREATE TABLE issues (Title TEXT REFERENCES magazines (Title) ON DELETE CASCADE, "
-                        f"IssueID TEXT UNIQUE, IssueAcquired TEXT, IssueDate TEXT, IssueFile TEXT, Cover TEXT)")
+                        "CREATE TABLE issues (Title TEXT REFERENCES magazines (Title) ON DELETE CASCADE, "
+                        "IssueID TEXT UNIQUE, IssueAcquired TEXT, IssueDate TEXT, IssueFile TEXT, Cover TEXT)")
                     db.action(
-                        f"CREATE TABLE member (SeriesID INTEGER REFERENCES series (SeriesID) ON DELETE CASCADE, "
-                        f"BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, WorkID TEXT, SeriesNum TEXT)")
+                        "CREATE TABLE member (SeriesID INTEGER REFERENCES series (SeriesID) ON DELETE CASCADE, "
+                        "BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, WorkID TEXT, SeriesNum TEXT)")
                     db.action(
-                        f"CREATE TABLE seriesauthors (SeriesID INTEGER, AuthorID TEXT REFERENCES authors (AuthorID) "
-                        f"ON DELETE CASCADE, UNIQUE (SeriesID,AuthorID))")
+                        "CREATE TABLE seriesauthors (SeriesID INTEGER, AuthorID TEXT REFERENCES authors (AuthorID) "
+                        "ON DELETE CASCADE, UNIQUE (SeriesID,AuthorID))")
                     db.action(
-                        f"CREATE TABLE sync (UserID TEXT REFERENCES users (UserID) ON DELETE CASCADE, Label TEXT, "
-                        f"Date TEXT, SyncList TEXT)")
+                        "CREATE TABLE sync (UserID TEXT REFERENCES users (UserID) ON DELETE CASCADE, Label TEXT, "
+                        "Date TEXT, SyncList TEXT)")
                     db.action(
-                        f"CREATE TABLE failedsearch (BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, "
-                        f"Library TEXT, Time TEXT, Interval INTEGER DEFAULT 0, Count INTEGER DEFAULT 0)")
+                        "CREATE TABLE failedsearch (BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, "
+                        "Library TEXT, Time TEXT, Interval INTEGER DEFAULT 0, Count INTEGER DEFAULT 0)")
                     db.action(
-                        f"CREATE TABLE genrebooks (GenreID INTEGER REFERENCES genres (GenreID) ON DELETE CASCADE, "
-                        f"BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, UNIQUE (GenreID,BookID))")
+                        "CREATE TABLE genrebooks (GenreID INTEGER REFERENCES genres (GenreID) ON DELETE CASCADE, "
+                        "BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, UNIQUE (GenreID,BookID))")
                     db.action(
-                        f"CREATE TABLE comicissues (ComicID TEXT REFERENCES comics (ComicID) ON DELETE CASCADE,"
-                        f" IssueID TEXT, IssueAcquired TEXT, IssueFile TEXT, Cover TEXT, Description TEXT, "
-                        f"Link TEXT, Contributors TEXT, UNIQUE (ComicID, IssueID))")
+                        "CREATE TABLE comicissues (ComicID TEXT REFERENCES comics (ComicID) ON DELETE CASCADE,"
+                        " IssueID TEXT, IssueAcquired TEXT, IssueFile TEXT, Cover TEXT, Description TEXT, "
+                        "Link TEXT, Contributors TEXT, UNIQUE (ComicID, IssueID))")
                     db.action(
-                        f"CREATE TABLE sent_file (WhenSent TEXT, UserID TEXT REFERENCES users (UserID) ON "
-                        f"DELETE CASCADE, Addr TEXT, FileName TEXT)")
+                        "CREATE TABLE sent_file (WhenSent TEXT, UserID TEXT REFERENCES users (UserID) ON "
+                        "DELETE CASCADE, Addr TEXT, FileName TEXT)")
 
                     # pastissues table has same layout as wanted table, code below is to save typos if columns change
                     res = db.match("SELECT sql FROM sqlite_master WHERE type='table' AND name='wanted'")
@@ -341,7 +342,7 @@ def db_upgrade(current_version: int, restartjobs: bool = False):
 
 def check_db(upgradelog=None):
     logger = logging.getLogger(__name__)
-    loggermatching = logging.getLogger('special.matching')
+    matchinglogger = logging.getLogger('special.matching')
     cnt = 0
     closefile = False
     db = database.DBConnection()
@@ -384,6 +385,8 @@ def check_db(upgradelog=None):
                 source = 'hc_id'
             elif info == 'Audible':
                 source = 'au_id'
+            elif info == 'RanobeDB':
+                source = 'ran_id'
             else:
                 source = ''
             if source:
@@ -397,9 +400,10 @@ def check_db(upgradelog=None):
                         f"Information source is {info} but {miss[0]} active authors "
                         f"(from {tot[0]}) do not have {info} ID")
 
-            # correct any invalid/unpadded dates
+            # correct any invalid/unpadded dates, longest we expect is yyyy-mm-dd but could just be yyyy
             lazylibrarian.UPDATE_MSG = 'Checking dates'
-            cmd = "SELECT BookID,BookDate from books WHERE BookDate LIKE '%-_-%' or BookDate LIKE '%-_'"
+            cmd = ("SELECT BookID,BookDate from books WHERE BookDate LIKE '%-_-%' or BookDate LIKE '%-_'"
+                   " or length(BookDate) > 10")
             res = db.select(cmd)
             tot = len(res)
             if tot:
@@ -412,13 +416,53 @@ def check_db(upgradelog=None):
                         mn = check_int(parts[1], 0)
                         dy = check_int(parts[2], 0)
                         if mn and dy:
-                            bookdate = "%s-%02d-%02d" % (parts[0], mn, dy)
+                            bookdate = f"{parts[0]}-{mn:02d}-{dy:02d}"
                             db.action("UPDATE books SET BookDate=? WHERE BookID=?", (bookdate, item['BookID']))
                         else:
                             logger.warning(f"Invalid Month/Day ({item['BookDate']}) for {item['BookID']}")
+                            db.action("UPDATE books SET BookDate='0000' WHERE BookID=?", (item['BookID'], ))
                     else:
                         logger.warning(f"Invalid BookDate ({item['BookDate']}) for {item['BookID']}")
-                        db.action("UPDATE books SET BookDate=? WHERE BookID=?", ("0000", item['BookID']))
+                        db.action("UPDATE books SET BookDate='0000' WHERE BookID=?", (item['BookID'], ))
+
+            cmd = ("SELECT AuthorID,LastDate from authors WHERE LastDate LIKE '%-_-%' or LastDate LIKE '%-_'"
+                   " or length(LastDate) > 10")
+            res = db.select(cmd)
+            tot = len(res)
+            if tot:
+                cnt += tot
+                msg = f"Updating {tot} {plural(tot, 'author')} with invalid/unpadded lastdate"
+                logger.warning(msg)
+                for item in res:
+                    parts = item['LastDate'].split('-')
+                    if len(parts) == 3:
+                        mn = check_int(parts[1], 0)
+                        dy = check_int(parts[2], 0)
+                        if mn and dy:
+                            lastdate = f"{parts[0]}-{mn:02d}-{dy:02d}"
+                            db.action("UPDATE authors SET LastDate=? WHERE AuthorID=?", (lastdate, item['AuthorID']))
+                        else:
+                            logger.warning(f"Invalid Month/Day ({item['LastDate']}) for {item['AuthorID']}")
+                            db.action("UPDATE authors SET LastDate='0000' WHERE AuthorID=?", (item['AuthorID'], ))
+                    else:
+                        logger.warning(f"Invalid LastDate ({item['LastDate']}) for {item['AuthorID']}")
+                        db.action("UPDATE authors SET LastDate='0000' WHERE AuthorID=?", (item['AuthorID'], ))
+
+            # update any null author reason entries
+            res = db.match("SELECT count(*) as counter from authors WHERE reason is null")
+            tot = res['counter']
+            if tot:
+                cnt += tot
+                logger.warning(f"Found {tot} authors with null reason")
+                db.action("UPDATE authors SET reason='Unknown' WHERE reason is null")
+
+            # delete any null wanted entries
+            res = db.match("SELECT count(*) as counter from wanted WHERE BookID is null")
+            tot = res['counter']
+            if tot:
+                cnt += tot
+                logger.warning(f"Found {tot} wanted items marked null")
+                db.action("DELETE from wanted WHERE BookID is null or AuxInfo is null")
 
             # update any series "Skipped" to series "Paused"
             res = db.match("SELECT count(*) as counter from series WHERE Status='Skipped'")
@@ -433,6 +477,8 @@ def check_db(upgradelog=None):
                 res = db.select(cmd)
                 if len(res):
                     logger.debug(f"Deleting {len(res)} single-book series from database")
+                    for item in res:
+                        logger.warning(f"Removing single book series {item['SeriesID']}:{item['SeriesName']}")
                     db.action("DELETE from series where total=1")
 
             # Extract any librarything workids from workpage url
@@ -560,16 +606,24 @@ def check_db(upgradelog=None):
                 logger.warning(msg)
                 db.action("DELETE from magazines WHERE Title IS NULL or Title = ''")
 
+            # remove books with no title
+            lazylibrarian.UPDATE_MSG = 'Removing books with no title'
+            mags = db.select("SELECT BookName FROM books WHERE BookName IS NULL or BookName = ''")
+            if mags:
+                cnt += len(mags)
+                msg = f"Removing {len(mags)} {plural(len(mags), 'book')} with no title"
+                logger.warning(msg)
+                db.action("DELETE from books WHERE BookName IS NULL or BookName = ''")
+
             # remove authors with no books
-            lazylibrarian.UPDATE_MSG = 'Removing authors with no books'
+            lazylibrarian.UPDATE_MSG = 'Removing authors with no listed books'
             authors = db.select('SELECT AuthorID FROM authors WHERE TotalBooks=0')
             if authors:
-                for author in authors:  # check we haven't mis-counted
-                    update_totals(author['authorid'])
+                # update_all_totals()  # shouldn't be needed now as update_all_totals task runs periodically
                 authors = db.select('SELECT AuthorID FROM authors WHERE TotalBooks=0')
                 if authors:
                     cnt += len(authors)
-                    msg = f"Removing {len(authors)} {plural(len(authors), 'author')} with no books"
+                    msg = f"Removing {len(authors)} {plural(len(authors), 'author')} with no listed books"
                     logger.warning(msg)
                     for author in authors:
                         db.action("DELETE from authors WHERE AuthorID=?", (author['AuthorID'],))
@@ -718,13 +772,13 @@ def check_db(upgradelog=None):
             authors = db.select(cmd)
             if authors:
                 msg = (f"Found {len(authors)} {plural(len(authors), 'author')} "
-                       f"with no books in the library or marked wanted")
+                       f"with no existing or wanted books")
                 logger.warning(msg)
                 # Don't auto delete them, may be in a reading list?
                 for author in authors:
                     name = db.match("SELECT authorname,status,reason from authors where authorid=?",
                                     (author[0],))
-                    loggermatching.warning(f"{name[0]} ({name[1]}) has no active books ({name[2]})")
+                    matchinglogger.warning(f"{name[0]} ({name[1]}) has no active books ({name[2]})")
                 # db.action('DELETE from authors where authorid=?', (author[0],))
 
             # update empty bookdate to "0000"
@@ -735,6 +789,21 @@ def check_db(upgradelog=None):
                 msg = f"Found {len(books)} {plural(len(books), 'book')} with no bookdate"
                 logger.warning(msg)
                 db.action("UPDATE books SET BookDate='0000' WHERE BookDate is NULL or BookDate=''")
+
+            # update Requester and AudioRequester from NULL to ''
+            lazylibrarian.UPDATE_MSG = 'Updating Requester/AudioRequester'
+            books = db.select("SELECT * FROM books WHERE Requester is NULL")
+            if books:
+                cnt += len(books)
+                msg = f"Found {len(books)} {plural(len(books), 'book')} with Requester as NULL"
+                logger.warning(msg)
+                db.action("UPDATE books SET Requester='' WHERE Requester is NULL")
+            books = db.select("SELECT * FROM books WHERE AudioRequester is NULL")
+            if books:
+                cnt += len(books)
+                msg = f"Found {len(books)} {plural(len(books), 'book')} with AudioRequester as NULL"
+                logger.warning(msg)
+                db.action("UPDATE books SET AudioRequester='' WHERE AudioRequester is NULL")
 
             # delete any duplicate entries in member table and add a unique constraint if not already done
             cmd = "SELECT * from sqlite_master WHERE type= 'index' and tbl_name = 'member' and name = 'unq'"
@@ -801,13 +870,14 @@ def check_db(upgradelog=None):
             if len(no_bookid):
                 logger.warning(f"Found {len(no_bookid)} unknown bookids in reading lists")
             for item in no_bookid:
-                cmd = 'SELECT BookID from books WHERE ol_id=? OR gr_id=? OR lt_workid=? OR gb_id=? OR au_id=?'
-                res = db.match(cmd, (item, item, item, item))
+                cmd = ('SELECT BookID from books WHERE ol_id=? OR gr_id=? OR lt_workid=? OR gb_id=?'
+                       ' or hc_id=? or dnb_id=? or ran_id=? or au_id=?')
+                res = db.match(cmd, (item, item, item, item, item, item, item, item))
                 if res:
                     logger.debug(f"Bookid {item} is now {res[0]}")
                     for table in reading_lists:
-                        cmd = f'UPDATE {table} SET BookID=? WHERE BookID=?'
-                        db.action(cmd, (res[0], item))
+                        cmd = f"UPDATE {table} SET BookID=? WHERE BookID=?"
+                        db.action(cmd, (res[0], item), suppress='UNIQUE')
                 else:
                     logger.debug(f"Bookid {item} is unknown, deleting it")
                     for table in reading_lists:
@@ -842,9 +912,8 @@ def calc_eta(start_time, start_count, done):
         return f"Completed {int(percent_done)}% eta {eta} minute"
     if eta < 120:
         return f"Completed {int(percent_done)}% eta {eta} minutes"
-    else:
-        eta = int(secs_left / 3600) + (secs_left % 3600 > 0)
-        return f"Completed {int(percent_done)}% eta {eta} hours"
+    eta = int(secs_left / 3600) + (secs_left % 3600 > 0)
+    return f"Completed {int(percent_done)}% eta {eta} hours"
 
 
 def db_v46(db, upgradelog):
@@ -860,15 +929,13 @@ def db_v47(db, upgradelog):
     if not has_column(db, "genres", "GenreID"):
         db.action('CREATE TABLE genres (GenreID INTEGER PRIMARY KEY AUTOINCREMENT, GenreName TEXT UNIQUE)')
         db.action(
-            f"CREATE TABLE genrebooks (GenreID INTEGER REFERENCES genres (GenreID) ON DELETE CASCADE, "
-            f"BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, UNIQUE (GenreID,BookID))")
+            "CREATE TABLE genrebooks (GenreID INTEGER REFERENCES genres (GenreID) ON DELETE CASCADE, "
+            "BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, UNIQUE (GenreID,BookID))")
     res = db.select("SELECT bookid,bookgenre FROM books WHERE (Status='Open' or AudioStatus='Open')")
     tot = len(res)
     if tot:
         upgradelog.write(f"{time.ctime()} v47: Upgrading {tot} genres\n")
-        cnt = 0
-        for book in res:
-            cnt += 1
+        for cnt, book in enumerate(res, start=1):
             db.action('DELETE from genrebooks WHERE BookID=?', (book['bookid'],))
             lazylibrarian.UPDATE_MSG = f"Updating genres {cnt} of {tot}"
             for item in get_list(book['bookgenre'], ','):
@@ -891,12 +958,12 @@ def db_v48(db, upgradelog):
         db.action('DROP TABLE IF EXISTS temp')
         db.action('ALTER TABLE magazines RENAME to temp')
         db.action(
-            f"CREATE TABLE magazines (Title TEXT UNIQUE, Regex TEXT, Status TEXT, MagazineAdded TEXT, "
-            f"LastAcquired TEXT, IssueDate TEXT, IssueStatus TEXT, Reject TEXT, LatestCover TEXT, "
-            f"DateType TEXT, CoverPage INTEGER DEFAULT 1)")
+            "CREATE TABLE magazines (Title TEXT UNIQUE, Regex TEXT, Status TEXT, MagazineAdded TEXT, "
+            "LastAcquired TEXT, IssueDate TEXT, IssueStatus TEXT, Reject TEXT, LatestCover TEXT, "
+            "DateType TEXT, CoverPage INTEGER DEFAULT 1)")
         db.action(
-            f"INSERT INTO magazines SELECT Title,Regex,Status,MagazineAdded,LastAcquired,IssueDate,IssueStatus,"
-            f"Reject,LatestCover,DateType,CoverPage FROM temp")
+            "INSERT INTO magazines SELECT Title,Regex,Status,MagazineAdded,LastAcquired,IssueDate,IssueStatus,"
+            "Reject,LatestCover,DateType,CoverPage FROM temp")
         db.action('DROP TABLE temp')
         db.action('PRAGMA foreign_keys = ON')
     upgradelog.write(f"{time.ctime()} v48: complete\n")
@@ -917,9 +984,9 @@ def db_v49(db, upgradelog):
                   'TotalBooks INTEGER DEFAULT 0, AuthorBorn TEXT, AuthorDeath TEXT, ' +
                   'UnignoredBooks INTEGER DEFAULT 0, Manual TEXT, GRfollow TEXT, LastBookID TEXT)')
         db.action(
-            f"INSERT INTO authors SELECT AuthorID,AuthorName,AuthorImg,AuthorLink,DateAdded,Status,LastBook,"
-            f"LastBookImg,LastLink,LastDate,HaveBooks,TotalBooks,AuthorBorn,AuthorDeath,UnignoredBooks,Manual,"
-            f"GRfollow,LastBookID FROM temp")
+            "INSERT INTO authors SELECT AuthorID,AuthorName,AuthorImg,AuthorLink,DateAdded,Status,LastBook,"
+            "LastBookImg,LastLink,LastDate,HaveBooks,TotalBooks,AuthorBorn,AuthorDeath,UnignoredBooks,Manual,"
+            "GRfollow,LastBookID FROM temp")
         db.action('DROP TABLE temp')
         db.action('PRAGMA foreign_keys = ON')
     upgradelog.write(f"{time.ctime()} v49: complete\n")
@@ -929,12 +996,12 @@ def db_v50(db, upgradelog):
     upgradelog.write(f"{time.ctime()} v50: Creating comics tables\n")
     if not has_column(db, "comics", "ComicID"):
         db.action(
-            f"CREATE TABLE comics (ComicID TEXT UNIQUE, Title TEXT, Status TEXT, Added TEXT, LastAcquired TEXT, "
-            f"Updated TEXT, LatestIssue TEXT, IssueStatus TEXT, LatestCover TEXT, SearchTerm TEXT, Start TEXT, "
-            f"First INTEGER, Last INTEGER, Publisher TEXT, Link TEXT)")
+            "CREATE TABLE comics (ComicID TEXT UNIQUE, Title TEXT, Status TEXT, Added TEXT, LastAcquired TEXT, "
+            "Updated TEXT, LatestIssue TEXT, IssueStatus TEXT, LatestCover TEXT, SearchTerm TEXT, Start TEXT, "
+            "First INTEGER, Last INTEGER, Publisher TEXT, Link TEXT)")
         db.action(
-            f"CREATE TABLE comicissues (ComicID TEXT REFERENCES comics (ComicID) ON DELETE CASCADE, IssueID TEXT, "
-            f"IssueAcquired TEXT, IssueFile TEXT, UNIQUE (ComicID, IssueID))")
+            "CREATE TABLE comicissues (ComicID TEXT REFERENCES comics (ComicID) ON DELETE CASCADE, IssueID TEXT, "
+            "IssueAcquired TEXT, IssueFile TEXT, UNIQUE (ComicID, IssueID))")
 
 
 def db_v51(db, upgradelog):
@@ -1007,12 +1074,10 @@ def db_v56(db, upgradelog):
         issues = db.select('SELECT IssueFile from issues')
         tot = len(issues)
         start_time = time.time()
-        cnt = 0
-        for issue in issues:
-            cnt += 1
+        for cnt, issue in enumerate(issues, start=1):
             lazylibrarian.UPDATE_MSG = (f"Updating issue cover for {issue['IssueFile']}: "
                                         f"{calc_eta(start_time, tot, cnt)}")
-            coverfile = f"{os.path.splitext(issue['IssueFile'])[0]}.jpg"
+            coverfile = f"{splitext(issue['IssueFile'])[0]}.jpg"
             if not path_exists(coverfile):
                 coverfile = os.path.join(DIRS.PROG_DIR, 'data', 'images', 'nocover.jpg')
             myhash = uuid.uuid4().hex
@@ -1030,12 +1095,10 @@ def db_v56(db, upgradelog):
         issues = db.select('SELECT * from comicissues')
         tot = len(issues)
         start_time = time.time()
-        cnt = 0
-        for issue in issues:
-            cnt += 1
+        for cnt, issue in enumerate(issues, start=1):
             lazylibrarian.UPDATE_MSG = (f"Updating comicissue cover for {issue['IssueFile']}: "
                                         f"{calc_eta(start_time, tot, cnt)}")
-            coverfile = f"{os.path.splitext(issue['IssueFile'])[0]}.jpg"
+            coverfile = f"{splitext(issue['IssueFile'])[0]}.jpg"
             if not path_exists(coverfile):
                 coverfile = os.path.join(DIRS.PROG_DIR, 'data', 'images', 'nocover.jpg')
             myhash = uuid.uuid4().hex
@@ -1348,12 +1411,12 @@ def update_schema(db, upgradelog):
 
         db.action('DROP TABLE IF EXISTS temp')
         db.action(
-            f"CREATE TABLE temp (UserID TEXT UNIQUE, UserName TEXT UNIQUE, Password TEXT, Email TEXT, Name TEXT, "
-            f"Perms INTEGER DEFAULT 0, CalibreRead TEXT, CalibreToRead TEXT, BookType TEXT, SendTo TEXT, "
-            f"Last_Login TEXT, Login_Count INTEGER DEFAULT 0, Prefs INTEGER DEFAULT 0, Theme TEXT)")
+            "CREATE TABLE temp (UserID TEXT UNIQUE, UserName TEXT UNIQUE, Password TEXT, Email TEXT, Name TEXT, "
+            "Perms INTEGER DEFAULT 0, CalibreRead TEXT, CalibreToRead TEXT, BookType TEXT, SendTo TEXT, "
+            "Last_Login TEXT, Login_Count INTEGER DEFAULT 0, Prefs INTEGER DEFAULT 0, Theme TEXT)")
         db.action(
-            f"INSERT INTO temp SELECT UserID,UserName,Password,Email,Name,Perms,CalibreRead,CalibreToRead,"
-            f"BookType,SendTo,Last_Login,Login_Count,Prefs,Theme FROM users")
+            "INSERT INTO temp SELECT UserID,UserName,Password,Email,Name,Perms,CalibreRead,CalibreToRead,"
+            "BookType,SendTo,Last_Login,Login_Count,Prefs,Theme FROM users")
         db.action('PRAGMA foreign_keys = OFF')
         db.action('DROP TABLE users')
         db.action('ALTER TABLE temp RENAME TO users')
@@ -1381,15 +1444,15 @@ def update_schema(db, upgradelog):
         lazylibrarian.UPDATE_MSG = 'Updating reading tables'
         upgradelog.write(f"{time.ctime()} v84: {lazylibrarian.UPDATE_MSG}\n")
         db.action(
-            f"CREATE TABLE readinglists (UserID TEXT REFERENCES users (UserID) ON DELETE CASCADE, BookID TEXT, "
-            f"Status INTEGER DEFAULT 0, Percent INTEGER DEFAULT 0, Msg Text, UNIQUE (UserID,BookID))")
+            "CREATE TABLE readinglists (UserID TEXT REFERENCES users (UserID) ON DELETE CASCADE, BookID TEXT, "
+            "Status INTEGER DEFAULT 0, Percent INTEGER DEFAULT 0, Msg Text, UNIQUE (UserID,BookID))")
         # status_id = 1 want-to-read, 2 currently_reading, 3 read, 4 owned, 5 dnf
         for tbl in [['toread', 1], ['reading', 2], ['haveread', 3], ['abandoned', 5]]:
             res = db.select(f"SELECT * from {tbl[0]}")
             for item in res:
                 db.action("INSERT into readinglists (UserID, BookID, Status) VALUES (?, ?, ?)",
                           (item['UserID'], item['BookID'], tbl[1]), suppress='UNIQUE')
-        db.action(f"DROP table {tbl[0]}")
+            db.action(f"DROP table {tbl[0]}")
 
     res = db.match("SELECT sql FROM sqlite_master WHERE type='table' AND name='series'")
     if 'SeriesID INTEGER' in res[0]:
@@ -1399,8 +1462,8 @@ def update_schema(db, upgradelog):
         db.action('PRAGMA foreign_keys = OFF')
         db.action('DROP TABLE IF EXISTS temp')
         db.action(
-            f"CREATE TABLE temp (SeriesID TEXT UNIQUE, SeriesName TEXT, Status TEXT, Have INTEGER DEFAULT 0, "
-            f"Total INTEGER DEFAULT 0, Updated INTEGER DEFAULT 0, Reason TEXT)")
+            "CREATE TABLE temp (SeriesID TEXT UNIQUE, SeriesName TEXT, Status TEXT, Have INTEGER DEFAULT 0, "
+            "Total INTEGER DEFAULT 0, Updated INTEGER DEFAULT 0, Reason TEXT)")
         res = db.select("SELECT * from series")
         for item in res:
             db.action("INSERT into temp (SeriesID, SeriesName, Status, Have, Total, Updated, Reason) "
@@ -1445,9 +1508,9 @@ def update_schema(db, upgradelog):
         changes += 1
         lazylibrarian.UPDATE_MSG = 'Adding bookauthors table'
         upgradelog.write(f"{time.ctime()} v88: {lazylibrarian.UPDATE_MSG}\n")
-        db.action(f"CREATE TABLE bookauthors (BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, "
-                  f"AuthorID TEXT REFERENCES authors (AuthorID) ON DELETE CASCADE, Role INTEGER DEFAULT 0, "
-                  f"UNIQUE (BookID,AuthorID))")
+        db.action("CREATE TABLE bookauthors (BookID TEXT REFERENCES books (BookID) ON DELETE CASCADE, "
+                  "AuthorID TEXT REFERENCES authors (AuthorID) ON DELETE CASCADE, Role INTEGER DEFAULT 0, "
+                  "UNIQUE (BookID,AuthorID))")
 
         selection = db.select("SELECT authors.AuthorID,BookID from books,authors WHERE books.authorid=authors.authorid")
         upgradelog.write(f"{time.ctime()} v88: updating bookauthors from {len(selection)} book entries\n")
@@ -1456,37 +1519,68 @@ def update_schema(db, upgradelog):
             # Add what we currently have as primary author
             db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
                       (entry['AuthorID'], entry['BookID'], 1), suppress='UNIQUE')
-        if CONFIG['CONTRIBUTING_AUTHORS']:
-            threading.Thread(target=get_authors_from_book_files, name='MULTIAUTH_BOOKFILES').start()
+
+    if not has_column(db, "books", "dnb_id"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding dnb_id column to books table'
+        upgradelog.write(f"{time.ctime()} v89: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE books ADD COLUMN dnb_id TEXT')
+
+    if not has_column(db, "wanted", "Origin"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding Origin column to wanted table'
+        upgradelog.write(f"{time.ctime()} v90: {lazylibrarian.UPDATE_MSG}\n")
+        # 'new' or 'adopted', empty for anything snatched before we recorded it
+        db.action('ALTER TABLE wanted ADD COLUMN Origin TEXT')
+
+    if not has_column(db, "wanted", "Category"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding Category column to wanted table'
+        upgradelog.write(f"{time.ctime()} v91: {lazylibrarian.UPDATE_MSG}\n")
+        # the downloader category we asked for, to compare against later. Left
+        # empty for existing rows: we cannot know what was sent at the time, and
+        # guessing would put someone else's torrent at risk
+        db.action('ALTER TABLE wanted ADD COLUMN Category TEXT')
+
+    if not has_column(db, "books", "ran_id"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding ran_id column to books table'
+        upgradelog.write(f"{time.ctime()} v92: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE books ADD COLUMN ran_id TEXT')
+    if not has_column(db, "authors", "ran_id"):
+        changes += 1
+        lazylibrarian.UPDATE_MSG = 'Adding ran_id column to authors table'
+        upgradelog.write(f"{time.ctime()} v92: {lazylibrarian.UPDATE_MSG}\n")
+        db.action('ALTER TABLE authors ADD COLUMN ran_id TEXT')
 
     if not has_column(db, "books", "au_id"):
         changes += 1
         lazylibrarian.UPDATE_MSG = 'Adding Audible ID to books'
-        upgradelog.write(f"{time.ctime()} v89: {lazylibrarian.UPDATE_MSG}\n")
+        upgradelog.write(f"{time.ctime()} v93: {lazylibrarian.UPDATE_MSG}\n")
         db.action('ALTER TABLE books ADD COLUMN au_id TEXT')
 
     if not has_column(db, "authors", "au_id"):
         changes += 1
         lazylibrarian.UPDATE_MSG = 'Adding Audible ID to authors'
-        upgradelog.write(f"{time.ctime()} v90: {lazylibrarian.UPDATE_MSG}\n")
+        upgradelog.write(f"{time.ctime()} v94: {lazylibrarian.UPDATE_MSG}\n")
         db.action('ALTER TABLE authors ADD COLUMN au_id TEXT')
 
     if not has_column(db, "series", "au_id"):
         changes += 1
         lazylibrarian.UPDATE_MSG = 'Adding Audible ID to series'
-        upgradelog.write(f"{time.ctime()} v91: {lazylibrarian.UPDATE_MSG}\n")
+        upgradelog.write(f"{time.ctime()} v95: {lazylibrarian.UPDATE_MSG}\n")
         db.action('ALTER TABLE series ADD COLUMN au_id TEXT')
 
     if not has_column(db, "books", "asin"):
         changes += 1
         lazylibrarian.UPDATE_MSG = 'Adding ASIN to books'
-        upgradelog.write(f"{time.ctime()} v92: {lazylibrarian.UPDATE_MSG}\n")
+        upgradelog.write(f"{time.ctime()} v96: {lazylibrarian.UPDATE_MSG}\n")
         db.action('ALTER TABLE books ADD COLUMN asin TEXT')
 
     if not has_column(db, "authors", "asin"):
         changes += 1
         lazylibrarian.UPDATE_MSG = 'Adding ASIN to authors'
-        upgradelog.write(f"{time.ctime()} v93: {lazylibrarian.UPDATE_MSG}\n")
+        upgradelog.write(f"{time.ctime()} v97: {lazylibrarian.UPDATE_MSG}\n")
         db.action('ALTER TABLE authors ADD COLUMN asin TEXT')
 
     if changes:

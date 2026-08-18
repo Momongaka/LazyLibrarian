@@ -22,13 +22,27 @@ import lazylibrarian
 from lazylibrarian import database
 from lazylibrarian.comicid import cv_identify, cx_identify
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.downloadmethods import nzb_dl_method, tor_dl_method, direct_dl_method
-from lazylibrarian.formatter import get_list, plural, date_format, unaccented, replace_all, check_int, \
-    now, thread_name
-from lazylibrarian.notifiers import notify_snatch, custom_notify_snatch
-from lazylibrarian.providers import iterate_over_rss_sites, iterate_over_torrent_sites, iterate_over_znab_sites, \
-    iterate_over_direct_sites, iterate_over_irc_sites
-from lazylibrarian.scheduling import schedule_job, SchedulerCommand
+from lazylibrarian.downloadmethods import direct_dl_method, nzb_dl_method, tor_dl_method
+from lazylibrarian.formatter import (
+    check_int,
+    date_format,
+    get_list,
+    now,
+    plural,
+    replace_all,
+    thread_name,
+    unaccented,
+)
+from lazylibrarian.notifiers import custom_notify_snatch, notify_snatch
+from lazylibrarian.providers import (
+    iterate_over_direct_sites,
+    iterate_over_irc_sites,
+    iterate_over_rss_sites,
+    iterate_over_torrent_sites,
+    iterate_over_znab_sites,
+)
+from lazylibrarian.scheduling import SchedulerCommand, schedule_job
+from lazylibrarian.telemetry import TELEMETRY
 
 # '0': '', '1': '', '2': '', '3': '', '4': '', '5': '', '6': '', '7': '', '8': '', '9': '',
 dictrepl = {'...': '', '.': ' ', ' & ': ' ', ' = ': ' ', '?': '', '$': 's', ' + ': ' ', '"': '',
@@ -43,7 +57,7 @@ def search_item(comicid=None):
     """
     logger = logging.getLogger(__name__)
     results = []
-
+    TELEMETRY.record_usage_data('Search/Comic')
     if not comicid:
         return results
 
@@ -133,10 +147,8 @@ def search_item(comicid=None):
             if date:
                 date = date_format(date, context=title, datelang=CONFIG['DATE_LANG'])
             url = url.encode('utf-8')
-            if mode == 'torznab':
-                # noinspection PyTypeChecker
-                if url.startswith(b'magnet'):
-                    mode = 'magnet'
+            if mode == 'torznab' and url.startswith(b'magnet'):
+                mode = 'magnet'
 
             # calculate match percentage - torrents might have words_with_underscore_separator
             part_title = title.replace('_', ' ').split('(')[0]
@@ -191,7 +203,7 @@ def search_item(comicid=None):
 
 def cron_search_comics():
     logger = logging.getLogger(__name__)
-    if 'SEARCHALLCOMICS' not in [n.name for n in [t for t in threading.enumerate()]]:
+    if 'SEARCHALLCOMICS' not in [n.name for n in list(threading.enumerate())]:
         search_comics()
     else:
         logger.debug("SEARCHALLCOMICS is already running")
@@ -199,9 +211,10 @@ def cron_search_comics():
 
 def search_comics(comicid=None):
     logger = logging.getLogger(__name__)
-    loggersearching = logging.getLogger('special.searching')
-    threadname = thread_name()
-    if "Thread" in threadname:
+    searchinglogger = logging.getLogger('special.searching')
+    TELEMETRY.record_usage_data('Search/Comics')
+
+    if 'SEARCH' not in thread_name():
         if not comicid:
             thread_name("SEARCHALLCOMICS")
         else:
@@ -210,6 +223,7 @@ def search_comics(comicid=None):
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
+        logger.debug(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
         cmd = "SELECT ComicID,Title, aka from comics WHERE Status='Active'"
         if comicid:
@@ -222,8 +236,8 @@ def search_comics(comicid=None):
             logger.debug(f"Found {len(comics)} active comics")
 
         for comic in comics:
-            if lazylibrarian.STOPTHREADS and threadname == "SEARCHALLCOMICS":
-                logger.debug(f"Aborting {threadname}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "SEARCHALLCOMICS":
+                logger.debug("STOPTHREADS Aborting SEARCHALLCOMICS")
                 break
             comicid = comic['ComicID']
             aka = get_list(comic['aka'])
@@ -237,7 +251,7 @@ def search_comics(comicid=None):
             for item in res:
                 match = None
                 if item['score'] >= 85:
-                    loggersearching.debug(f"Trying to match {item['title']}")
+                    searchinglogger.debug(f"Trying to match {item['title']}")
                     if comic['ComicID'].startswith('CV'):
                         match = cv_identify(item['title'])
                     elif comic['ComicID'].startswith('CX'):
@@ -245,14 +259,13 @@ def search_comics(comicid=None):
                 if match:
                     if match[3]['seriesid'] == comicid or match[3]['seriesid'] in aka:
                         found += 1
-                        if match[4]:
-                            if match[4] not in foundissues:
-                                foundissues[match[4]] = item
+                        if match[4] and match[4] not in foundissues:
+                            foundissues[match[4]] = item
                     else:
-                        loggersearching.debug(f"No match ({match[3]['seriesid']}) want {id_list}: {item['title']}")
+                        searchinglogger.debug(f"No match ({match[3]['seriesid']}) want {id_list}: {item['title']}")
                         notfound += 1
                 else:
-                    loggersearching.debug(f"No match [{item['score']}%] {item['title']}")
+                    searchinglogger.debug(f"No match [{item['score']}%] {item['title']}")
                     notfound += 1
 
             total = len(foundissues)
@@ -261,7 +274,7 @@ def search_comics(comicid=None):
             located = []
             for item in haveissues:
                 have.append(int(item['IssueID']))
-            for item in foundissues.keys():
+            for item in foundissues:
                 located.append(item)
             for item in located:
                 if item in have:
@@ -274,6 +287,7 @@ def search_comics(comicid=None):
 
             time.sleep(CONFIG.get_int('SEARCH_RATELIMIT'))
         logger.info("ComicSearch for Wanted items complete")
+        logger.debug(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
     except Exception:
         logger.error(f'Unhandled exception in search_comics: {traceback.format_exc()}')
@@ -285,6 +299,7 @@ def search_comics(comicid=None):
 def download_comiclist(foundissues):
     logger = logging.getLogger(__name__)
     loggesearching = logging.getLogger('special.searching')
+    TELEMETRY.record_usage_data('Download/Comiclist')
     db = database.DBConnection()
     try:
         snatched = 0

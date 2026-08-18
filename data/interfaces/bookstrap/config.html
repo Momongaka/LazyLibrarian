@@ -3,7 +3,7 @@
     import lazylibrarian
     import logging
     from lazylibrarian.common import docker
-    from lazylibrarian.config2 import CONFIG
+    from lazylibrarian.config2 import CONFIG, wishlist_type
     from lazylibrarian.logconfig import LOGCONFIG
     from lazylibrarian.notifiers import APPRISE_VER
     from lazylibrarian import MONTHNAMES, SEASONS
@@ -599,7 +599,7 @@
                         <input type="checkbox" id="sort_definite" name="sort_definite" value="1" ${checked} />
                         Show titles ignoring article (The, A)</label>
                       </div>
-                      %if not APPRISE_VER and APPRISE_VER[0].isdigit():
+                      %if APPRISE_VER and APPRISE_VER[0].isdigit():
                       <div class="col-md-6">
                         <% checked = 'checked="checked"' if CONFIG['HIDE_OLD_NOTIFIERS'] else '' %>
                         <label for="hide_old_notifiers" class="control-label">
@@ -631,16 +631,22 @@
                     gr_selected = ''
                     hc_selected = ''
                     au_selected = ''
+                    dnb_selected = ''
+                    ran_selected = ''
                     if CONFIG['BOOK_API'] == "GoodReads":
                         gr_selected = 'selected="selected"'
-                    elif CONFIG['BOOK_API'] == "GoogleBooks":
+                    if CONFIG['BOOK_API'] == "GoogleBooks":
                         gb_selected = 'selected="selected"'
-                    elif CONFIG['BOOK_API'] == "OpenLibrary":
+                    if CONFIG['BOOK_API'] == "OpenLibrary":
                         ol_selected = 'selected="selected"'
-                    elif CONFIG['BOOK_API'] == "HardCover":
+                    if CONFIG['BOOK_API'] == "HardCover":
                         hc_selected = 'selected="selected"'
-                    elif CONFIG['BOOK_API'] == "Audible":
+                    if CONFIG['BOOK_API'] == "Audible":
                         au_selected = 'selected="selected"'
+                    if CONFIG['BOOK_API'] == "DNB":
+                        dnb_selected = 'selected="selected"'
+                    if CONFIG['BOOK_API'] == "RanobeDB":
+                        ran_selected = 'selected="selected"'
                     %>
                     <label for="book_api" class="control-label">Primary Information Source</label>
                     <select id="book_api" name="book_api" class="form-control">
@@ -653,17 +659,25 @@
                       %if CONFIG['OL_API']:
                         <option value = "OpenLibrary" ${ol_selected}>OpenLibrary</option>
                       %endif
+                      %if CONFIG['DNB_API']:
+                        <option value = "DNB" ${dnb_selected}>Deutsche Nationalbibliothek</option>
+                      %endif
+                      %if CONFIG['RAN_API']:
+                        <option value = "RanobeDB" ${ran_selected}>RanobeDB</option>
+                      %endif
                       %if CONFIG['HC_API']:
                         <option value = "HardCover" ${hc_selected}>HardCover</option>
                       %endif
-                      <option value="Audible" ${au_selected}>Audible</option>
+                      %if CONFIG['AU_API']:
+                        <option value = "Audible" ${au_selected}>Audible</option>
+                      %endif
                     </select>
                   </div>
                   <div class="checkbox">
                     <% checked = 'checked="checked"' if CONFIG['MULTI_SOURCE'] else '' %>
                     <label for="multi_source">
                       <input type="checkbox" id="multi_source" name="multi_source" value="1" ${checked} />
-                      Use multiple sources for book information
+                      Use multiple sources for book/author information
                     </label>
                   </div>
                   <fieldset id="ol_options">
@@ -673,6 +687,36 @@
                     <label for="ol_api">
                       <input type="checkbox" id="ol_api" name="ol_api" value="1" ${checked} />
                       Enable OpenLibrary api for book/author information
+                    </label>
+                  </div>
+                  </fieldset>
+                  <fieldset id="dnb_options">
+                  <label class="control-label">Deutsche Nationalbibliothek API:</label>
+                  <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['DNB_API'] else '' %>
+                    <label for="dnb_api">
+                      <input type="checkbox" id="dnb_api" name="dnb_api" value="1" ${checked} />
+                      Enable Deutsche Nationalbibliothek api for book information
+                    </label>
+                  </div>
+                  </fieldset>
+                  <fieldset id="ran_options">
+                  <label class="control-label">RanobeDB API:</label>
+                  <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['RAN_API'] else '' %>
+                    <label for="ran_api">
+                      <input type="checkbox" id="ran_api" name="ran_api" value="1" ${checked} />
+                      RanobeDB api for book/author information
+                    </label>
+                  </div>
+                  </fieldset>
+                  <fieldset id="au_options">
+                  <label class="control-label">Audible API:</label>
+                  <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['AU_API'] else '' %>
+                    <label for="au_api">
+                      <input type="checkbox" id="au_api" name="au_api" value="1" ${checked} />
+                      Audible api for book/author information
                     </label>
                   </div>
                   </fieldset>
@@ -962,6 +1006,17 @@
                         </div>
                       </div>
                       <div class="row">
+                        <span class="help-block">Remote/Local mapping for containers on different hosts</span>
+                        <div class="form-group col-md-6">
+                          <label for="sab_remote">Remote Dir:</label>
+                          <input type="text" id="sab_remote" name="sab_remote" value="${CONFIG['SAB_REMOTE']}" class="form-control"      placeholder="Normally leave blank">
+                        </div>
+                        <div class="form-group col-md-6">
+                          <label for="sab_local" class="control-label">Local Dir:</label>
+                          <input type="text" id="sab_local" name="sab_local" value="${CONFIG['SAB_LOCAL']}" class="form-control"     placeholder="Normally leave blank">
+                        </div>
+                      </div>
+                      <div class="row">
                         <div class="col-md-6">
                         <div class="input-group">
                           <span class="input-group-addon">Ext Host/Port</span>
@@ -1020,6 +1075,17 @@
                         </div>
                       </div>
                       <div class="row">
+                        <span class="help-block">Remote/Local mapping for containers on different hosts</span>
+                        <div class="form-group col-md-6">
+                          <label for="nzbget_remote">Remote Dir:</label>
+                          <input type="text" id="nzget_remote" name="nzbget_remote" value="${CONFIG['NZBGET_REMOTE']}" class="form-control"      placeholder="Normally leave blank">
+                        </div>
+                        <div class="form-group col-md-6">
+                          <label for="nzbget_local" class="control-label">Local Dir:</label>
+                          <input type="text" id="nzbget_local" name="nzbget_local" value="${CONFIG['NZBGET_LOCAL']}" class="form-control"     placeholder="Normally leave blank">
+                        </div>
+                      </div>
+                      <div class="row">
                       <div class="col-md-6">
                         <button class="button btn btn-sm btn-primary" type="button" value="Test NZBget" id="test_nzbget"><i class="fa fa-list-ul"></i> Test NZBget</button>
                         <br>
@@ -1070,6 +1136,17 @@
                           <input type="checkbox" id="tor_downloader_synology" name="tor_downloader_synology" value="1" ${checked} />
                           Use DownloadStation for torrents</label>
                       </div>
+                      </div>
+                      <div class="row">
+                        <span class="help-block">Remote/Local mapping for containers on different hosts</span>
+                        <div class="form-group col-md-6">
+                          <label for="sab_remote">Remote Dir:</label>
+                          <input type="text" id="synology_remote" name="synology_remote" value="${CONFIG['SYNOLOGY_REMOTE']}" class="form-control"      placeholder="Normally leave blank">
+                        </div>
+                        <div class="form-group col-md-6">
+                          <label for="synology_local" class="control-label">Local Dir:</label>
+                          <input type="text" id="synology_local" name="synology_local" value="${CONFIG['SYNOLOGY_LOCAL']}" class="form-control"     placeholder="Normally leave blank">
+                        </div>
                       </div>
                       <div class="row">
                       <div class="col-md-6">
@@ -1155,12 +1232,23 @@
                         <label for="deluge_dir" class="control-label">Download directory :</label>
                         <input type="text" id="deluge_dir" name="deluge_dir" value="${CONFIG['DELUGE_DIR']}" class="form-control" placeholder="use deluge default">
                       </div>
+                    </div>
+                      <div class="row">
+                        <span class="help-block">Remote/Local mapping for containers on different hosts</span>
+                        <div class="form-group col-md-6">
+                          <label for="deluge_remote">Remote Dir:</label>
+                          <input type="text" id="deluge_remote" name="deluge_remote" value="${CONFIG['DELUGE_REMOTE']}" class="form-control"      placeholder="Normally leave blank">
+                        </div>
+                        <div class="form-group col-md-6">
+                          <label for="deluge_local" class="control-label">Local Dir:</label>
+                          <input type="text" id="deluge_local" name="deluge_local" value="${CONFIG['DELUGE_LOCAL']}" class="form-control"     placeholder="Normally leave blank">
+                        </div>
+                      </div>
                       <div class="col-md-6">
                         <button class="button btn btn-sm btn-primary" type="button" value="Test Deluge" id="test_deluge"><i class="fa fa-list-ul"></i> Test Deluge</button>
                         <br>
                         <br>
                       </div>
-                    </div>
                   </fieldset>
                   <div class="checkbox">
                     <% checked = 'checked="checked"' if CONFIG['TOR_DOWNLOADER_TRANSMISSION'] else '' %>
@@ -1200,6 +1288,17 @@
                         <input type="text" id="transmission_label" name="transmission_label" value="${CONFIG['TRANSMISSION_LABEL']}" class="form-control" placeholder="">
                       </div>
                     </div>
+                      <div class="row">
+                        <span class="help-block">Remote/Local mapping for containers on different hosts</span>
+                        <div class="form-group col-md-6">
+                          <label for="transmission_remote">Remote Dir:</label>
+                          <input type="text" id="transmission_remote" name="transmission_remote" value="${CONFIG['TRANSMISSION_REMOTE']}" class="form-control"      placeholder="Normally leave blank">
+                        </div>
+                        <div class="form-group col-md-6">
+                          <label for="transmission_local" class="control-label">Local Dir:</label>
+                          <input type="text" id="transmission_local" name="transmission_local" value="${CONFIG['TRANSMISSION_LOCAL']}" class="form-control"     placeholder="Normally leave blank">
+                        </div>
+                      </div>
                     <div class="row">
                       <div class="col-md-6">
                         <button class="button btn btn-sm btn-primary" type="button" value="Test Transmission" id="test_transmission"><i class="fa fa-list-ul"></i> Test Transmission</button>
@@ -1237,12 +1336,23 @@
                         <label for="rtorrent_dir" class="control-label">rTorrent Directory:</label>
                         <input type="text" id="rtorrent_dir" name="rtorrent_dir" value="${CONFIG['RTORRENT_DIR']}" class="form-control" placeholder="use rtorrent default">
                       </div>
-                      <div>
-                        <div class="col-md-6">
-                          <button class="button btn btn-sm btn-primary" type="button" value="Test rTorrent" id="test_rtorrent"><i class="fa fa-list-ul"></i> Test rTorrent</button>
-                          <br>
-                          <br>
-                        </div>
+                    </div>
+                    <div class="row">
+                      <span class="help-block">Remote/Local mapping for containers on different hosts</span>
+                      <div class="form-group col-md-6">
+                        <label for="rtorrent_remote">Remote Dir:</label>
+                        <input type="text" id="rtorrent_remote" name="rtorrent_remote" value="${CONFIG['RTORRENT_REMOTE']}" class="form-control"      placeholder="Normally leave blank">
+                      </div>
+                      <div class="form-group col-md-6">
+                        <label for="rtorrent_local" class="control-label">Local Dir:</label>
+                        <input type="text" id="rtorrent_local" name="rtorrent_local" value="${CONFIG['RTORRENT_LOCAL']}" class="form-control"     placeholder="Normally leave blank">
+                      </div>
+                    </div>
+                    <div>
+                      <div class="col-md-6">
+                        <button class="button btn btn-sm btn-primary" type="button" value="Test rTorrent" id="test_rtorrent"><i class="fa fa-list-ul"></i> Test rTorrent</button>
+                        <br>
+                        <br>
                       </div>
                     </div>
                   </fieldset>
@@ -1280,6 +1390,17 @@
                         <input type="text" id="utorrent_base" name="utorrent_base" value="${CONFIG['UTORRENT_BASE']}" class="form-control" placeholder="URL base">
                       </div>
                     </div>
+                      <div class="row">
+                        <span class="help-block">Remote/Local mapping for containers on different hosts</span>
+                        <div class="form-group col-md-6">
+                          <label for="utorrent_remote">Remote Dir:</label>
+                          <input type="text" id="utorrent_remote" name="utorrent_remote" value="${CONFIG['UTORRENT_REMOTE']}" class="form-control"      placeholder="Normally leave blank">
+                        </div>
+                        <div class="form-group col-md-6">
+                          <label for="utorrent_local" class="control-label">Local Dir:</label>
+                          <input type="text" id="utorrent_local" name="utorrent_local" value="${CONFIG['UTORRENT_LOCAL']}" class="form-control"     placeholder="Normally leave blank">
+                        </div>
+                      </div>
                     <div class="row">
                       <div class="col-md-6">
                         <button class="button btn btn-sm btn-primary" type="button" value="Test uTorrent" id="test_utorrent"><i class="fa fa-list-ul"></i> Test uTorrent</button>
@@ -1327,10 +1448,32 @@
                         </div>
                       </div>
                       <div class="row">
+                        <span class="help-block">Remote/Local mapping for containers on different hosts</span>
+                        <div class="form-group col-md-6">
+                          <label for="qbittorrent_remote">Remote Dir:</label>
+                          <input type="text" id="qbittorrent_remote" name="qbittorrent_remote" value="${CONFIG['QBITTORRENT_REMOTE']}" class="form-control"      placeholder="Normally leave blank">
+                        </div>
+                        <div class="form-group col-md-6">
+                          <label for="qbittorrent_local" class="control-label">Local Dir:</label>
+                          <input type="text" id="qbittorrent_local" name="qbittorrent_local" value="${CONFIG['QBITTORRENT_LOCAL']}" class="form-control"     placeholder="Normally leave blank">
+                        </div>
+                      </div>
+                      <div class="row">
                         <div class="col-md-6">
                           <button class="button btn btn-sm btn-primary" type="button" value="Test qBittorrent" id="test_qbittorrent"><i class="fa fa-list-ul"></i> Test qBittorrent</button>
                           <br>
                           <br>
+                        </div>
+                      </div>
+                      <div class="row">
+                        <div class="col-md-12">
+                          <div class="checkbox">
+                            <% checked = 'checked="checked"' if CONFIG['QBITTORRENT_IGNORE_SSL'] else '' %>
+                            <label for="qbittorrent_ignore_ssl" class="control-label">
+                              <input type="checkbox" id="qbittorrent_ignore_ssl" name="qbittorrent_ignore_ssl" value="1" ${checked} />
+                              Ignore SSL certificate verification
+                            </label>
+                          </div>
                         </div>
                       </div>
                     </fieldset>
@@ -1553,11 +1696,7 @@
                     </div>
                       <%
                         label = 'Priority'
-                        if 'list_rss' in provider['HOST']:
-                          label = 'Pages'
-                        if '/book/' in provider['HOST']:
-                          label = 'Pages'
-                        if '/show/' in provider['HOST']:
+                        if bool(wishlist_type(provider['HOST'])):
                           label = 'Pages'
                       %>
                     <div class="input-group">
@@ -1568,6 +1707,12 @@
                       <span class="input-group-addon">
                         <button role="testprov" class="button btn btn-xs btn-warning active" type="button" value="rss_${loop.index}"> Test</button>
                       </span>
+                    </div>
+                    <div class="input-group">
+                      <span class="input-group-addon">Seed Ratio</span>
+                      <input type="number" id="rss_${loop.index}_seed_ratio" name="rss_${loop.index}_seed_ratio" value="${provider['SEED_RATIO']}" class="form-control" placeholder="0.0" step=any>
+                      <span class="input-group-addon">Seed Minutes</span>
+                      <input type="number" id="rss_${loop.index}_seed_duration" name="rss_${loop.index}_seed_duration" value="${provider['SEED_DURATION']}" class="form-control" placeholder="0">
                     </div>
                   </div>
                   %endfor
@@ -1825,6 +1970,12 @@
                       <div class="input-group">
                       <span class="input-group-addon">Daily Downloads: (${lazylibrarian.TIMERS['ANNA_REMAINING']} left)</span>
                       <input type="number" placeholder="API Limit" id="anna_dllimit" name="anna_dllimit" value="${CONFIG['ANNA_DLLIMIT']}" class="form-control">
+                      </div>
+                      <div class="input-group">
+                        <span class="input-group-addon">Max download servers</span>
+                        <input type="number" min="1" placeholder="Max servers" id="anna_max_servers" name="anna_max_servers" value="${CONFIG['ANNA_MAX_SERVERS']}" class="form-control">
+                        <span class="input-group-addon" data-toggle="tooltip" data-placement="bottom" title="The maximum number of download servers to try in case of failure">
+                        </span>
                       </div>
                     </div>
                     <% checked = 'checked="checked"' if CONFIG['BOK'] else '' %>
@@ -2113,6 +2264,14 @@
                     <span class="help-block">This will import details for contributing authors,<br>
                       not just the "primary" author of a book</span>
                   </div>
+                  <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['DEL_SECONDARY'] else '' %>
+                    <label for="del_secondary" class="control-label">
+                      <input type="checkbox" id="del_secondary" name="del_secondary" value="1" ${checked} />
+                      Periodically delete secondaries</label>
+                    <span class="help-block">This will delete authors who are only listed as secondary,<br>
+                      not as the "primary" author of any book</span>
+                  </div>
                   <fieldset>
                   <legend>External Programs</legend>
                   <div class="form-group">
@@ -2347,7 +2506,7 @@
                   <div class="form-group">
                     <label for="mag_dest_folder">Magazine Foldername Pattern:</label>
                     <input type="text" id="mag_dest_folder" name="mag_dest_folder" value="${CONFIG['MAG_DEST_FOLDER']}" class="form-control" placeholder="Magazines Destination Folder">
-                    <span class="help-block">Absolute path, or inside book folder. Options: $Title, $IssueDate, $IssueYear, $IssueVol, $IssueNum, $IssueMonth, $IssueDay, any string
+                    <span class="help-block">Absolute path, or inside book folder. Options: $Title, $IssueDate, $IssueYear, $IssueVol, $IssueNum, $IssueMonth, $IssueMNum, $IssueDay, any string
                       <BR><strong>All options are discretionary but Title is recommended unless included in Filename to prevent issue name collisions</strong></span>
                   </div>
                   <div class="checkbox">
@@ -2365,8 +2524,8 @@
                   <div class="form-group">
                     <label for="mag_dest_file">Magazine Filename Pattern:</label>
                     <input type="text" id="mag_dest_file" name="mag_dest_file" value="${CONFIG['MAG_DEST_FILE']}" class="form-control" placeholder="Magazine Issue Filename">
-                    <span class="help-block">Options: $Title, $IssueDate, $IssueYear, $IssueVol, $IssueNum, $IssueMonth, $IssueDay, any string
-                      <BR><strong>Current limitation: Filename must contain IssueDate, or IssueYear and one of IssueNum/IssueMonth</strong></span>
+                    <span class="help-block">Options: $Title, $IssueDate, $IssueYear, $IssueVol, $IssueNum, $IssueMonth, $IssueMNum, $IssueDay, any string
+                      <BR><strong>Current limitation: Filename must contain IssueDate, or IssueYear and one of IssueNum/IssueMonth/IssueMNum</strong></span>
                   </div>
                   %endif
                   %if CONFIG['COMIC_TAB']:
@@ -2470,6 +2629,14 @@
                     </div>
                   </div>
                   <div class="form-group">
+                    <label for="dload_ratio">Provider Priority Weighting:</label>
+                    <div class="input-group">
+                      <input type="number" id="priority_weight" name="priority_weight" value="${CONFIG['PRIORITY_WEIGHT']}" class="form-control" placeholder="Priority weight">
+                      <span class="input-group-addon">Multiplier</span>
+                    </div>
+                      <span class="help-block">0 = prefer match percentage. Higher values make downloader priority more important when selecting "best" match</span>
+                  </div>
+                  <div class="form-group">
                     <label for="max_pages">Maximum Search Pages:</label>
                     <input type="number" id="max_pages" name="max_pages" value="${CONFIG['MAX_PAGES']}" class="form-control" placeholder="0 for no limit">
                   </div>
@@ -2520,6 +2687,12 @@
                   %endif
                 </fieldset>
                 <fieldset>
+                  <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['IMP_EBOOKOPF'] else '' %>
+                    <label for="imp_ebookopf" class="control-label">
+                      <input type="checkbox" id="imp_ebookopf" name="imp_ebookopf" value="1" ${checked} />
+                      Create opf files for ebooks</label>
+                  </div>
                   <div class="checkbox">
                     <% checked = 'checked="checked"' if CONFIG['FULL_SCAN'] else '' %>
                     <label for="full_scan" class="control-label">
@@ -3630,11 +3803,10 @@
                     <span class="help-block">Two letter country code for geographically restricted content e.g: US GB ES</span>
                   </div>
                   <div class="form-group">
-                    <label for="imp_monthlang" class="control=label">Languages for month names:</label>
-                    <input type="text" id="imp_monthlang" name="imp_monthlang" value="${CONFIG['IMP_MONTHLANG']}" class="form-control" placeholder="Languages for month names">
-                    <span class="help-block">Comma separated language codes for magazine issues:<br/>
-                      e.g: fr_FR.utf8, es_ES.utf8<br/>
-                      English month names are preloaded<br/>Changes to this setting require a restart</span>
+                    <label for="pref_maglang" class="control=label">Default language for magazines:</label>
+                    <input type="text" id="pref_maglang" name="pref_maglang" value="${CONFIG['PREF_MAGLANG']}" class="form-control">
+                    <span class="help-block">Default language code for magazines:<br/>
+                      e.g: en or fr or de<br/></span>
                   </div>
                   <div class="form-group">
                     <label for="anna_search_lang" class="control=label">Annas Archive Search Language:</label>
@@ -3724,6 +3896,13 @@
                   <div class="form-group">
                     <label for="date_format" class="control=label">Words allowed in magazine titles:</label>
                     <input type="text" id="mag_nouns" name="mag_nouns" value="${CONFIG['MAG_NOUNS']}" class="form-control" placeholder="Allowed in magazine titles">
+                  </div>
+                  <div class="checkbox">
+                    <% checked = 'checked="checked"' if CONFIG['GOOGLE_TRANS_ID'] else '' %>
+                    <label for="google_trans_id" class="control-label">
+                      <input type="checkbox" id="google_trans_id" name="google_trans_id" value="1" ${checked} />
+                      Use Google Translate to identify language from book title
+                    </label>
                   </div>
               </div>
             </div>

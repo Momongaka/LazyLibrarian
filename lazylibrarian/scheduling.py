@@ -21,8 +21,8 @@ import threading
 import time
 import traceback
 from enum import Enum
-from typing import Optional
 
+from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import lazylibrarian
@@ -30,7 +30,7 @@ from lazylibrarian import database
 from lazylibrarian.bookwork import add_series_members
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.configtypes import ConfigScheduler
-from lazylibrarian.formatter import plural, check_int
+from lazylibrarian.formatter import check_int, plural
 from lazylibrarian.importer import add_author_to_db
 
 # Notification Types
@@ -38,7 +38,9 @@ NOTIFY_SNATCH = 1
 NOTIFY_DOWNLOAD = 2
 NOTIFY_FAIL = 3
 
-notifyStrings = {NOTIFY_SNATCH: "Started Download", NOTIFY_DOWNLOAD: "Added to Library", NOTIFY_FAIL: "Download failed"}
+notify_strings = {NOTIFY_SNATCH: "Started Download",
+                  NOTIFY_DOWNLOAD: "Added to Library",
+                  NOTIFY_FAIL: "Download failed"}
 
 # Scheduler
 SCHED: BackgroundScheduler
@@ -69,14 +71,14 @@ def startscheduler():
 
 def shutdownscheduler():
     try:
-        if SCHED:
+        if SCHED and SCHED.running:
             # noinspection PyUnresolvedReferences
             SCHED.shutdown(wait=False)
-    except NameError:
+    except (NameError, SchedulerNotRunningError):
         pass
 
 
-def next_run_time(when_run: str, test_now: Optional[datetime.datetime] = None):
+def next_run_time(when_run: str, test_now: datetime.datetime | None = None):
     """
     Returns a readable approximation of how long until a job will be run,
     given a string representing the last time it was run
@@ -87,7 +89,7 @@ def next_run_time(when_run: str, test_now: Optional[datetime.datetime] = None):
         # and now() doesn't include timezone, so assume both times are local timezone
         when_run = ' '.join(when_run.split()[:2])
         when_run = datetime.datetime.strptime(when_run, '%Y-%m-%d %H:%M:%S')
-        timenow = datetime.datetime.now() if not test_now else test_now
+        timenow = test_now if test_now else datetime.datetime.now()
         td = when_run - timenow
         diff = td.total_seconds()  # time difference in seconds
     except ValueError as e:
@@ -98,21 +100,20 @@ def next_run_time(when_run: str, test_now: Optional[datetime.datetime] = None):
     td = str(td)
     if 'days,' in td:  # > 1 day, just return days
         return f"{td.split('s,')[0]}s"
-    elif 'day,' in td and "0:00:00" not in td:  # 1 day and change, or 1 day?
+    if 'day,' in td and "0:00:00" not in td:  # 1 day and change, or 1 day?
         diff += 86400
 
     days, hours, minutes, seconds = get_whole_timediff_from_seconds(diff)
 
     if days > 1:
         return f"{days} days"
-    elif hours > 1:
+    if hours > 1:
         return f"{hours} hours"
-    elif minutes > 1:
+    if minutes > 1:
         return f"{minutes} minutes"
-    elif seconds == 1:
+    if seconds == 1:
         return "1 second"
-    else:
-        return f"{seconds} seconds"
+    return f"{seconds} seconds"
 
 
 def get_whole_timediff_from_seconds(diff):
@@ -148,6 +149,7 @@ def get_next_run_time(target: str, minutes=0, action=SchedulerCommand.NONE) -> d
     for job in SCHED.get_jobs():
         if target in str(job):
             nextruntime = str(job).split('at: ')[1].split('.')[0].strip(')')
+            nextruntime = ' '.join(nextruntime.split()[:2])  # strip any timezone
             break
 
     if nextruntime:
@@ -292,6 +294,7 @@ def author_update(restart=True, only_overdue=True):
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
+        logger.debug("Storing start time for AUTHORUPDATE")
         db.upsert("jobs", {"Start": time.time()}, {"Name": "AUTHORUPDATE"})
         if CONFIG.get_int('CACHE_AGE'):
             overdue, total, name, ident, days = is_overdue('author')
@@ -300,12 +303,11 @@ def author_update(restart=True, only_overdue=True):
             elif not overdue and only_overdue:
                 msg = f"Oldest author info ({name}) is {days} {plural(days, 'day')} old, no update due"
             else:
-                logger.info(f'Starting update for {name}')
+                logger.info(f'Starting update for {name}:{ident}')
                 _ = add_author_to_db(refresh=True, authorid=ident, reason=f"author_update {name}")
                 if lazylibrarian.STOPTHREADS:
                     return ''
                 msg = f'Updated author {name}'
-            db.upsert("jobs", {"Finish": time.time()}, {"Name": "AUTHORUPDATE"})
             if total and restart and not lazylibrarian.STOPTHREADS:
                 schedule_job(SchedulerCommand.RESTART, "author_update")
         return msg
@@ -315,6 +317,8 @@ def author_update(restart=True, only_overdue=True):
         return "Unhandled exception in AuthorUpdate"
 
     finally:
+        logger.debug("Storing finish time for AUTHORUPDATE")
+        db.upsert("jobs", {"Finish": time.time()}, {"Name": "AUTHORUPDATE"})
         db.close()
 
 
@@ -325,6 +329,7 @@ def series_update(restart=True, only_overdue=True):
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
+        logger.debug("Storing start time for SERIESUPDATE")
         db.upsert("jobs", {"Start": time.time()}, {"Name": "SERIESUPDATE"})
         if CONFIG.get_int('CACHE_AGE'):
             overdue, total, name, ident, days = is_overdue('series')
@@ -337,8 +342,6 @@ def series_update(restart=True, only_overdue=True):
                 add_series_members(ident)
                 msg = f'Updated series {name}'
             logger.debug(msg)
-
-            db.upsert("jobs", {"Finish": time.time()}, {"Name": "SERIESUPDATE"})
             if total and restart and not lazylibrarian.STOPTHREADS:
                 schedule_job(SchedulerCommand.RESTART, "series_update")
         return msg
@@ -348,6 +351,8 @@ def series_update(restart=True, only_overdue=True):
         return "Unhandled exception in series_update"
 
     finally:
+        logger.debug("Storing finish time for SERIESUPDATE")
+        db.upsert("jobs", {"Finish": time.time()}, {"Name": "SERIESUPDATE"})
         db.close()
 
 
@@ -383,7 +388,7 @@ def all_author_update(refresh=False):
 
 def restart_jobs(command=SchedulerCommand.RESTART):
     lazylibrarian.STOPTHREADS = command == SchedulerCommand.STOP
-    for name, scheduler in CONFIG.get_schedulers():
+    for _name, scheduler in CONFIG.get_schedulers():
         schedule_job(command, scheduler.get_schedule_name())
 
 
@@ -392,6 +397,18 @@ def ensure_running(jobname: str):
     lazylibrarian.STOPTHREADS = False
     if not any(jobname in str(job) for job in SCHED.get_jobs()):
         schedule_job(SchedulerCommand.START, jobname)
+
+
+def show_running():
+    """ return a list of currently running tasks """
+    db = database.DBConnection()
+    running = []
+    jobs = db.select("SELECT Name from jobs WHERE Start>Finish")
+    db.close()
+    for entry in jobs:
+        if 'Thread' not in entry['Name']:
+            running.append(entry['Name'])
+    return running
 
 
 def check_running_jobs():
@@ -448,11 +465,11 @@ def is_overdue(which="author") -> (int, int, str, str, int):
         days
     """
 
-    def get_overdue_from_dbrows():
+    def get_overdue_from_dbrows(results):
         dtnow = time.time()
         found = 0
-        thedays = int((dtnow - res[0]['Updated']) / (24 * 60 * 60))
-        for item in res:
+        thedays = int((dtnow - results[0]['Updated']) / (24 * 60 * 60))
+        for item in results:
             diff = (dtnow - item['Updated']) / (24 * 60 * 60)
             if diff > maxage:
                 found += 1
@@ -469,18 +486,13 @@ def is_overdue(which="author") -> (int, int, str, str, int):
         try:
             if which == 'author':
                 cmd = "SELECT AuthorName,AuthorID,Updated from authors WHERE Status='Active' or Status='Loading'"
-                cmd += " or Status='Wanted' "
-                if CONFIG['BOOK_API'] == 'OpenLibrary':
-                    cmd += "and AuthorID LIKE 'OL%A' "
-                else:
-                    cmd += "and AuthorID NOT LIKE 'OL%A' "
-                cmd += "order by Updated ASC"
+                cmd += " or Status='Wanted' and AuthorID !='' order by Updated ASC"
                 res = db.select(cmd)
                 total = len(res)
                 if total:
                     name = res[0]['AuthorName']
                     ident = res[0]['AuthorID']
-                    days, overdue = get_overdue_from_dbrows()
+                    days, overdue = get_overdue_from_dbrows(res)
             if which == 'series':
                 cmd = ("SELECT SeriesName,SeriesID,Updated from Series where Status='Active' or Status='Wanted' "
                        "order by Updated ASC")
@@ -489,7 +501,7 @@ def is_overdue(which="author") -> (int, int, str, str, int):
                 if total:
                     name = res[0]['SeriesName']
                     ident = res[0]['SeriesID']
-                    days, overdue = get_overdue_from_dbrows()
+                    days, overdue = get_overdue_from_dbrows(res)
         except Exception as e:
             logger.debug(f"Error: {e}")
 
@@ -506,14 +518,13 @@ def ago(when):
 
     if days > 1:
         return f"{days} days ago"
-    elif hours > 1:
+    if hours > 1:
         return f"{hours} hours ago"
-    elif minutes > 1:
+    if minutes > 1:
         return f"{minutes} minutes ago"
-    elif seconds > 1:
+    if seconds > 1:
         return f"{seconds} seconds ago"
-    else:
-        return "just now"
+    return "just now"
 
 
 def show_jobs(json=False):
@@ -524,7 +535,7 @@ def show_jobs(json=False):
         job = str(job)
         jobname = ''
         threadname = ''
-        for key, scheduler in CONFIG.get_schedulers():
+        for _key, scheduler in CONFIG.get_schedulers():
             method_name = scheduler.method_name.split('.')[-1]
             if method_name in job:
                 jobname = scheduler.friendly_name
@@ -629,10 +640,10 @@ def show_stats(json=False):
         series_stats.append(['Monitor', res['counter']])
         overdue = is_overdue('series')[0]
         series_stats.append(['Overdue', overdue])
-        series_stats = {}
+        seriesstats = {}
         for item in series_stats:
-            series_stats[item[0]] = item[1]
-        resultdict['series_stats'] = series_stats
+            seriesstats[item[0]] = item[1]
+        resultdict['series_stats'] = seriesstats
 
         mag_stats = []
         if CONFIG.get_bool('MAG_TAB'):
@@ -730,6 +741,8 @@ def show_stats(json=False):
         author_stats.append(['Blank', res['counter']])
         overdue = is_overdue('author')[0]
         author_stats.append(['Overdue', overdue])
+        res = db.select('select distinct authorid from bookauthors except select authorid from books')
+        author_stats.append(['Secondary', len(res)])
         authorstats = {}
         for item in author_stats:
             authorstats[item[0]] = item[1]
@@ -745,8 +758,8 @@ def show_stats(json=False):
             header = ''
             data = ''
             for item in stats:
-                header += "%8s" % item[0]
-                data += "%8i" % item[1]
+                header += f"{item[0]:<8s}"
+                data += f"{item[1]:<8d}"
             result.append('')
             result.append(header)
             result.append(data)

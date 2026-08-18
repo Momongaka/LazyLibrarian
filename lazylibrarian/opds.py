@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 
 #  This file is part of LazyLibrarian.
 #
@@ -18,21 +17,21 @@
 #  Adapted for LazyLibrarian from Mylar
 
 import datetime
-import os
-import cherrypy
 import logging
-import lazylibrarian
-
-from cherrypy.lib.static import serve_file
-from lazylibrarian import database
-from lazylibrarian.config2 import CONFIG
-from lazylibrarian.bookrename import name_vars
-from lazylibrarian.cache import cache_img, ImageType
-from lazylibrarian.common import mime_type, zip_audio, get_readinglist
-from lazylibrarian.filesystem import path_isfile, listdir, any_file
-from lazylibrarian.formatter import make_unicode, check_int, plural, get_list
+import os
 from urllib.parse import quote_plus
 
+import cherrypy
+from cherrypy.lib.static import serve_file
+
+import lazylibrarian
+from lazylibrarian import database
+from lazylibrarian.bookrename import name_vars
+from lazylibrarian.cache import ImageType, cache_img
+from lazylibrarian.common import get_readinglist, mime_type, zip_audio
+from lazylibrarian.config2 import CONFIG
+from lazylibrarian.filesystem import any_file, listdir, path_isfile, splitext
+from lazylibrarian.formatter import check_int, get_list, make_unicode, plural
 
 searchable = ['EAuthors', 'AAuthors', 'Magazines', 'Series', 'EAuthor', 'AAuthor', 'RecentBooks',
               'RecentAudio', 'RecentMags', 'RatedBooks', 'RatedAudio', 'ReadBooks', 'ToReadBooks',
@@ -41,7 +40,7 @@ searchable = ['EAuthors', 'AAuthors', 'Magazines', 'Series', 'EAuthor', 'AAuthor
 cmd_list = searchable + ['root', 'Serve', 'search', 'Members', 'Magazine']
 
 
-class OPDS(object):
+class OPDS:
 
     def __init__(self):
         self.cmd = None
@@ -70,7 +69,7 @@ class OPDS(object):
         """
         self.searchroot = self.opdsroot.replace('/opds', '')
         self.logger = logging.getLogger(__name__)
-        self.loggerdlcomms = logging.getLogger('special.dlcomms')
+        self.dlcommslogger = logging.getLogger('special.dlcomms')
 
     def check_params(self, **kwargs):
         if 'cmd' not in kwargs:
@@ -84,8 +83,7 @@ class OPDS(object):
             if kwargs['cmd'] not in cmd_list:
                 self.data = self._error_with_message(f"Unknown command: {kwargs['cmd']}")
                 return
-            else:
-                self.cmd = kwargs.pop('cmd')
+            self.cmd = kwargs.pop('cmd')
 
         self.kwargs = kwargs
         self.data = 'OK'
@@ -101,7 +99,7 @@ class OPDS(object):
                 remote_ip = cherrypy.request.remote.ip
 
             self.user_agent = cherrypy.request.headers.get('User-Agent')
-            self.loggerdlcomms.debug(self.user_agent)
+            self.dlcommslogger.debug(self.user_agent)
 
             # NOTE Moon+ identifies as Aldiko/Moon+  so check for Moon+ first
             # at the moment we only need to identify Aldiko as it doesn't paginate properly
@@ -128,12 +126,11 @@ class OPDS(object):
                     return serve_file(self.filepath, mime_type(self.filename), 'attachment', name=self.filename)
                 if isinstance(self.data, str):
                     return self.data
-                else:
-                    cherrypy.response.headers['Content-Type'] = "text/xml"
-                    self.logger.debug(f"Returning {self.data['title']}: {len(self.data['entries'])} entries")
-                    # noinspection PyUnresolvedReferences
-                    return lazylibrarian.webServe.serve_template(templatename="opds.html",
-                                                                 title=self.data['title'], opds=self.data)
+                cherrypy.response.headers['Content-Type'] = "text/xml"
+                self.logger.debug(f"Returning {self.data['title']}: {len(self.data['entries'])} entries")
+                # noinspection PyUnresolvedReferences
+                return lazylibrarian.webServe.serve_template(templatename="opds.html",
+                                                             title=self.data['title'], opds=self.data)
             except Exception as e:
                 self.logger.error(f"Unhandled OPDS {self.cmd} error: {e}")
         else:
@@ -142,7 +139,7 @@ class OPDS(object):
     def multi_link(self, bookfile, bookid):
         types = []
         multi = ''
-        basename, _ = os.path.splitext(bookfile)
+        basename, _ = splitext(bookfile)
         if not isinstance(basename, str):
             basename = basename.decode('utf-8')
         for item in get_list(CONFIG['EBOOK_TYPE']):
@@ -742,12 +739,17 @@ class OPDS(object):
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Comics'))
         cmd = ("select comics.*,(select count(*) as counter from comicissues where "
                "comics.ComicID = comicissues.ComicID) as Iss_Cnt from comics ")
+        args = ()
         if 'query' in kwargs:
-            cmd += f"WHERE instr(comics.title, '{kwargs['query']}') > 0 "
+            cmd += "WHERE instr(comics.title, ?) > 0 "
+            args = (kwargs['query'], )
         cmd += "order by comics.title"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
         finally:
             db.close()
         if limit:
@@ -815,12 +817,17 @@ class OPDS(object):
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Magazines'))
         cmd = ("select magazines.*,(select count(*) as counter from issues where magazines.title = issues.title) "
                "as Iss_Cnt from magazines ")
+        args = ()
         if 'query' in kwargs:
-            cmd += f"WHERE instr(magazines.title, '{kwargs['query']}') > 0 "
+            cmd += "WHERE instr(magazines.title, ?) > 0 "
+            args = (kwargs['query'], )
         cmd += "order by magazines.title"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
         finally:
             db.close()
         if limit:
@@ -985,7 +992,7 @@ class OPDS(object):
                      'rel': 'file',
                      'type': mime_type(issue['IssueFile'])}
             if CONFIG.get_bool('OPDS_METAINFO'):
-                fname = os.path.splitext(issue['IssueFile'])[0]
+                fname = splitext(issue['IssueFile'])[0]
                 res = cache_img(ImageType.COMIC, issueid, fname + '.jpg')
                 entry['image'] = self.searchroot + '/' + res[0]
                 entry['thumbnail'] = entry['image']
@@ -1035,11 +1042,11 @@ class OPDS(object):
         links = []
         entries = []
         title = ''
-        cmd = ("SELECT Title,IssueID,IssueDate,IssueAcquired,IssueFile from issues WHERE Title='%s' "
+        cmd = ("SELECT Title,IssueID,IssueDate,IssueAcquired,IssueFile from issues WHERE Title=? "
                "order by IssueDate DESC")
         db = database.DBConnection()
         try:
-            results = db.select(cmd % kwargs['magid'])
+            results = db.select(cmd, (kwargs['magid'], ))
         finally:
             db.close()
         if limit:
@@ -1058,7 +1065,7 @@ class OPDS(object):
                      'rel': 'file',
                      'type': mime_type(issue['IssueFile'])}
             if CONFIG.get_bool('OPDS_METAINFO'):
-                fname = os.path.splitext(issue['IssueFile'])[0]
+                fname = splitext(issue['IssueFile'])[0]
                 res = cache_img(ImageType.MAG, issue['IssueID'], fname + '.jpg')
                 entry['image'] = self.searchroot + '/' + res[0]
                 entry['thumbnail'] = entry['image']
@@ -1116,10 +1123,13 @@ class OPDS(object):
             author = db.match("SELECT AuthorName from authors WHERE AuthorID=?", (kwargs['authorid'],))
             author = make_unicode(author['AuthorName'])
             cmd = "SELECT BookName,BookDate,BookID,BookAdded,BookDesc,BookImg,BookFile from books WHERE "
+            args = ()
             if 'query' in kwargs:
-                cmd += f"instr(BookName, '{kwargs['query']}' > 0 AND "
+                cmd += "instr(BookName, ? > 0 AND "
+                args += (kwargs['query'], )
             cmd += "Status='Open' and AuthorID=? order by BookDate DESC"
-            results = db.select(cmd, (kwargs['authorid'],))
+            args += (kwargs['authorid'], )
+            results = db.select(cmd, args)
         finally:
             db.close()
         if limit:
@@ -1209,10 +1219,13 @@ class OPDS(object):
             author = db.match("SELECT AuthorName from authors WHERE AuthorID=?", (kwargs['authorid'],))
             author = make_unicode(author['AuthorName'])
             cmd = "SELECT BookName,BookDate,BookID,BookAdded,BookDesc,BookImg,AudioFile from books WHERE "
+            args = ()
             if 'query' in kwargs:
-                cmd += f"instr(BookName, '{kwargs['query']}') > 0 AND "
+                cmd += "instr(BookName, ?) > 0 AND "
+                args += (kwargs['query'], )
             cmd += "AudioStatus='Open' and AuthorID=? order by BookDate DESC"
-            results = db.select(cmd, (kwargs['authorid'],))
+            args += (kwargs['authorid'], )
+            results = db.select(cmd, args)
         finally:
             db.close()
         if limit:
@@ -1395,12 +1408,17 @@ class OPDS(object):
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Magazines'))
         cmd = "select Title,IssueID,IssueAcquired,IssueDate,IssueFile,Cover from issues "
         cmd += "where IssueFile != '' "
+        args = ()
         if 'query' in kwargs:
-            cmd += f"AND instr(Title, '{kwargs['query']}') > 0 "
+            cmd += "AND instr(Title, ?) > 0 "
+            args += (kwargs['query'], )
         cmd += "order by IssueAcquired DESC"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
         finally:
             db.close()
         if limit:
@@ -1463,12 +1481,17 @@ class OPDS(object):
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Comics'))
         cmd = "select comics.ComicID,Title,IssueID,IssueAcquired,IssueFile,Start from comics,comicissues "
         cmd += "where comics.ComicID = comicissues.ComicID and IssueFile != '' "
+        args = ()
         if 'query' in kwargs:
-            cmd += f"AND instr(Title, '{kwargs['query']}') > 0 "
+            cmd += "AND instr(Title, ?) > 0 "
+            args += (kwargs['query'], )
         cmd += "order by IssueAcquired DESC"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
         finally:
             db.close()
         if limit:
@@ -1489,7 +1512,7 @@ class OPDS(object):
                      'author': escape(title),
                      'type': mime_type(mag['IssueFile'])}
             if CONFIG.get_bool('OPDS_METAINFO'):
-                fname = os.path.splitext(mag['IssueFile'])[0]
+                fname = splitext(mag['IssueFile'])[0]
                 res = cache_img(ImageType.COMIC, issueid, fname + '.jpg')
                 entry['image'] = self.searchroot + '/' + res[0]
                 entry['thumbnail'] = entry['image']
@@ -1550,8 +1573,10 @@ class OPDS(object):
                              ftype='application/opensearchdescription+xml', rel='search', title='Search Books'))
         cmd = ("select BookName,BookID,BookLibrary,BookDate,BookImg,BookDesc,BookRate,BookAdded,BookFile,AuthorID "
                "from books where Status='Open' ")
+        args = ()
         if 'query' in kwargs:
-            cmd += f"AND instr(BookName, '{kwargs['query']}') > 0 "
+            cmd += "AND instr(BookName, ?) > 0 "
+            args += (kwargs['query'], )
         if sorder == 'Recent':
             cmd += "order by BookLibrary DESC, BookName ASC"
         if sorder == 'Rated':
@@ -1559,8 +1584,11 @@ class OPDS(object):
 
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
-            self.loggerdlcomms.debug(f"Initial select found {len(results)}")
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
+            self.dlcommslogger.debug(f"Initial select found {len(results)}")
 
             readfilter = None
             if sorder == 'Read' and 'user' in kwargs:
@@ -1568,13 +1596,13 @@ class OPDS(object):
             elif sorder == 'ToRead' and 'user' in kwargs:
                 readfilter = get_readinglist("ToRead", kwargs['user'])
             if readfilter is not None:
-                self.loggerdlcomms.debug(f"Filter length {len(readfilter)}")
+                self.dlcommslogger.debug(f"Filter length {len(readfilter)}")
                 filtered = []
                 for res in results:
                     if res['BookID'] in readfilter:
                         filtered.append(res)
                 results = filtered
-                self.loggerdlcomms.debug(f"Filter matches {len(results)}")
+                self.dlcommslogger.debug(f"Filter matches {len(results)}")
 
             if limit:
                 page = results[index:(index + limit)]
@@ -1676,8 +1704,10 @@ class OPDS(object):
 
         cmd = ("select BookName,BookID,AudioLibrary,BookDate,BookImg,BookDesc,BookRate,BookAdded,AuthorID"
                " from books WHERE ")
+        args = ()
         if 'query' in kwargs:
-            cmd += f"instr(BookName, '{kwargs['query']}') > 0 AND "
+            cmd += "instr(BookName, ?) > 0 AND "
+            args += (kwargs['query'], )
         cmd += "AudioStatus='Open'"
         if sorder == 'Recent':
             cmd += " order by AudioLibrary DESC, BookName ASC"
@@ -1685,7 +1715,10 @@ class OPDS(object):
             cmd += " order by BookRate DESC, BookDate DESC"
         db = database.DBConnection()
         try:
-            results = db.select(cmd)
+            if args:
+                results = db.select(cmd, args)
+            else:
+                results = db.select(cmd)
             if limit:
                 page = results[index:(index + limit)]
             else:
@@ -1739,10 +1772,7 @@ class OPDS(object):
 
     def _serve(self, **kwargs):
         if 'bookid' in kwargs:
-            if 'fmt' in kwargs:
-                fmt = kwargs['fmt']
-            else:
-                fmt = ''
+            fmt = kwargs.get('fmt', '')
             myid = kwargs['bookid']
             db = database.DBConnection()
             try:
@@ -1751,11 +1781,11 @@ class OPDS(object):
                 db.close()
             bookfile = res['BookFile']
             if fmt:
-                bookfile = os.path.splitext(bookfile)[0] + '.' + fmt
+                bookfile = splitext(bookfile)[0] + '.' + fmt
             self.filepath = bookfile
             self.filename = os.path.split(bookfile)[1]
             return
-        elif 'issueid' in kwargs:
+        if 'issueid' in kwargs:
             myid = kwargs['issueid']
             db = database.DBConnection()
             try:
@@ -1765,7 +1795,7 @@ class OPDS(object):
             self.filepath = res['IssueFile']
             self.filename = os.path.split(res['IssueFile'])[1]
             return
-        elif 'comicissueid' in kwargs:
+        if 'comicissueid' in kwargs:
             myid = kwargs['comicissueid']
             try:
                 comicid, issueid = myid.split('_')
@@ -1780,7 +1810,7 @@ class OPDS(object):
             self.filepath = res['IssueFile']
             self.filename = os.path.split(res['IssueFile'])[1]
             return
-        elif 'audioid' in kwargs:
+        if 'audioid' in kwargs:
             myid = kwargs['audioid']
             db = database.DBConnection()
             try:
@@ -1807,7 +1837,7 @@ class OPDS(object):
                             if CONFIG.is_valid_booktype(fname, booktype='audio'):
                                 cnt += 1
                                 target = fname
-                                bname, extn = os.path.splitext(fname)
+                                bname, extn = splitext(fname)
                                 if bname == singlefile:
                                     # found name matching the AudioSingleFile
                                     cnt = 1
@@ -1858,6 +1888,6 @@ def opdstime(datestr):
         return now()
     if len(datestr) == 10:
         return f"{datestr}{'T00:00:00Z'}"
-    elif len(datestr) == 19:
+    if len(datestr) == 19:
         return f"{datestr[:10]}T{datestr[11:]}Z"
     return now()

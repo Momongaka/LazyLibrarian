@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-import html5lib
 from bs4 import BeautifulSoup
 
-from lib.icrawler import Crawler, Parser, Feeder, ImageDownloader
+from lib.icrawler import Crawler, Feeder, ImageDownloader, Parser
 from lib.icrawler.builtin.filter import Filter
 
 
@@ -27,10 +25,9 @@ class BingFeeder(Feeder):
             prefix = '+filterui:color2-'
             if color == 'color':
                 return prefix + 'color'
-            elif color == 'blackandwhite':
+            if color == 'blackandwhite':
                 return prefix + 'bw'
-            else:
-                return prefix + 'FGcls_' + color.upper()
+            return prefix + 'FGcls_' + color.upper()
 
         color_choices = [
             'color', 'blackandwhite', 'red', 'orange', 'yellow', 'green',
@@ -42,17 +39,16 @@ class BingFeeder(Feeder):
         def format_size(size):
             if size in ['large', 'medium', 'small']:
                 return '+filterui:imagesize-' + size
-            elif size == 'extralarge':
+            if size == 'extralarge':
                 return '+filterui:imagesize-wallpaper'
-            elif size.startswith('>'):
+            if size.startswith('>'):
                 wh = size[1:].split('x')
                 assert len(wh) == 2
                 return '+filterui:imagesize-custom_{}_{}'.format(*wh)
-            else:
-                raise ValueError(
-                    'filter option "size" must be one of the following: '
-                    'extralarge, large, medium, small, >[]x[] '
-                    '([] is an integer)')
+            raise ValueError(
+                'filter option "size" must be one of the following: '
+                'extralarge, large, medium, small, >[]x[] '
+                '([] is an integer)')
 
         search_filter.add_rule('size', format_size)
 
@@ -66,8 +62,8 @@ class BingFeeder(Feeder):
             'commercial,modify': 'license-L2_L3'
         }
 
-        def format_license(license):
-            return '+filterui:' + license_code[license]
+        def format_license(lic):
+            return '+filterui:' + license_code[lic]
 
         license_choices = list(license_code.keys())
         search_filter.add_rule('license', format_license, license_choices)
@@ -99,7 +95,7 @@ class BingFeeder(Feeder):
         return search_filter
 
     def feed(self, keyword, offset, max_num, filters=None):
-        base_url = 'https://www.bing.com/images/async?q={}&first={}'
+        base_url = 'https://www.bing.com/images/async?q={}&safesearch=strict&first={}'
         self.filter = self.get_filter()
         filter_str = self.filter.apply(filters)
         filter_str = '&qft=' + filter_str if filter_str else ''
@@ -107,7 +103,7 @@ class BingFeeder(Feeder):
         for i in range(offset, offset + max_num, 20):
             url = base_url.format(keyword, i) + filter_str
             self.out_queue.put(url)
-            self.logger.debug('put url to url_queue: {}'.format(url))
+            self.logger.debug(f'put url to url_queue: {url}')
 
 
 class BingParser(Parser):
@@ -121,7 +117,7 @@ class BingParser(Parser):
                 img_url = str(div).rsplit('"murl":"')[1].split('"')[0]
             except IndexError:
                 continue
-            yield dict(file_url=img_url)
+            yield {'file_url': img_url}
 
 
 class BingImageCrawler(Crawler):
@@ -132,8 +128,7 @@ class BingImageCrawler(Crawler):
                  downloader_cls=ImageDownloader,
                  *args,
                  **kwargs):
-        super(BingImageCrawler, self).__init__(feeder_cls, parser_cls,
-                                               downloader_cls, *args, **kwargs)
+        super().__init__(feeder_cls, parser_cls, downloader_cls, *args, **kwargs)
 
     def crawl(self,
               keyword,
@@ -149,19 +144,17 @@ class BingImageCrawler(Crawler):
                 self.logger.error('Offset cannot exceed 1000, otherwise you '
                                   'will get duplicated searching results.')
                 return
-            elif max_num > 1000:
+            if max_num > 1000:
                 max_num = 1000 - offset
                 self.logger.warning('Due to Bing\'s limitation, you can only '
                                     'get the first 1000 result. "max_num" has '
                                     'been automatically set to %d',
                                     1000 - offset)
-        feeder_kwargs = dict(
-            keyword=keyword, offset=offset, max_num=max_num, filters=filters)
-        downloader_kwargs = dict(
-            max_num=max_num,
-            min_size=min_size,
-            max_size=max_size,
-            file_idx_offset=file_idx_offset,
-            overwrite=overwrite)
-        super(BingImageCrawler, self).crawl(
-            feeder_kwargs=feeder_kwargs, downloader_kwargs=downloader_kwargs)
+        feeder_kwargs = {"keyword": keyword, "offset":offset, "max_num": max_num, "filters": filters}
+        downloader_kwargs = {
+            "max_num": max_num,
+            "min_size": min_size,
+            "max_size": max_size,
+            "file_idx_offset": file_idx_offset,
+            "overwrite": overwrite}
+        super().crawl(feeder_kwargs=feeder_kwargs, downloader_kwargs=downloader_kwargs)

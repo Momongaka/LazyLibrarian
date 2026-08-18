@@ -50,7 +50,7 @@ import lazylibrarian
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.configtypes import ConfigDict
 from lazylibrarian.filesystem import DIRS, path_isfile, remove_file
-from lazylibrarian.formatter import today, size_in_bytes, md5_utf8, check_int
+from lazylibrarian.formatter import check_int, md5_utf8, sanitize, size_in_bytes, today
 
 # Prevents a common UnicodeDecodeError when downloading from many sources that don't use utf-8
 if irc_client:
@@ -79,7 +79,8 @@ try:
             self.file = None
             self.my_dcc = None
 
-        def on_nicknameinuse(self, c, err):
+        @staticmethod
+        def on_nicknameinuse(c, err):
             # handle username conflicts
             c.nick(f"{c.get_nickname()}_")
 
@@ -118,6 +119,7 @@ try:
                 return
             self.logger.debug(f"peer sending file on port {str(peer_port)}")
             self.filename = f"{self.localfolder}/{self.filename}"
+            self.filename = sanitize(self.filename, is_folder_or_file=True)
             self.logger.debug(f"writing file {self.filename}")
             self.file = open(self.filename, "wb")
             peer_address = irc_client.ip_numstr_to_quad(peer_address)
@@ -142,7 +144,6 @@ try:
 except Exception as e:
     logger = logging.getLogger(__name__)
     logger.debug(f"IRC module is disabled: {str(e)}")
-    pass
 
 
 def irc_query(provider: ConfigDict, filename, searchterm, searchtype, cache=True):
@@ -184,13 +185,14 @@ def irc_query(provider: ConfigDict, filename, searchterm, searchtype, cache=True
         if valid_cache:
             lazylibrarian.CACHE_HIT = int(lazylibrarian.CACHE_HIT) + 1
             cachelogger.debug(f"CacheHandler: Returning CACHED response {hashfilename} for {searchterm}")
-            return
+            return None
 
         lazylibrarian.CACHE_MISS = int(lazylibrarian.CACHE_MISS) + 1
 
     bot = IrcBot(searchterm, cache_location, provider['CHANNEL'], provider['BOTNICK'], filename,
                  provider['SERVER'], 6667, searchtype)
     bot.start()
+    return None
 
 
 def irc_results(provider: ConfigDict, fname,):

@@ -7,8 +7,6 @@ For more information, see:
 https://github.com/bipinkrish/Zlibrary-API/
 """
 
-# annotations needed for python3.8
-from __future__ import annotations
 import requests
 
 
@@ -19,6 +17,7 @@ class Zlibrary:
         password: str = None,
         remix_userid: [int, str] = None,
         remix_userkey: str = None,
+        domain: str =None,
     ):
         self.__email: str
         self.__name: str
@@ -28,6 +27,7 @@ class Zlibrary:
         self.__domain = "1lib.sk"
 
         self.__loggedin = False
+        self.__login_status = {}
         self.__headers = {
             "Content-Type": "application/x-www-form-urlencoded",
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/"
@@ -39,11 +39,15 @@ class Zlibrary:
         self.__cookies = {
             "siteLanguageV2": "en",
         }
-
+        if domain is not None:
+            self.__domain = domain
         if email is not None and password is not None:
-            self.login(email, password)
+            self.__login_status = self.login(email, password)
         elif remix_userid is not None and remix_userkey is not None:
-            self.loginWithToken(remix_userid, remix_userkey)
+            self.__login_status = self.loginWithToken(remix_userid, remix_userkey)
+
+    def login_status(self) -> dict[str, str]:
+        return self.__login_status
 
     def __setValues(self, response) -> dict[str, str]:
         if not response["success"]:
@@ -105,16 +109,18 @@ class Zlibrary:
         if 'languages' in data:
             languages = data['languages'].split(',')
             data.pop('languages')
-            cnt = 0
-            for item in languages:
+            for cnt,item in enumerate(languages):
                 data[f'languages[{cnt}]'] = item.lower().strip()
-                cnt += 1
-        return requests.post(
+        res = requests.post(
             "https://" + self.__domain + url,
             data=data,
             cookies=self.__cookies,
             headers=self.__headers,
-        ).json()
+        )
+        if res.status_code == 200:
+            return res.json()
+        else:
+            return {'success': False, 'status': res.status_code}
 
     def __makeGetRequest(
         self, url: str, params=None, cookies=None
@@ -125,12 +131,16 @@ class Zlibrary:
             print("Not logged in")
             return None
 
-        return requests.get(
+        res = requests.get(
             "https://" + self.__domain + url,
             params=params,
             cookies=self.__cookies if cookies is None else cookies,
             headers=self.__headers,
-        ).json()
+        )
+        if res.status_code == 200:
+            return res.json()
+        else:
+            return {'success': False, 'status': res.status_code}
 
     def getProfile(self) -> dict[str, str]:
         return self.__makeGetRequest("/eapi/user/profile")
@@ -154,7 +164,7 @@ class Zlibrary:
     def unsaveUserBook(self, bookid: [int, str]) -> dict[str, str]:
         return self.__makeGetRequest(f"/eapi/user/book/{bookid}/unsave")
 
-    def getBookForamt(self, bookid: [int, str], hashid: str) -> dict[str, str]:
+    def getBookFormat(self, bookid: [int, str], hashid: str) -> dict[str, str]:
         return self.__makeGetRequest(f"/eapi/book/{bookid}/{hashid}/formats")
 
     def getDonations(self) -> dict[str, str]:

@@ -6,17 +6,18 @@
 import logging
 
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
 from lazylibrarian.formatter import plural
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 try:
     # noinspection PyUnresolvedReferences
     import apprise
+
     # noinspection PyUnresolvedReferences
-    from apprise import NotifyType, AppriseAsset, Apprise
+    from apprise import Apprise, AppriseAsset, NotifyType
 
     APPRISE_CANLOAD = getattr(apprise, '__version__', 'Unknown Version')
-except ImportError as e:
+except ImportError:
     APPRISE_CANLOAD = ''
 
 
@@ -48,13 +49,10 @@ class AppriseNotifier:
             apobj.add(url)
         else:
             for item in CONFIG.providers('APPRISE'):
-                if event == notifyStrings[NOTIFY_DOWNLOAD] and item['DOWNLOAD'] and item['URL']:
-                    apobj.add(item['URL'])
-                elif event == notifyStrings[NOTIFY_SNATCH] and item['SNATCH'] and item['URL']:
-                    apobj.add(item['URL'])
-                elif event == notifyStrings[NOTIFY_FAIL] and item['SNATCH'] and item['URL']:
-                    apobj.add(item['URL'])
-                elif event == 'Test' and item['URL']:
+                if (event == notify_strings[NOTIFY_DOWNLOAD] and item['DOWNLOAD'] and item['URL']
+                        or event == notify_strings[NOTIFY_SNATCH] and item['SNATCH'] and item['URL']
+                        or event == notify_strings[NOTIFY_FAIL] and item['SNATCH'] and item['URL']
+                        or event == 'Test' and item['URL']):
                     apobj.add(item['URL'])
 
         if apobj is None:
@@ -72,9 +70,9 @@ class AppriseNotifier:
         logger.debug(f"Apprise: url: {str(url)}")
         logger.debug(f"Using {len(apobj)} notification {plural(len(apobj), 'service')}")
         logger.debug(str(asset.details()))
-        if event == notifyStrings[NOTIFY_SNATCH]:
+        if event == notify_strings[NOTIFY_SNATCH]:
             notifytype = NotifyType.INFO
-        elif event == notifyStrings[NOTIFY_DOWNLOAD]:
+        elif event == notify_strings[NOTIFY_DOWNLOAD]:
             notifytype = NotifyType.SUCCESS
         else:
             notifytype = NotifyType.WARNING
@@ -96,18 +94,15 @@ class AppriseNotifier:
     def notify_snatch(self, title, fail=False):
         if APPRISE_CANLOAD:
             if fail:
-                return self._notify(event=notifyStrings[NOTIFY_FAIL], message=title, url=None)
-            else:
-                return self._notify(event=notifyStrings[NOTIFY_SNATCH], message=title, url=None)
-        else:
-            return True
+                return self._notify(event=notify_strings[NOTIFY_FAIL], message=title, url=None)
+            return self._notify(event=notify_strings[NOTIFY_SNATCH], message=title, url=None)
+        return True
 
     def notify_download(self, title):
         # noinspection PyUnresolvedReferences
         if APPRISE_CANLOAD:
-            return self._notify(event=notifyStrings[NOTIFY_DOWNLOAD], message=title, url=None)
-        else:
-            return True
+            return self._notify(event=notify_strings[NOTIFY_DOWNLOAD], message=title, url=None)
+        return True
 
     def test_notify(self, url=None):
         return self._notify(event="Test", message="Testing Apprise settings from LazyLibrarian", url=url)

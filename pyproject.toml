@@ -7,10 +7,10 @@ where = ["lazylibrarian"]
 
 [project]
 name = "LazyLibrarian"
-version = "2025.01.09"
+version = "2026.05.25"
 description = "LazyLibrarian is a SickBeard, CouchPotato, Headphones-like application for ebooks, audiobooks and magazines"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
@@ -19,7 +19,7 @@ dependencies = [
     'bs4',
     'html5lib',
     'webencodings',
-    'requests[use_chardet_on_py3]',
+    "requests[socks,use-chardet-on-py3]",
     'urllib3',
     'pyOpenSSL',
     'cherrypy',
@@ -38,6 +38,10 @@ dependencies = [
     'apscheduler',
     'tzdata',
     'slskd_api',
+    'lxml',
+    'iso639-lang',
+    'xmltodict',
+    'googletrans',
 ]
 
 [project.urls]
@@ -53,3 +57,86 @@ filterwarnings = [
     # Ignore numerous warnings from cherrypy
     "ignore::DeprecationWarning: invalid escape sequence"
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+# Exclude directories
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    "migrations",
+]
+
+[tool.ruff.lint]
+# Select rule sets - focus on errors and important warnings
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes errors (undefined names, unused imports, etc.)
+    "W",   # pycodestyle warnings
+    "I",   # isort (import sorting)
+    "N",   # pep8-naming
+    "UP",  # pyupgrade (modern Python idioms)
+    "B",   # flake8-bugbear (likely bugs)
+    "A",   # flake8-builtins (shadowing builtins)
+    "C4",  # flake8-comprehensions
+    "PIE", # flake8-pie (misc lints)
+    "RET", # flake8-return
+    "SIM", # flake8-simplify
+]
+
+# Ignore rules that are too strict or handled by formatter
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "E741",   # ambiguous variable name (i, l, O) - common in loops
+    "N802",   # function name should be lowercase (allow existing style)
+    "N803",   # argument name should be lowercase
+    "N806",   # variable should be lowercase
+    "B008",   # function calls in argument defaults
+    "RET504", # unnecessary variable assignment before return
+    "SIM108", # use ternary operator (readability preference)
+    "SIM118", # use key in dict` instead of `key in dict.keys() (unhashable type if nexted dicts)
+    "N999",   # Invalid module name
+
+]
+
+# Per-file ignores
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]  # Unused imports in __init__.py are often intentional
+"test_*.py" = ["S101"]            # Allow assert in tests
+"unittests/*.py" = ["S101"]           # Allow assert in tests
+"*_legacy.py" = ["UP031", "SIM102", "C416"]  # preserve legacy files unchanged
+"bookrename.py" = ["SIM115"]  # open without context manager as file is optional
+"ircbot.py" = ["SIM115"]  # open without context manager as file preserved between functions
+"dbupgrade.py" = ["SIM115"]  # open without context manager as needed for tests
+"csvfile.py" = ["SIM115"]  # csv.reader does not support context manager protocol
+
+[tool.ruff.lint.isort]
+known-first-party = ["lazylibrarian"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.format]
+# Ruff's formatter is compatible with Black
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

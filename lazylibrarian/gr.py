@@ -11,6 +11,7 @@
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+import re
 import time
 import traceback
 import unicodedata
@@ -19,26 +20,51 @@ from urllib.parse import quote, quote_plus, urlencode
 from rapidfuzz import fuzz
 
 import lazylibrarian
-from lazylibrarian import database, ROLE
-from lazylibrarian.bookwork import get_work_series, delete_empty_series, \
-    set_series, get_status, isbn_from_words, isbnlang, get_book_pubdate, get_gb_info, \
-    get_gr_genres, set_genres, genre_filter, is_set_or_part
+from lazylibrarian import ROLE, database
+from lazylibrarian.bookwork import (
+    delete_empty_series,
+    genre_filter,
+    get_book_pubdate,
+    get_gb_info,
+    get_gr_genres,
+    get_status,
+    get_work_series,
+    is_set_or_part,
+    isbn_from_words,
+    isbnlang,
+    language_from_words,
+    set_genres,
+    set_series,
+)
 from lazylibrarian.cache import gr_xml_request
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.formatter import plural, today, replace_all, book_series, unaccented, split_title, get_list, \
-    clean_name, is_valid_isbn, format_author_name, check_int, make_unicode, check_year, check_float, \
-    make_utf8bytes, thread_name
+from lazylibrarian.formatter import (
+    book_series,
+    check_float,
+    check_int,
+    check_year,
+    clean_name,
+    format_author_name,
+    get_list,
+    is_valid_isbn,
+    make_unicode,
+    make_utf8bytes,
+    plural,
+    replace_all,
+    split_title,
+    thread_name,
+    today,
+    unaccented,
+)
 from lazylibrarian.images import cache_bookimg, get_book_cover
 
 
 class GoodReads:
     # https://www.goodreads.com/api/
 
-    def __init__(self, name=None):
-        self.name = make_unicode(name)
-        # self.type = type
+    def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.loggersearching = logging.getLogger('special.searching')
+        self.searchinglogger = logging.getLogger('special.searching')
         if not CONFIG['GR_API']:
             self.logger.warning('No Goodreads API key, check config')
         self.params = {"key": CONFIG['GR_API']}
@@ -51,16 +77,16 @@ class GoodReads:
             searchtitle = ''
             searchauthorname = ''
 
-            if ' <ll> ' in searchterm:  # special token separates title from author
-                searchtitle, searchauthorname = searchterm.split(' <ll> ')
-                searchterm = searchterm.replace(' <ll> ', ' ')
+            if '<ll>' in searchterm:  # special token separates title from author
+                searchtitle, searchauthorname = searchterm.split('<ll>')
+                searchterm = searchterm.replace('<ll>', ' ')
                 searchtitle = searchtitle.split(' (')[0]  # without any series info
 
-            url = quote_plus(make_utf8bytes(searchterm)[0])
+            url = quote_plus(searchterm.encode("utf-8"))
             set_url = '/'.join([CONFIG['GR_URL'],
                                 f"search.xml?q={url}&{urlencode(self.params)}"])
             self.logger.debug(f'Now searching GoodReads API with searchterm: {searchterm}')
-            self.loggersearching.debug(set_url)
+            self.searchinglogger.debug(set_url)
 
             resultcount = 0
             try:
@@ -84,40 +110,40 @@ class GoodReads:
                     for item in rootxml.iter('books'):
                         contents = item.attrib
                     for author in resultxml:
-                        # try:
-                        #     if author.find('original_publication_year').text is None:
-                        #         bookdate = "0000"
-                        #     elif check_year(author.find('original_publication_year').text, past=1800, future=0):
-                        #         bookdate = author.find('original_publication_year').text
-                        #         try:
-                        #             bookmonth = check_int(author.find('original_publication_month').text, 0)
-                        #             bookday = check_int(author.find('original_publication_day').text, 0)
-                        #             if bookmonth and bookday:
-                        #                 bookdate = "%s-%02d-%02d" % (bookdate, bookmonth, bookday)
-                        #         except (KeyError, AttributeError):
-                        #             pass
-                        #     else:
-                        #         bookdate = "0000"
-                        # except (KeyError, AttributeError):
-                        #     bookdate = "0000"
-                        #
-                        # try:
-                        #     author_name_result = author.find('./best_book/author/name').text
-                        #     # Goodreads sometimes puts extra whitespace in the author names!
-                        #     author_name_result = ' '.join(author_name_result.split())
-                        # except (KeyError, AttributeError):
-                        #     author_name_result = ""
-                        #
-                        # booksub = ""
-                        # bookpub = ""
-                        # booklang = "Unknown"
-                        #
-                        # try:
-                        #     bookimg = author.find('./best_book/image_url').text
-                        #     if not bookimg or 'nocover' in bookimg or 'nophoto' in bookimg:
-                        #         bookimg = 'images/nocover.png'
-                        # except (KeyError, AttributeError):
-                        #     bookimg = 'images/nocover.png'
+                        try:
+                            if author.find('original_publication_year').text is None:
+                                bookdate = "0000"
+                            elif check_year(author.find('original_publication_year').text, past=1800, future=0):
+                                bookdate = author.find('original_publication_year').text
+                                try:
+                                    bookmonth = check_int(author.find('original_publication_month').text, 0)
+                                    bookday = check_int(author.find('original_publication_day').text, 0)
+                                    if bookmonth and bookday:
+                                        bookdate = f"{bookdate}-{bookmonth:02d}-{bookday:02d}"
+                                except (KeyError, AttributeError):
+                                    pass
+                            else:
+                                bookdate = "0000"
+                        except (KeyError, AttributeError):
+                            bookdate = "0000"
+
+                        try:
+                            author_name_result = author.find('./best_book/author/name').text
+                            # Goodreads sometimes puts extra whitespace in the author names!
+                            author_name_result = ' '.join(author_name_result.split())
+                        except (KeyError, AttributeError):
+                            author_name_result = ""
+
+                        booksub = ""
+                        bookpub = ""
+                        booklang = "Unknown"
+
+                        try:
+                            bookimg = author.find('./best_book/image_url').text
+                            if not bookimg or 'nocover' in bookimg or 'nophoto' in bookimg:
+                                bookimg = 'images/nocover.png'
+                        except (KeyError, AttributeError):
+                            bookimg = 'images/nocover.png'
 
                         try:
                             bookrate = check_float(author.find('average_rating').text, 0)
@@ -160,13 +186,13 @@ class GoodReads:
                         if searchtitle:
                             if book_title.endswith(')'):
                                 book_title = book_title.rsplit(' (', 1)[0]
-                            book_fuzz = fuzz.token_set_ratio(book_title, searchtitle)
+                            book_fuzz = fuzz.token_set_ratio(book_title.lower(), searchtitle.lower())
                             # lose a point for each extra word in the fuzzy matches so we get the closest match
                             words = len(get_list(book_title))
                             words -= len(get_list(searchtitle))
                             book_fuzz -= abs(words)
                         else:
-                            book_fuzz = fuzz.token_set_ratio(book_title, searchterm)
+                            book_fuzz = fuzz.token_set_ratio(book_title.lower(), searchterm.lower())
                             words = len(get_list(book_title))
                             words -= len(get_list(searchterm))
                             book_fuzz -= abs(words)
@@ -227,7 +253,7 @@ class GoodReads:
                     else:
                         url = f"{set_url}&page={str(loop_count)}"
                         resultxml = None
-                        self.loggersearching.debug(set_url)
+                        self.searchinglogger.debug(set_url)
                         try:
                             rootxml, in_cache = gr_xml_request(url)
                             if rootxml is None:
@@ -240,16 +266,15 @@ class GoodReads:
                             resultxml = None
                             self.logger.error(f"{type(e).__name__} finding page {loop_count} of results: {str(e)}")
 
-                    if resultxml:
-                        if all(False for _ in resultxml):  # returns True if iterator is empty
-                            resultxml = None
+                    if resultxml and all(False for _ in resultxml):  # returns True if iterator is empty
+                        resultxml = None
 
             except Exception as err:
                 # noinspection PyUnresolvedReferences
-                if hasattr(err, 'code') and err.code == 404:
+                if hasattr(err, 'code') and err.code == 404:  # pylint: disable=no-member
                     self.logger.error('Received a 404 error when searching for author')
                 # noinspection PyUnresolvedReferences
-                elif hasattr(err, 'code') and err.code == 403:
+                elif hasattr(err, 'code') and err.code == 403:  # pylint: disable=no-member
                     self.logger.warning('Access to api is denied 403: usage exceeded')
                 else:
                     self.logger.error(f'An unexpected error has occurred when searching for an author: {str(err)}')
@@ -264,8 +289,8 @@ class GoodReads:
         except Exception:
             self.logger.error(f'Unhandled exception in GR.find_results: {traceback.format_exc()}')
 
-    def find_author_id(self, refresh=False):
-        author = self.name
+    def find_author_id(self, authorname='', title='', refresh=False):
+        author = authorname
         if '<ll>' in author:
             author, _ = author.split('<ll>')
         author = format_author_name(unaccented(author, only_ascii='_'),
@@ -277,7 +302,7 @@ class GoodReads:
         url = '/'.join([CONFIG['GR_URL'], 'api/author_url/'])
         try:
             url += f"{quote(make_utf8bytes(author)[0])}?{urlencode(self.params)}"
-            self.loggersearching.debug(url)
+            self.searchinglogger.debug(url)
             rootxml, _ = gr_xml_request(url, use_cache=not refresh)
         except Exception as e:
             self.logger.error(f"{type(e).__name__} finding authorid: {url}, {str(e)}")
@@ -293,10 +318,10 @@ class GoodReads:
             return {}
 
         # In spite of how this looks, goodreads only returns one result, even if there are multiple matches
-        # we just have to hope we get the right one. eg search for "James Lovelock" returns "James E. Lovelock"
+        # we just have to hope we get the right one. e.g. search for "James Lovelock" returns "James E. Lovelock"
         # who only has one book listed under googlebooks, the rest are under "James Lovelock"
         # goodreads has all his books under "James E. Lovelock". Can't come up with a good solution yet.
-        # For now we'll have to let the user handle this by selecting/adding the author manually
+        # For now, we'll have to let the user handle this by selecting/adding the author manually
         for res in resultxml:
             authorid = res.attrib.get("id")
             authorname = res.find('name').text
@@ -312,13 +337,18 @@ class GoodReads:
             self.logger.debug(f"Fuzz failed: {round(match, 2)} [{author}][{authorname}]")
         return {}
 
-    def get_author_info(self, authorid=None):
+    def get_author_image(self, authorid=None, authorname=None):
+        res = self.get_author_info(authorid=authorid, authorname=authorname)
+        return res.get('authorimg', '')
 
+    def get_author_info(self, authorid=None, authorname=None):
+        if not authorid:
+            return {}
         url = '/'.join([CONFIG['GR_URL'],
                         f"author/show/{authorid}.xml?{urlencode(self.params)}"])
 
         try:
-            self.loggersearching.debug(url)
+            self.searchinglogger.debug(url)
             rootxml, _ = gr_xml_request(url)
         except Exception as e:
             self.logger.error(f"{type(e).__name__} getting author info: {str(e)}")
@@ -335,9 +365,11 @@ class GoodReads:
         # added authorname to author_dict - this holds the intact name preferred by GR
         # except GR messes up names like "L. E. Modesitt, Jr." where it returns <name>Jr., L. E. Modesitt</name>
         authorname = format_author_name(resultxml[1].text, postfix=get_list(CONFIG.get_csv('NAME_POSTFIX')))
+        if resultxml[0].text:
+            authorid = resultxml[0].text
         self.logger.debug(f"[{authorname}] Returning GR info for authorID: {authorid}")
         author_dict = {
-            'authorid': resultxml[0].text,
+            'authorid': authorid,
             'authorlink': resultxml.find('link').text,
             'authorimg': resultxml.find('image_url').text,
             'authorborn': resultxml.find('born_at').text,
@@ -382,6 +414,13 @@ class GoodReads:
 
         return mydict
 
+    @staticmethod
+    def role_is_author(role):
+        if not role:
+            role = 'none'
+        role = role.lower()
+        return any(match in role for match in ['none', 'author', 'writer', 'creator', 'pseudonym', 'pen name'])
+
     def get_author_books(self, authorid=None, authorname=None, bookstatus="Skipped", audiostatus='Skipped',
                          entrystatus='Active', refresh=False, reason='gr.get_author_books'):
         # noinspection PyBroadException
@@ -409,7 +448,7 @@ class GoodReads:
             url = '/'.join([CONFIG['GR_URL'],
                             f"author/list/{gr_id}.xml?{urlencode(self.params)}"])
             try:
-                self.loggersearching.debug(url)
+                self.searchinglogger.debug(url)
                 rootxml, in_cache = gr_xml_request(url, use_cache=not refresh)
             except Exception as e:
                 self.logger.error(f"{type(e).__name__} fetching author books: {str(e)}")
@@ -437,6 +476,16 @@ class GoodReads:
             isbn_count = 0
             cover_time = 0
             isbn_time = 0
+            # GoodReads' CDN throttles rapid successive page-scrape/API requests
+            # (observed live: 10 fetches in a row with no delay between them all
+            # failed with a 202/cloudfront error or an AWS WAF challenge, even
+            # though a single isolated request succeeds fine) - cap live lookups
+            # per refresh and space them out below, so covers/dates converge
+            # gradually across refreshes instead of a whole batch failing together.
+            cover_lookups_this_refresh = 0
+            cover_lookups_cap = 10
+            pubdate_lookups_this_refresh = 0
+            pubdate_lookups_cap = 10
             auth_start = time.time()
             # these are reject reasons we might want to override, so optionally add to database as "ignored"
             ignorable = ['future', 'date', 'isbn', 'set', 'word', 'publisher']
@@ -464,6 +513,7 @@ class GoodReads:
                         if lazylibrarian.STOPTHREADS and threadname == "AUTHORUPDATE":
                             self.logger.debug(f"Aborting {threadname}")
                             break
+                        lang_source = ''
                         total_count += 1
                         rejected = []
                         book_language = "Unknown"
@@ -491,42 +541,56 @@ class GoodReads:
                             mn = check_int(bookdict['pub_month'], 0)
                             dy = check_int(bookdict['pub_day'], 0)
                             if mn and dy:
-                                bookdate = "%s-%02d-%02d" % (bookdate, mn, dy)
+                                bookdate = f"{bookdate}-{mn:02d}-{dy:02d}"
 
                         if not bookname:
                             self.logger.debug(f'Rejecting bookid {bookid} for {author_name_result}, no bookname')
                             rejected.append(['name', 'No bookname'])
 
-                        if bookpub:
-                            if bookpub.lower() in get_list(CONFIG['REJECT_PUBLISHER']):
-                                self.logger.warning(f"Ignoring {bookname}: Publisher {bookpub}")
-                                rejected.append(['publisher', bookpub])
+                        if bookpub and bookpub.lower() in get_list(CONFIG['REJECT_PUBLISHER']):
+                            self.logger.warning(f"Ignoring {bookname}: Publisher {bookpub}")
+                            rejected.append(['publisher', bookpub])
 
                         if not bookimg or 'nocover' in bookimg or 'nophoto' in bookimg:
                             bookimg = 'images/nocover.png'
 
                         if book_language == "Unknown":
                             book_language = ""
-                            if isbn13:
+                            detected_lang, confidence = language_from_words(bookname)
+                            if detected_lang and confidence > 0.6:
+                                book_language = detected_lang
+                                lang_source = 'language_from_words'
+
+                            if not book_language and isbn13:
                                 find_field = 'isbn13'
                                 book_language, cache_hit, thing_hit = isbnlang(isbn13)
+                                if book_language:
+                                    lang_source = f'isbn13 {isbn13}'
                                 if thing_hit:
                                     lt_lang_hits += 1
                             if not book_language and isbn10:
                                 find_field = 'isbn'
                                 book_language, cache_hit, thing_hit = isbnlang(isbn10)
+                                if book_language:
+                                    lang_source = f'isbn10 {isbn10}'
                                 if thing_hit:
                                     lt_lang_hits += 1
 
-                        if not book_language or book_language == "Unknown":
+                        if not book_language or book_language == "Unknown" or not bookdate or bookdate == '0000':
                             # still  no earlier match, we'll have to search the goodreads api
                             try:
                                 if book.find(find_field).text:
-                                    book_url = '/'.join([CONFIG['GR_URL'],
-                                                         f"book/show?id={book.find(find_field).text}"
-                                                         f"&{urlencode(self.params)}"])
+                                    if find_field == 'id':
+                                        book_url = '/'.join([CONFIG['GR_URL'],
+                                                             f"book/show?id={book.find(find_field).text}"
+                                                             f"&{urlencode(self.params)}"])
+                                    else:
+                                        book_url = '/'.join([CONFIG['GR_URL'],
+                                                             f"book/isbn/{book.find(find_field).text}"
+                                                             f"?{urlencode(self.params)}"])
                                     self.logger.debug(f"Book URL: {book_url}")
-                                    book_language = ""
+                                    if book_language == "Unknown":
+                                        book_language = ""
                                     try:
                                         book_rootxml, in_cache = gr_xml_request(book_url)
                                         if book_rootxml is None:
@@ -534,7 +598,10 @@ class GoodReads:
                                                               f'{book.find(find_field).text}')
                                         else:
                                             try:
-                                                book_language = book_rootxml.find('./book/language_code').text
+                                                bk_language = book_rootxml.find('./book/language_code').text
+                                                if bk_language:
+                                                    book_language = bk_language
+                                                    lang_source = f'bookpage {book_url}'
                                             except Exception as e:
                                                 self.logger.error(
                                                     f"{type(e).__name__} finding language_code in book xml: "
@@ -550,9 +617,6 @@ class GoodReads:
                                                     isbnhead = res[3:6]
                                                 except Exception:
                                                     isbnhead = ''
-                                            # if bookLanguage and not isbnhead:
-                                            #     print(BOOK_URL)
-
                                             # might as well get the original publication date from here
                                             # noinspection PyBroadException
                                             try:
@@ -565,10 +629,9 @@ class GoodReads:
                                                         dy = check_int(book_rootxml.find(
                                                             './book/work/original_publication_day').text, 0)
                                                         if mn and dy:
-                                                            bookdate = "%s-%02d-%02d" % (bookdate, mn, dy)
+                                                            bookdate = f"{bookdate}-{mn:02d}-{dy:02d}"
                                                     except (KeyError, AttributeError):
                                                         self.logger.debug("No extended date info")
-                                                        pass
                                             except Exception:
                                                 pass
 
@@ -598,30 +661,29 @@ class GoodReads:
                             except Exception as e:
                                 self.logger.error(f"Goodreads language search failed: {type(e).__name__} {str(e)}")
 
-                        if not isbnhead and CONFIG.get_bool('ISBN_LOOKUP'):
+                        if not isbnhead and CONFIG.get_bool('ISBN_LOOKUP') and bookname or shortname:
                             # try lookup by name
-                            if bookname or shortname:
-                                if shortname:
-                                    name = replace_all(shortname, {':': ' ', '"': '', '\'': ''}).strip()
+                            if shortname:
+                                name = replace_all(shortname, {':': ' ', '"': '', '\'': ''}).strip()
+                            else:
+                                name = replace_all(bookname, {':': ' ', '"': '', '\'': ''}).strip()
+                            try:
+                                isbn_count += 1
+                                start = time.time()
+                                res = isbn_from_words(
+                                    f"{unaccented(name, only_ascii=False)} "
+                                    f"{unaccented(author_name_result, only_ascii=False)}")
+                                isbn_time += (time.time() - start)
+                            except Exception as e:
+                                res = None
+                                self.logger.warning(f"Error from isbn: {e}")
+                            if res:
+                                self.logger.debug(f"isbn found {res} for {bookid}")
+                                bookisbn = res
+                                if len(res) == 13:
+                                    isbnhead = res[3:6]
                                 else:
-                                    name = replace_all(bookname, {':': ' ', '"': '', '\'': ''}).strip()
-                                try:
-                                    isbn_count += 1
-                                    start = time.time()
-                                    res = isbn_from_words(
-                                        f"{unaccented(name, only_ascii=False)} "
-                                        f"{unaccented(author_name_result, only_ascii=False)}")
-                                    isbn_time += (time.time() - start)
-                                except Exception as e:
-                                    res = None
-                                    self.logger.warning(f"Error from isbn: {e}")
-                                if res:
-                                    self.logger.debug(f"isbn found {res} for {bookid}")
-                                    bookisbn = res
-                                    if len(res) == 13:
-                                        isbnhead = res[3:6]
-                                    else:
-                                        isbnhead = res[0:3]
+                                    isbnhead = res[0:3]
 
                         if not isbnhead and CONFIG.get_bool('NO_ISBN'):
                             rejected.append(['isbn', 'No ISBN'])
@@ -629,18 +691,15 @@ class GoodReads:
                         if not book_language:
                             book_language = 'Unknown'
 
-                        if "All" not in valid_langs:  # do we care about language
-                            if book_language not in valid_langs:
-                                rejected.append(['lang', f'Invalid language [{book_language}]'])
+                        if "All" not in valid_langs and book_language not in valid_langs:
+                            rejected.append(['lang', f'Invalid language [{book_language}]'])
 
-                        if CONFIG.get_bool('NO_FUTURE'):
-                            if bookdate and bookdate > today()[:len(bookdate)]:
-                                rejected.append(['future', f'Future publication date [{bookdate}]'])
+                        if CONFIG.get_bool('NO_FUTURE') and bookdate and bookdate > today()[:len(bookdate)]:
+                            rejected.append(['future', f'Future publication date [{bookdate}]'])
 
-                        if CONFIG.get_bool('NO_PUBDATE'):
-                            if not bookdate or bookdate == '0000':
-                                rejected.append(['date', 'No publication date'])
-
+                        if CONFIG.get_bool('NO_PUBDATE') and (not bookdate or bookdate == '0000'):
+                            rejected.append(['date', 'No publication date'])
+                        self.logger.debug(f"{book_language} {lang_source} {bookname}")
                         dic = {'.': ' ', '-': ' ', '/': ' ', '+': ' ', '_': ' ', '(': '', ')': '',
                                '[': ' ', ']': ' ', '#': '# ', ':': ' ', ';': ' '}
                         name = replace_all(shortname, dic).strip()
@@ -672,6 +731,11 @@ class GoodReads:
                             if sbooksub != booksub:
                                 self.logger.warning(f'Different subtitles [{sbooksub}][{booksub}]')
                                 booksub = sbooksub
+
+                        if bookname and booksub:
+                            bookname = f"{bookname} - {booksub}"
+                            booksub = ''
+
                         dic = {':': '.', '"': ''}  # do we need to strip apostrophes , '\'': ''}
                         bookname = replace_all(bookname, dic).strip()
                         booksub = replace_all(booksub, dic).strip()
@@ -708,19 +772,24 @@ class GoodReads:
                             if aid == gr_id or anm == author_name_result:
                                 if aid != gr_id:
                                     self.logger.warning(f"Author {anm} has different authorid {aid}:{gr_id}")
-                                if role is None or 'author' in role.lower() or \
-                                        'writer' in role.lower() or \
-                                        'creator' in role.lower() or \
-                                        'pseudonym' in role.lower() or \
-                                        'pen name' in role.lower():
-                                    amatch = True
                                 else:
                                     self.logger.debug(f'Got {anm} for {bookname}, role is {role}')
-                        if not amatch:
-                            rejected.append(['author', f'Wrong Author or role (got {alist},{role})'])
+                                if self.role_is_author(role):
+                                    amatch = True
 
-                        cmd = ("SELECT AuthorName,BookName,AudioStatus,books.Status,ScanResult FROM books,authors "
-                               "WHERE authors.AuthorID = books.AuthorID AND BookID=?")
+                        if not amatch:
+                            msg = f'Wrong Author or role (got {alist}:{role})'
+                            if not self.role_is_author(role):
+                                msg += f' Assuming {authorid}:{authorname}'
+                                contributors.insert(0, [authorid, authorname, "Author"])
+                                amatch = True
+                            self.logger.warning(msg)
+
+                        if not amatch:
+                            continue
+
+                        cmd = ("SELECT AuthorName,BookName,AudioStatus,books.Status,ScanResult,BookFile,AudioFile,"
+                               "books.Manual FROM books,authors WHERE authors.AuthorID = books.AuthorID AND BookID=?")
                         match = db.match(cmd, (bookid,))
                         not_rejectable = None
                         if match:
@@ -728,6 +797,29 @@ class GoodReads:
                             if author_name_result != match['AuthorName']:
                                 rejected.append(['author', (f"Different author for this bookid [{author_name_result}]"
                                                             f"[{match['AuthorName']}]")])
+                                # This is a fatal rejection (see the `rejected` handling below, 'author'
+                                # is not in `ignorable`) so the usual upsert path never runs and this
+                                # book would otherwise sit unchanged forever, still attributed to an
+                                # author the source no longer agrees with. Set it Ignored so it stops
+                                # being actively wanted/searched under a stale attribution - but don't
+                                # touch it if the user already has the file or has it manually locked,
+                                # since re-attribution doesn't mean the file itself is wrong.
+                                match_locked = match['Manual']
+                                if match_locked is None:
+                                    match_locked = False
+                                elif str(match_locked).isdigit():
+                                    match_locked = bool(int(match_locked))
+                                if not match_locked:
+                                    updates = {}
+                                    if (match['Status'] not in ('Have', 'Open') or not match['BookFile']) and match['Status'] != 'Ignored':
+                                            updates['Status'] = 'Ignored'
+                                    if (match['AudioStatus'] not in ('Have', 'Open') or not match['AudioFile']) and match['AudioStatus'] != 'Ignored':
+                                            updates['AudioStatus'] = 'Ignored'
+                                    if updates:
+                                        db.upsert("books", updates, {"BookID": bookid})
+                                        self.logger.warning(
+                                            f"Bookid {bookid} [{match['BookName']}] no longer matches author "
+                                            f"[{match['AuthorName']}] (now [{author_name_result}]) - set {updates}")
                             elif bookname != match['BookName']:
                                 # same bookid and author, assume goodreads fixed the title, use the new title
                                 db.action("UPDATE books SET BookName=? WHERE BookID=?", (bookname, bookid))
@@ -763,20 +855,19 @@ class GoodReads:
                                            "ScanResult,books.gr_id FROM books,authors WHERE "
                                            "authors.AuthorID = books.AuthorID AND BookID=?")
                                     match = db.match(cmd, (in_db[0],))
-                            if match:
-                                if match['BookID'] != bookid:
-                                    # we have a different bookid for this author/title already
-                                    if not_rejectable:
-                                        self.logger.debug(
-                                            f"Not rejecting duplicate title {bookname} ({bookid}/{match['BookID']}) "
-                                            f"as {not_rejectable}")
-                                    else:
-                                        duplicates += 1
-                                        if not match['gr_id']:
-                                            cmd = "UPDATE books SET gr_id=? WHERE BookID=?"
-                                            db.action(cmd, (bookid, match['BookID']))
-                                        rejected.append(['bookid', f"Got {bookid} under bookid {match['BookID']}"])
-
+                            if match and match['BookID'] != bookid:
+                                # we have a different bookid for this author/title already
+                                if not_rejectable:
+                                    self.logger.debug(
+                                        f"Not rejecting duplicate title {bookname} ({bookid}/{match['BookID']}) "
+                                        f"as {not_rejectable}")
+                                else:
+                                    duplicates += 1
+                                    if not match['gr_id']:
+                                        cmd = "UPDATE books SET gr_id=? WHERE BookID=?"
+                                        db.action(cmd, (bookid, match['BookID']))
+                                    rejected.append(['bookid', f"Duplicate title {bookname} "
+                                                               f"({bookid}/{match['BookID']})"])
                         fatal = False
                         reason = ''
                         ignore_book = False
@@ -795,6 +886,7 @@ class GoodReads:
                                     break
 
                             if not CONFIG['IMP_IGNORE']:
+                                reason = str(rejected)
                                 fatal = True
 
                             if not fatal:
@@ -811,7 +903,7 @@ class GoodReads:
                             reason = entryreason
 
                         if fatal:
-                            self.logger.debug(f"Rejected {bookid} {reason}")
+                            self.logger.debug(f"Rejected {bookid}:{reason}:{rejected}")
                         else:
                             cmd = ("SELECT Status,AudioStatus,BookFile,AudioFile,Manual,BookAdded,BookName,"
                                    "OriginalPubDate,BookDesc,BookGenre,ScanResult FROM books WHERE BookID=?")
@@ -841,7 +933,8 @@ class GoodReads:
                                 added = today()
                                 locked = False
 
-                            if not originalpubdate or len(originalpubdate) < 5:
+                            if (not originalpubdate or len(originalpubdate) < 5) and \
+                                    pubdate_lookups_this_refresh < pubdate_lookups_cap:
                                 # already set with language code or existing book?
                                 newdate, in_cache = get_book_pubdate(bookid)
                                 if not originalpubdate:
@@ -851,6 +944,8 @@ class GoodReads:
                                     self.logger.debug(f"Extended date info found: {newdate}")
                                 if not in_cache:
                                     api_hits += 1
+                                    pubdate_lookups_this_refresh += 1
+                                    time.sleep(2)
 
                             if originalpubdate:
                                 bookdate = originalpubdate
@@ -888,6 +983,12 @@ class GoodReads:
                                     if gbupdate:
                                         self.logger.debug(f"Updated {', '.join(gbupdate)} from googlebooks")
 
+                                if (not bookdate or bookdate == '0000') and bookname:
+                                    title_match = re.search(r'\b(1[89]\d\d|20\d\d)\b', bookname)
+                                    if title_match and check_year(title_match.group(1), past=1800, future=1):
+                                        bookdate = title_match.group(1)
+                                        self.logger.debug(f"Extracted pubdate {bookdate} from title for {bookid}")
+
                                 threadname = thread_name()
                                 reason = f"[{threadname}] {reason}"
                                 control_value_dict = {"BookID": bookid}
@@ -916,8 +1017,7 @@ class GoodReads:
                                 db.upsert("books", new_value_dict, control_value_dict)
                                 db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
                                           (authorid, bookid, ROLE['PRIMARY']), suppress='UNIQUE')
-                                lazylibrarian.importer.update_totals(authorid)
-
+                                self.logger.debug(f'Added {authorid} as primary')
                                 set_genres(get_list(bookgenre, ','), bookid)
 
                                 update_value_dict = {}
@@ -929,7 +1029,7 @@ class GoodReads:
                                     newserieslist = get_work_series(workid, 'GR', reason=reason)
                                     if newserieslist:
                                         serieslist = newserieslist
-                                        self.logger.debug(f'Updated series: {bookid} [{serieslist}]')
+                                        self.logger.debug(f'Updated series: {bookid} {serieslist}')
                                     _api_hits, pubdate = set_series(serieslist, bookid, reason=reason)
                                     api_hits += _api_hits
                                     if pubdate and pubdate > originalpubdate:  # more detailed
@@ -945,26 +1045,29 @@ class GoodReads:
                                             f"valid bookdate [{bookdate}] previous scanresult "
                                             f"[{existing['ScanResult']}]")
                                         update_value_dict["ScanResult"] = f"bookdate {bookdate} is now valid"
-                                        self.loggersearching.debug(
+                                        self.searchinglogger.debug(
                                             f"entry status {entrystatus} {bookstatus},{audiostatus}")
                                         book_stat, audio_stat = get_status(bookid, serieslist, bookstatus,
                                                                            audiostatus, entrystatus)
                                         if existing['Status'] not in ['Wanted', 'Open', 'Have'] and not ignore_book:
                                             update_value_dict["Status"] = book_stat
-                                        if (existing['AudioStatus'] not in ['Wanted', 'Open', 'Have'] and not
-                                                ignore_audio):
+                                        if (existing['AudioStatus'] not in ['Wanted', 'Open', 'Have']
+                                                and not ignore_audio):
                                             update_value_dict["AudioStatus"] = audio_stat
-                                        self.loggersearching.debug(f"status is now {book_status},{audio_status}")
+                                        self.searchinglogger.debug(f"status is now {book_status},{audio_status}")
                                     elif not existing:
                                         update_value_dict["ScanResult"] = reason
 
-                                    if 'nocover' in bookimg or 'nophoto' in bookimg:
+                                    if ('nocover' in bookimg or 'nophoto' in bookimg) and \
+                                            cover_lookups_this_refresh < cover_lookups_cap:
                                         # try to get a cover from another source
                                         start = time.time()
                                         link, source = get_book_cover(bookid, ignore='goodreads')
                                         if source != 'cache':
                                             cover_count += 1
                                             cover_time += (time.time() - start)
+                                            cover_lookups_this_refresh += 1
+                                            time.sleep(2)
                                         if link:
                                             update_value_dict["BookImg"] = link
                                     elif bookimg and bookimg.startswith('http'):
@@ -994,6 +1097,7 @@ class GoodReads:
                                                 db.action('INSERT into bookauthors (AuthorID, BookID, Role) '
                                                           'VALUES (?, ?, ?)',
                                                           (auth_id, bookid, ROLE[role]), suppress='UNIQUE')
+                                                self.logger.debug(f'Added {authorid} as {role}')
                                                 lazylibrarian.importer.update_totals(auth_id)
                                             else:
                                                 self.logger.debug(f"Unable to add {auth_id}")
@@ -1019,7 +1123,7 @@ class GoodReads:
                                         f"author/list/{gr_id}.xml?{urlencode(self.params)}&page={str(loop_count)}"])
                         resultxml = None
                         try:
-                            self.loggersearching.debug(url)
+                            self.searchinglogger.debug(url)
                             rootxml, in_cache = gr_xml_request(url, use_cache=not refresh)
                             if rootxml is None:
                                 self.logger.debug('Failed to get next page of results')
@@ -1031,12 +1135,12 @@ class GoodReads:
                             resultxml = None
                             self.logger.error(f"{type(e).__name__} finding next page of results: {str(e)}")
 
-                    if resultxml:
-                        if all(False for _ in resultxml):  # returns True if iterator is empty
-                            resultxml = None
+                    if resultxml and all(False for _ in resultxml):  # returns True if iterator is empty
+                        resultxml = None
 
             self.verify_ids(authorid)
             delete_empty_series()
+            lazylibrarian.importer.update_totals(authorid)
             cmd = ("SELECT BookName, BookLink, BookDate, BookImg, BookID from books WHERE AuthorID=? AND "
                    "Status != 'Ignored' order by BookDate DESC")
             lastbook = db.match(cmd, (authorid,))
@@ -1138,12 +1242,10 @@ class GoodReads:
             found = 0
             differ = 0
             notfound = []
-            pagecount = 0
             for page in pages:
-                pagecount += 1
                 url = '/'.join([CONFIG['GR_URL'], f"book/id_to_work_id/{page}?{urlencode(self.params)}"])
                 try:
-                    self.loggersearching.debug(url)
+                    self.searchinglogger.debug(url)
                     rootxml, _ = gr_xml_request(url, use_cache=False)
                     if rootxml is None:
                         self.logger.debug(f"Failed to get id_to_work_id page {page}")
@@ -1152,8 +1254,7 @@ class GoodReads:
                         if len(resultxml):
                             ids = resultxml.iter('item')
                             books = get_list(page)
-                            cnt = 0
-                            for item in ids:
+                            for cnt, item in enumerate(ids):
                                 workid = item.text
                                 if not workid:
                                     notfound.append(books[cnt])
@@ -1161,16 +1262,14 @@ class GoodReads:
                                 else:
                                     found += 1
                                     res = db.match("SELECT WorkID from books WHERE bookid=?", (books[cnt],))
-                                    if res:
-                                        if res['WorkID'] != workid:
-                                            differ += 1
-                                            self.logger.debug(
-                                                f"Updating workid for {books[cnt]} from [{res['WorkID']}] "
-                                                f"to [{workid}]")
-                                            control_value_dict = {"gr_id": books[cnt]}
-                                            new_value_dict = {"WorkID": workid}
-                                            db.upsert("books", new_value_dict, control_value_dict)
-                                cnt += 1
+                                    if res and res['WorkID'] != workid:
+                                        differ += 1
+                                        self.logger.debug(
+                                            f"Updating workid for {books[cnt]} from [{res['WorkID']}] "
+                                            f"to [{workid}]")
+                                        control_value_dict = {"gr_id": books[cnt]}
+                                        new_value_dict = {"WorkID": workid}
+                                        db.upsert("books", new_value_dict, control_value_dict)
 
                 except Exception as e:
                     self.logger.error(f"{type(e).__name__} parsing id_to_work_id page: {str(e)}")
@@ -1200,18 +1299,19 @@ class GoodReads:
         finally:
             db.close()
 
-    def find_book(self, bookid=None, bookstatus=None, audiostatus=None, reason='gr.find_book'):
+    def add_bookid_to_db(self, bookid=None, bookstatus=None, audiostatus=None, reason='gr.add_bookid'):
         url = '/'.join([CONFIG['GR_URL'], f"book/show/{bookid}?{urlencode(self.params)}"])
         try:
-            self.loggersearching.debug(url)
+            self.searchinglogger.debug(url)
             rootxml, _ = gr_xml_request(url)
             if rootxml is None:
                 self.logger.debug(f"Failed to get book info for {bookid}")
-                return
+                return False
         except Exception as e:
             self.logger.error(f"{type(e).__name__} finding book: {str(e)}")
-            return
+            return False
 
+        threadname = thread_name()
         if not bookstatus:
             bookstatus = CONFIG['NEWBOOK_STATUS']
             self.logger.debug(f"No bookstatus passed, using default {bookstatus}")
@@ -1219,21 +1319,26 @@ class GoodReads:
             audiostatus = CONFIG['NEWAUDIO_STATUS']
             self.logger.debug(f"No audiostatus passed, using default {audiostatus}")
         self.logger.debug(f"bookstatus={bookstatus}, audiostatus={audiostatus}")
-        book_language = rootxml.find('./book/language_code').text
+        try:
+            book_language = rootxml.find('./book/language_code').text
+        except Exception as e:
+            self.logger.error(f"Error getting language_code from book xml: {str(e)}")
+            book_language = ''
+
         bookname = rootxml.find('./book/title').text
 
         if not book_language:
             book_language = "Unknown"
         #
-        # user has said they want this book, don't block for unwanted language etc
+        # user has said they want this book, don't block for unwanted language etc.
         # Ignore book if adding as part of a series, else just warn and include it
         #
         valid_langs = get_list(CONFIG['IMP_PREFLANG'])
         if book_language not in valid_langs and 'All' not in valid_langs:
             msg = f'Book {bookname} Language [{book_language}] does not match preference'
             self.logger.warning(msg)
-            if reason.startswith("Series:"):
-                return
+            if reason.startswith("Series:") or threadname.startswith('SERIES'):
+                return False
 
         if rootxml.find('./book/work/original_publication_year').text is None:
             originalpubdate = ''
@@ -1246,7 +1351,7 @@ class GoodReads:
                         mn = check_int(rootxml.find('./book/publication_month').text, 0)
                         dy = check_int(rootxml.find('./book/publication_day').text, 0)
                         if mn and dy:
-                            bookdate = "%s-%02d-%02d" % (bookdate, mn, dy)
+                            bookdate = f"{bookdate}-{mn:02d}-{dy:02d}"
                     except (KeyError, AttributeError):
                         pass
         else:
@@ -1256,33 +1361,31 @@ class GoodReads:
                     mn = check_int(rootxml.find('./book/work/original_publication_month').text, 0)
                     dy = check_int(rootxml.find('./book/work/original_publication_day').text, 0)
                     if mn and dy:
-                        originalpubdate = "%s-%02d-%02d" % (originalpubdate, mn, dy)
+                        originalpubdate = f"{originalpubdate}-{mn:02d}-{dy:02d}"
                 except (KeyError, AttributeError):
                     pass
             bookdate = originalpubdate
 
-        if CONFIG.get_bool('NO_PUBDATE'):
-            if not bookdate or bookdate == '0000':
-                msg = f'Book {bookname} Publication date [{bookdate}] does not match preference'
-                self.logger.warning(msg)
-                if reason.startswith("Series:"):
-                    return
+        if CONFIG.get_bool('NO_PUBDATE') and (not bookdate or bookdate == '0000'):
+            msg = f'Book {bookname} Publication date [{bookdate}] does not match preference'
+            self.logger.warning(msg)
+            if reason.startswith("Series:") or threadname.startswith('SERIES'):
+                return False
 
-        if CONFIG.get_bool('NO_FUTURE'):
+        if CONFIG.get_bool('NO_FUTURE') and bookdate > today()[:len(bookdate)]:
             # may have yyyy or yyyy-mm-dd
-            if bookdate > today()[:len(bookdate)]:
-                msg = f'Book {bookname} Future publication date [{bookdate}] does not match preference'
-                self.logger.warning(msg)
-                if reason.startswith("Series:"):
-                    return
+            msg = f'Book {bookname} Future publication date [{bookdate}] does not match preference'
+            self.logger.warning(msg)
+            if reason.startswith("Series:") or threadname.startswith('SERIES'):
+                return False
 
         if CONFIG.get_bool('NO_SETS'):
             is_set, set_msg = is_set_or_part(bookname)
             if is_set:
                 msg = f'Book {bookname} {set_msg}'
                 self.logger.warning(msg)
-                if reason.startswith("Series:"):
-                    return
+                if reason.startswith("Series:") or threadname.startswith('SERIES'):
+                    return False
         try:
             bookimg = rootxml.find('./book/img_url').text
             if not bookimg or 'nocover' in bookimg or 'nophoto' in bookimg:
@@ -1325,8 +1428,8 @@ class GoodReads:
                     self.logger.debug(f"{authorname}: Changing authorid from {authorid} to {match['AuthorID']}")
                     author = {'authorid': match['AuthorID'], 'authorname': authorname}
                 else:
-                    gr = GoodReads(authorname)
-                    author = gr.find_author_id()
+                    gr = GoodReads()
+                    author = gr.find_author_id(authorname=authorname)
             if author:
                 author_id = author['authorid']
                 match = db.match('SELECT * from authors WHERE AuthorID=?', (author_id,))
@@ -1337,7 +1440,8 @@ class GoodReads:
                     if CONFIG['NEWAUTHOR_STATUS'] in ['Skipped', 'Ignored']:
                         newauthor_status = 'Paused'
                     # also pause author if adding as a series contributor/wishlist/grsync
-                    if reason.startswith("Series:") or "grsync" in reason or "wishlist" in reason:
+                    if (reason.startswith("Series:") or "grsync" in reason or "wishlist" in reason
+                            or threadname.startswith('SERIES')):
                         newauthor_status = 'Paused'
                     control_value_dict = {"AuthorID": author_id}
                     new_value_dict = {
@@ -1355,12 +1459,12 @@ class GoodReads:
                     db.upsert("authors", new_value_dict, control_value_dict)
                     db.commit()  # shouldn't really be necessary as context manager commits?
                     authorname = author['authorname']
-                    if CONFIG.get_bool('NEWAUTHOR_BOOKS') and newauthor_status != 'Paused':
-                        self.get_author_books(author_id, entrystatus=CONFIG['NEWAUTHOR_STATUS'],
-                                              reason=reason)
+                    # if CONFIG.get_bool('NEWAUTHOR_BOOKS') and newauthor_status != 'Paused':
+                    #     self.get_author_books(author_id, entrystatus=CONFIG['NEWAUTHOR_STATUS'],
+                    #                          reason=reason)
             else:
                 self.logger.warning(f"No AuthorID for {authorname}, unable to add book {bookname}")
-                return
+                return False
 
             # bookname = unaccented(bookname, only_ascii=False)
             bookname, booksub, bookseries = split_title(authorname, bookname)
@@ -1430,16 +1534,19 @@ class GoodReads:
                     "ScanResult": reason,
                     "OriginalPubDate": originalpubdate
                 }
-
+                db.upsert("books", new_value_dict, control_value_dict)
+                added = True
+                # get_book_cover needs the bookid to already exist in db
                 if 'nocover' in bookimg or 'nophoto' in bookimg:
                     # try to get a cover from another source
                     link, _ = get_book_cover(bookid, ignore='goodreads')
                     if link:
-                        new_value_dict["BookImg"] = link
+                        new_value_dict = {"BookImg": link}
+                        db.upsert("books", new_value_dict, control_value_dict)
                 elif bookimg and bookimg.startswith('http'):
-                    new_value_dict["BookImg"] = cache_bookimg(bookimg, bookid, 'gr')
+                    new_value_dict = {"BookImg": cache_bookimg(bookimg, bookid, 'gr')}
+                    db.upsert("books", new_value_dict, control_value_dict)
 
-                db.upsert("books", new_value_dict, control_value_dict)
                 self.logger.info(f"{bookname} by {authorname} added to the books database, {bookstatus}/{audiostatus}")
                 serieslist = []
                 if series:
@@ -1455,6 +1562,7 @@ class GoodReads:
 
                 db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
                           (author_id, bookid, ROLE['PRIMARY']), suppress='UNIQUE')
+                self.logger.debug(f'Added {author_id} as primary')
                 lazylibrarian.importer.update_totals(author_id)
 
                 if CONFIG.get_bool('CONTRIBUTING_AUTHORS'):
@@ -1470,9 +1578,10 @@ class GoodReads:
                                 role = ROLE['CONTRIBUTING']
                             db.action('INSERT into bookauthors (AuthorID, BookID, Role) VALUES (?, ?, ?)',
                                       (auth_id, bookid, role), suppress='UNIQUE')
+                            self.logger.debug(f'Added {auth_id} as {role}')
                             lazylibrarian.importer.update_totals(auth_id)
                         else:
                             self.logger.debug(f"Unable to add {auth_id}")
-
+                return added
         finally:
             db.close()

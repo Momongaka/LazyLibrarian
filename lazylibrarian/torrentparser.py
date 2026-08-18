@@ -12,17 +12,24 @@
 
 import logging
 import re
-import requests
 import traceback
 from urllib.parse import quote, quote_plus, urlencode
 
-import lib.feedparser as feedparser
+import requests
 from bs4 import BeautifulSoup
+
+import lib.feedparser as feedparser
 from lazylibrarian.cache import fetch_url
 from lazylibrarian.common import get_user_agent
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.formatter import plural, unaccented, make_unicode, size_in_bytes, url_fix, \
-    make_utf8bytes
+from lazylibrarian.formatter import (
+    make_unicode,
+    make_utf8bytes,
+    plural,
+    size_in_bytes,
+    unaccented,
+    url_fix,
+)
 from lazylibrarian.telemetry import TELEMETRY
 
 
@@ -64,6 +71,7 @@ def torrent_abb(book=None, test=False):
             try:
                 title = post.select_one('.postTitle > h2 > a')
                 link = ''
+                size = 0
                 if title:
                     title = title.text.strip()
                     link = f"{host}/{post.select_one('.postTitle > h2 > a')['href']}"

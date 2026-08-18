@@ -5,20 +5,19 @@
 
 import logging
 import time
-from typing import Dict, Optional
 
 from lazylibrarian.configtypes import ConfigDict
-from lazylibrarian.formatter import today, plural, pretty_approx_time
+from lazylibrarian.formatter import plural, pretty_approx_time, today
 
 
 class BlockHandler:
     def __init__(self):
         self._nab_apicount_day: str = today()
-        self._provider_list: Dict[str, Dict] = {}  # {name: {resume, reason}} = {}
+        self._provider_list: dict[str, dict] = {}  # {name: {resume, reason}} = {}
         self._gb_calls: int = 0
-        self._config: Optional[ConfigDict] = None
-        self._newznab: Optional[ConfigDict] = None
-        self._torznab: Optional[ConfigDict] = None
+        self._config: ConfigDict | None = None
+        self._newznab: ConfigDict | None = None
+        self._torznab: ConfigDict | None = None
 
     def set_config(self, config: ConfigDict, newznab: ConfigDict, torznab: ConfigDict):
         """ Set the configuration used for the BlockHandler. By providing them in this form,
@@ -42,7 +41,7 @@ class BlockHandler:
         # self.remove_provider_entry(name)
         self.add_provider_entry(name, delay, reason)
 
-    def block_provider(self, who: str, why: str, delay: Optional[int] = None) -> int:
+    def block_provider(self, who: str, why: str, delay: int | None = None) -> int:
         """ Block provider 'who' for reason 'why'. Returns number of seconds block will last """
         logger = logging.getLogger(__name__)
         if delay is None:
@@ -72,10 +71,10 @@ class BlockHandler:
         self._provider_list.clear()
         return num
 
-    def check_day(self, pretend_day: Optional[str] = None) -> bool:
+    def check_day(self, pretend_day: str | None = None) -> bool:
         """ Reset api counters if it's a new day since last check. Returns True if values are reset.
          The pretend_day argument is used for testing. """
-        daystr = today() if not pretend_day else pretend_day
+        daystr = pretend_day if pretend_day else today()
         if self._nab_apicount_day != daystr:
             self._nab_apicount_day = daystr
             if self._newznab:
@@ -96,8 +95,7 @@ class BlockHandler:
             entry = self._provider_list[name]
             if timenow < int(entry['resume']):
                 return True
-            else:
-                self._provider_list.pop(name, None)
+            self._provider_list.pop(name, None)
         return False
 
     def get_text_list_of_blocks(self) -> str:

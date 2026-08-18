@@ -22,8 +22,8 @@ from urllib.parse import parse_qsl
 import lib.oauth2 as oauth
 import lib.pythontwitter as twitter
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.formatter import now, make_bytestr
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
+from lazylibrarian.formatter import make_bytestr, now
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 
 class TwitterNotifier:
@@ -42,13 +42,13 @@ class TwitterNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG.get_bool('TWITTER_NOTIFY_ONSNATCH'):
             if fail:
-                self._notify_twitter(f"{notifyStrings[NOTIFY_FAIL]}: {title}")
+                self._notify_twitter(f"{notify_strings[NOTIFY_FAIL]}: {title}")
             else:
-                self._notify_twitter(f"{notifyStrings[NOTIFY_SNATCH]}: {title}")
+                self._notify_twitter(f"{notify_strings[NOTIFY_SNATCH]}: {title}")
 
     def notify_download(self, title):
         if CONFIG.get_bool('TWITTER_NOTIFY_ONDOWNLOAD'):
-            self._notify_twitter(f"{notifyStrings[NOTIFY_DOWNLOAD]}: {title}")
+            self._notify_twitter(f"{notify_strings[NOTIFY_DOWNLOAD]}: {title}")
 
     def test_notify(self):
         return self._notify_twitter(f"This is a test notification from LazyLibrarian / {now()}", force=True)
@@ -65,14 +65,15 @@ class TwitterNotifier:
 
         if resp['status'] != '200':
             logger.error(f"Invalid respond from Twitter requesting temp token: {resp['status']}")
-        else:
-            # noinspection PyDeprecation
-            request_token = dict(parse_qsl(content))
-            CONFIG.set_str('TWITTER_USERNAME', request_token['oauth_token'])
-            CONFIG.set_str('TWITTER_PASSWORD', request_token['oauth_token_secret'])
-            logger.debug(
-                f"Twitter oauth_token = {CONFIG['TWITTER_USERNAME']} oauth_secret = {CONFIG['TWITTER_PASSWORD']}")
-            return f"{self.AUTHORIZATION_URL}?oauth_token={request_token['oauth_token']}"
+            return None
+
+        # noinspection PyDeprecation
+        request_token = dict(parse_qsl(content))
+        CONFIG.set_str('TWITTER_USERNAME', request_token['oauth_token'])
+        CONFIG.set_str('TWITTER_PASSWORD', request_token['oauth_token_secret'])
+        logger.debug(
+            f"Twitter oauth_token = {CONFIG['TWITTER_USERNAME']} oauth_secret = {CONFIG['TWITTER_PASSWORD']}")
+        return f"{self.AUTHORIZATION_URL}?oauth_token={request_token['oauth_token']}"
 
     def _get_credentials(self, key):
         logger = logging.getLogger(__name__)
@@ -93,15 +94,14 @@ class TwitterNotifier:
         if resp['status'] != '200':
             logger.error(f"The request for an access token did not succeed: {str(resp['status'])}")
             return False
-        else:
-            # noinspection PyDeprecation
-            access_token = dict(parse_qsl(content))
-            logger.debug(f"access_token: {str(access_token)}")
-            logger.debug(f"Your Twitter Access Token key: {access_token['oauth_token']}")
-            logger.debug(f"Access Token secret: {access_token['oauth_token_secret']}")
-            CONFIG.set_str('TWITTER_USERNAME', access_token['oauth_token'])
-            CONFIG.set_str('TWITTER_PASSWORD', access_token['oauth_token_secret'])
-            return True
+        # noinspection PyDeprecation
+        access_token = dict(parse_qsl(content))
+        logger.debug(f"access_token: {str(access_token)}")
+        logger.debug(f"Your Twitter Access Token key: {access_token['oauth_token']}")
+        logger.debug(f"Access Token secret: {access_token['oauth_token_secret']}")
+        CONFIG.set_str('TWITTER_USERNAME', access_token['oauth_token'])
+        CONFIG.set_str('TWITTER_PASSWORD', access_token['oauth_token_secret'])
+        return True
 
     def _send_tweet(self, message=None):
         logger = logging.getLogger(__name__)

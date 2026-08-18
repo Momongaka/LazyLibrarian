@@ -4,10 +4,9 @@
 #   Handle array-configs, such as providers and notifiers
 
 from collections import OrderedDict
-from typing import Dict, List
 
 from lazylibrarian.configdefs import DefaultArrayDef, configitem_from_default
-from lazylibrarian.configtypes import ConfigItem, ConfigDict
+from lazylibrarian.configtypes import ConfigDict, ConfigItem
 
 
 class ArrayConfig:
@@ -15,8 +14,8 @@ class ArrayConfig:
     _name: str  # e.g. 'APPRISE'
     _secstr: str  # e.g. 'APPRISE_%i'
     _primary: str  # e.g. 'URL'
-    configs: Dict[int, ConfigDict]
-    _defaults: List[ConfigItem]
+    configs: dict[int, ConfigDict]
+    _defaults: list[ConfigItem]
 
     def __init__(self, arrayname: str, defaults: DefaultArrayDef):
         self._name = arrayname
@@ -51,8 +50,7 @@ class ArrayConfig:
         config = self[index]
         if self._primary in config:
             return self.configs[index][self._primary]
-        else:
-            return ''
+        return ''
 
     # Allow ArrayConfig to be iterated over, ignoring the index
     def __iter__(self):
@@ -79,26 +77,23 @@ class ArrayConfig:
     def cleanup_for_save(self):
         """ Clean out empty items and renumber items from 0 """
         keepcount = 0
-        for index in range(0, len(self)):
+        for index in range(len(self)):
             if not self.is_in_use(index):
                 del self.configs[index]
             else:
                 keepcount += 1
 
-        renum = 0
         # Because we use an OrderedDict, items will be in numeric order
         # Can't modify ordered dict while iterating, so make a copy
         temp_configs = OrderedDict()
-        for number in self.configs:
+        for renum, number in enumerate(self.configs):
             if number > renum:
                 config = self.configs[number]
                 # Update the section key in each item
-                for name, item in config.items():
+                for _name, item in config.items():
                     item.section = self.get_section_str(renum)
                 # Update the key of the dict entry
                 temp_configs[renum] = config
             else:
                 temp_configs[number] = self.configs[number]
-            renum += 1
         self.configs = temp_configs
-

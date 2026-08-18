@@ -15,10 +15,10 @@
 
 import logging
 
-from lazylibrarian.config2 import CONFIG
 from lazylibrarian import database
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
 from lazylibrarian.common import run_script
+from lazylibrarian.config2 import CONFIG
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 
 class CustomNotifier:
@@ -47,28 +47,31 @@ class CustomNotifier:
                 # or a magazine title followed by it's NZBUrl
                 words = message.split()
                 ident = words[-1]
+                if ident == 'ebook':
+                    ident = 'eBook'
+                if ident == 'audiobook':
+                    ident = 'AudioBook'
                 bookid = " ".join(words[:-1])
                 book = db.match('SELECT * from books where BookID=?', (bookid,))
                 if not book:
                     book = db.match('SELECT * from magazines where Title=?', (bookid,))
 
                 if event == 'Added to Library':
-                    wanted_status = 'Processed'
+                    wanted_status = " in ('Processed', 'Seeding')"
                 else:
-                    wanted_status = 'Snatched'
+                    wanted_status = "='Snatched'"
 
                 if ident in ['eBook', 'AudioBook']:
-                    wanted = db.match('SELECT * from wanted where BookID=? AND AuxInfo=? AND Status=?',
-                                      (bookid, ident, wanted_status))
+                    cmd = f"SELECT * from wanted where BookID=? AND AuxInfo=? AND Status{wanted_status}"
+                    wanted = db.match(cmd, (bookid, ident))
                 else:
-                    wanted = db.match('SELECT * from wanted where BookID=? AND NZBUrl=? AND Status=?',
-                                      (bookid, ident, wanted_status))
+                    cmd = f"SELECT * from wanted where BookID=? AND NZBUrl=? AND Status{wanted_status}"
+                    wanted = db.match(cmd, (bookid, ident))
         finally:
             db.close()
 
         if book:
-            # noinspection PyTypeChecker
-            dictionary = dict(list(zip(list(book.keys()), book)))
+            dictionary = dict(book)
         else:
             dictionary = {}
 
@@ -76,7 +79,7 @@ class CustomNotifier:
 
         if wanted:
             # noinspection PyTypeChecker
-            wanted_dictionary = dict(list(zip(list(wanted.keys()), wanted)))
+            wanted_dictionary = dict(wanted)
             for item in wanted_dictionary:
                 if item in ['Status', 'BookID']:  # rename to avoid clash
                     dictionary[f"Wanted_{item}"] = wanted_dictionary[item]
@@ -95,21 +98,20 @@ class CustomNotifier:
                 params = [CONFIG['CUSTOM_SCRIPT']]
                 for item in dictionary:
                     params.append(item)
-                    if hasattr(dictionary[item], 'encode'):
-                        params.append(dictionary[item].encode('utf-8'))
-                    else:
+                    if isinstance(dictionary[item], bytes):
+                        params.append(dictionary[item].decode('utf-8'))
+                    elif isinstance(dictionary[item], (int | float | type(None))):
                         params.append(str(dictionary[item]))
-
+                    else:
+                        params.append(dictionary[item])
                 rc, res, err = run_script(params)
                 if rc:
                     logger.error(f"Custom notifier returned {rc}: res[{res}] err[{err}]")
                     return False
-                else:
-                    logger.debug(res)
-                    return True
-            else:
-                logger.warning('Error sending custom notification: Check config')
-                return False
+                logger.debug(res)
+                return True
+            logger.warning('Error sending custom notification: Check config')
+            return False
 
         except Exception as e:
             logger.warning(f'Error sending custom notification: {e}')
@@ -122,13 +124,13 @@ class CustomNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG.get_bool('CUSTOM_NOTIFY_ONSNATCH'):
             if fail:
-                self._notify(message=title, event=notifyStrings[NOTIFY_FAIL])
+                self._notify(message=title, event=notify_strings[NOTIFY_FAIL])
             else:
-                self._notify(message=title, event=notifyStrings[NOTIFY_SNATCH])
+                self._notify(message=title, event=notify_strings[NOTIFY_SNATCH])
 
     def notify_download(self, title):
         if CONFIG.get_bool('CUSTOM_NOTIFY_ONDOWNLOAD'):
-            self._notify(message=title, event=notifyStrings[NOTIFY_DOWNLOAD])
+            self._notify(message=title, event=notify_strings[NOTIFY_DOWNLOAD])
 
     def test_notify(self, title="Test"):
         return self._notify(message=title, event="Test", force=True)

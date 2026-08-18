@@ -3,7 +3,7 @@ import logging
 import requests
 
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 
 class TelegramNotifier:
@@ -44,10 +44,9 @@ class TelegramNotifier:
 
         if response.status_code == 200:
             return True
-        else:
-            logger.warning(
-                f'Could not send notification to TelegramBot (token={telegram_token}). Response: [{response.text}]')
-            return False
+        logger.warning(
+            f'Could not send notification to TelegramBot (token={telegram_token}). Response: [{response.text}]')
+        return False
         #
         # Public functions
         #
@@ -55,14 +54,16 @@ class TelegramNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG.get_bool('TELEGRAM_ONSNATCH'):
             if fail:
-                self._notify(telegram_token=None, telegram_userid=None, event=notifyStrings[NOTIFY_FAIL], message=title)
+                self._notify(telegram_token=None, telegram_userid=None, event=notify_strings[NOTIFY_FAIL],
+                             message=title)
             else:
-                self._notify(telegram_token=None, telegram_userid=None, event=notifyStrings[NOTIFY_SNATCH],
+                self._notify(telegram_token=None, telegram_userid=None, event=notify_strings[NOTIFY_SNATCH],
                              message=title)
 
     def notify_download(self, title):
         if CONFIG.get_bool('TELEGRAM_ONDOWNLOAD'):
-            self._notify(telegram_token=None, telegram_userid=None, event=notifyStrings[NOTIFY_DOWNLOAD], message=title)
+            self._notify(telegram_token=None, telegram_userid=None, event=notify_strings[NOTIFY_DOWNLOAD],
+                         message=title)
 
     # noinspection PyUnusedLocal
     def test_notify(self, title="Test"):

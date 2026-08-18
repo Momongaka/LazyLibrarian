@@ -4,21 +4,33 @@
 #    Contain all the config settings and defaults used across LazyLibrarian
 
 from copy import deepcopy
-from typing import List, Dict, Tuple
 
-from lazylibrarian.configtypes import ConfigItem, ConfigStr, ConfigBool, ConfigInt, ConfigEmail, \
-    ConfigPerm, ConfigCSV, ConfigURL, ConfigRangedInt, ConfigFloat, ConfigFolder, \
-    ConfigScheduler, ConfigDownloadTypes, ConfigConnection, TimeUnit
+from lazylibrarian.configtypes import (
+    ConfigBool,
+    ConfigConnection,
+    ConfigCSV,
+    ConfigDownloadTypes,
+    ConfigEmail,
+    ConfigFloat,
+    ConfigFolder,
+    ConfigInt,
+    ConfigItem,
+    ConfigPerm,
+    ConfigRangedInt,
+    ConfigScheduler,
+    ConfigStr,
+    ConfigURL,
+    TimeUnit,
+)
 from lazylibrarian.formatter import ImportPrefs
 from lazylibrarian.logconfig import LogConfig
 
-
-BASE_DEFAULTS: List[ConfigItem] = [
+BASE_DEFAULTS: list[ConfigItem] = [
     ConfigURL('General', 'OL_URL', 'https://www.openlibrary.org'),
     ConfigURL('General', 'GR_URL', 'https://www.goodreads.com'),
     ConfigURL('General', 'GB_URL', 'https://www.googleapis.com'),
     ConfigURL('General', 'LT_URL', 'https://www.librarything.com'),
-    ConfigURL('General', 'CV_URL', 'https://www.comicvine.gamespot.com'),
+    ConfigURL('General', 'CV_URL', 'https://comicvine.gamespot.com'),
     ConfigURL('General', 'CX_URL', 'https://www.comixology.com'),
     ConfigBool('General', 'SHOW_NEWZ_PROV', 1),
     ConfigBool('General', 'SHOW_TORZ_PROV', 1),
@@ -43,9 +55,10 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigInt('General', 'MAX_WALL', 0),
     ConfigInt('General', 'MATCH_RATIO', 80),
     ConfigInt('General', 'DLOAD_RATIO', 90),
-    ConfigInt('General', 'NAME_RATIO', 90),
+    ConfigInt('General', 'NAME_RATIO', 95),
     ConfigInt('General', 'NAME_PARTIAL', 93),
     ConfigInt('General', 'NAME_PARTNAME', 93),
+    ConfigInt('General', 'PRIORITY_WEIGHT', 0),
     ConfigInt('General', 'DISPLAYLENGTH', 10),
     ConfigInt('General', 'HIST_REFRESH', 1000),
     ConfigBool('General', 'NO_IPV6', 0),
@@ -63,7 +76,8 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigBool('General', 'LAUNCH_BROWSER', 1),
     ConfigCSV('General', 'NAME_POSTFIX', 'snr, jnr, jr, sr, phd', force_lower=True),
     ConfigCSV('General', 'NAME_DEFINITE', 'the, a', force_lower=True),
-    ConfigCSV('General', 'MULTI_AUTHOR_SPLIT', 'and, und', force_lower=True),
+    ConfigCSV('General', 'MULTI_AUTHOR_SPLIT', 'and, und, with', force_lower=True),
+    ConfigBool('General', 'GOOGLE_TRANS_ID', 1),
 
     ConfigBool('API', 'API_ENABLED', 0),
     ConfigStr('API', 'API_KEY', ''),
@@ -81,6 +95,7 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigCSV('Postprocess', 'SKIPPED_EXT', 'fail, part, bts, !ut, torrent, magnet, nzb, unpack'),
     ConfigCSV('Postprocess', 'BANNED_EXT', 'avi, mp4, mov, iso, m4v', force_lower=True),
     ConfigCSV('General', 'IMP_PREFLANG', 'en, eng, en-US, en-GB, English', onchange=ImportPrefs.lang_changed),
+    ConfigStr('General', 'PREF_MAGLANG', 'en'),
     ConfigStr('General', 'ISS_FORMAT', '$Y-$m-$d'),
     ConfigStr('General', 'DATE_FORMAT', '$Y-$m-$d'),
     ConfigStr('General', 'DATE_LANG', 'en_EN.utf8'),
@@ -90,6 +105,7 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigCSV('General', 'IMP_MONTHLANG', ''),
     ConfigStr('General', 'IMP_AUTOADD', ''),
     ConfigBool('General', 'IMP_AUTOADD_COPY', 1),
+    ConfigBool('General', 'IMP_EBOOKOPF', 1),
     ConfigBool('General', 'IMP_AUTOADD_BOOKONLY', 0),
     ConfigBool('General', 'IMP_AUTOSEARCH', 0),
     ConfigBool('General', 'BLACKLIST_FAILED', 1),
@@ -118,6 +134,7 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigBool('Logging', 'LOGREDACT', 0, onchange=LogConfig.change_loguiredact),
     ConfigBool('Logging', 'HOSTREDACT', 0),
     ConfigBool('Logging', 'LOGFILEREDACT', 0, onchange=LogConfig.change_logfileredact),
+    ConfigCSV('Logging', 'REDACT_PARAMS', '', force_lower=True),
     ConfigInt('Logging', 'LOGLEVEL', 20, onchange=LogConfig.change_root_loglevel),
     ConfigCSV('Logging', 'LOGSPECIALDEBUG', ''),
 
@@ -182,12 +199,16 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigStr('SABnzbd', 'SAB_CAT', ''),
     ConfigBool('SABnzbd', 'SAB_DELETE', 1),
     ConfigStr('SABnzbd', 'SAB_EXTERNAL_HOST', ''),
+    ConfigStr('SABnzbd', 'SAB_REMOTE', ''),
+    ConfigStr('SABnzbd', 'SAB_LOCAL', ''),
     ConfigStr('NZBGet', 'NZBGET_HOST', ''),
     ConfigRangedInt('NZBGet', 'NZBGET_PORT', 0, 0, 65535),
     ConfigStr('NZBGet', 'NZBGET_USER', ''),
     ConfigStr('NZBGet', 'NZBGET_PASS', ''),
     ConfigStr('NZBGet', 'NZBGET_CATEGORY', ''),
     ConfigInt('NZBGet', 'NZBGET_PRIORITY', 0),
+    ConfigStr('NZBGet', 'NZBGET_REMOTE', ''),
+    ConfigStr('NZBGet', 'NZBGET_LOCAL', ''),
     ConfigBool('General', 'DESTINATION_COPY', 0),
     ConfigStr('General', 'EBOOK_DIR', ''),
     ConfigStr('General', 'AUDIO_DIR', ''),
@@ -224,12 +245,16 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigStr('RTORRENT', 'RTORRENT_PASS', ''),
     ConfigStr('RTORRENT', 'RTORRENT_LABEL', ''),
     ConfigStr('RTORRENT', 'RTORRENT_DIR', ''),
+    ConfigStr('RTORRENT', 'RTORRENT_REMOTE', ''),
+    ConfigStr('RTORRENT', 'RTORRENT_LOCAL', ''),
     ConfigStr('UTORRENT', 'UTORRENT_HOST', ''),
     ConfigRangedInt('UTORRENT', 'UTORRENT_PORT', 0, 0, 65535),
     ConfigStr('UTORRENT', 'UTORRENT_BASE', ''),
     ConfigStr('UTORRENT', 'UTORRENT_USER', ''),
     ConfigStr('UTORRENT', 'UTORRENT_PASS', ''),
     ConfigStr('UTORRENT', 'UTORRENT_LABEL', ''),
+    ConfigStr('UTORRENT', 'UTORRENT_REMOTE', ''),
+    ConfigStr('UTORRENT', 'UTORRENT_LOCAL', ''),
     ConfigStr('QBITTORRENT', 'QBITTORRENT_HOST', ''),
     ConfigRangedInt('QBITTORRENT', 'QBITTORRENT_PORT', 0, 0, 65535),
     ConfigStr('QBITTORRENT', 'QBITTORRENT_BASE', ''),
@@ -237,6 +262,9 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigStr('QBITTORRENT', 'QBITTORRENT_PASS', ''),
     ConfigStr('QBITTORRENT', 'QBITTORRENT_LABEL', ''),
     ConfigStr('QBITTORRENT', 'QBITTORRENT_DIR', ''),
+    ConfigStr('QBITTORRENT', 'QBITTORRENT_REMOTE', ''),
+    ConfigStr('QBITTORRENT', 'QBITTORRENT_LOCAL', ''),
+    ConfigBool('QBITTORRENT', 'QBITTORRENT_IGNORE_SSL', 0),
     ConfigStr('TRANSMISSION', 'TRANSMISSION_HOST', ''),
     ConfigStr('TRANSMISSION', 'TRANSMISSION_BASE', ''),
     ConfigRangedInt('TRANSMISSION', 'TRANSMISSION_PORT', 0, 0, 65535),
@@ -244,6 +272,8 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigStr('TRANSMISSION', 'TRANSMISSION_PASS', ''),
     ConfigStr('TRANSMISSION', 'TRANSMISSION_DIR', ''),
     ConfigStr('TRANSMISSION', 'TRANSMISSION_LABEL', ''),
+    ConfigStr('TRANSMISSION', 'TRANSMISSION_REMOTE', ''),
+    ConfigStr('TRANSMISSION', 'TRANSMISSION_LOCAL', ''),
     ConfigStr('DELUGE', 'DELUGE_CERT', ''),
     ConfigStr('DELUGE', 'DELUGE_HOST', ''),
     ConfigStr('DELUGE', 'DELUGE_BASE', ''),
@@ -253,12 +283,16 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigStr('DELUGE', 'DELUGE_LABEL', ''),
     ConfigStr('DELUGE', 'DELUGE_DIR', ''),
     ConfigInt('DELUGE', 'DELUGE_TIMEOUT', 3600),
+    ConfigStr('DELUGE', 'DELUGE_REMOTE', ''),
+    ConfigStr('DELUGE', 'DELUGE_LOCAL', ''),
     ConfigStr('SYNOLOGY', 'SYNOLOGY_HOST', ''),
     ConfigRangedInt('SYNOLOGY', 'SYNOLOGY_PORT', 0, 0, 65535),
     ConfigStr('SYNOLOGY', 'SYNOLOGY_USER', ''),
     ConfigStr('SYNOLOGY', 'SYNOLOGY_PASS', ''),
     ConfigStr('SYNOLOGY', 'SYNOLOGY_DIR', 'Multimedia/Download'),
     ConfigBool('SYNOLOGY', 'USE_SYNOLOGY', 0),
+    ConfigStr('SYNOLOGY', 'SYNOLOGY_REMOTE', ''),
+    ConfigStr('SYNOLOGY', 'SYNOLOGY_LOCAL', ''),
     ConfigStr('ABB', 'ABB_HOST', 'audiobookbay.lu'),
     ConfigBool('ABB', 'ABB', 0),
     ConfigInt('ABB', 'ABB_DLPRIORITY', 0),
@@ -294,12 +328,15 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigStr('SLSK', 'SLSK_URLBASE', '/'),
     ConfigBool('SLSK', 'SLSK', 0),
     ConfigInt('SLSK', 'SLSK_DLPRIORITY', 0),
+    ConfigStr('SLSK', 'SLSK_REMOTE', ''),
+    ConfigStr('SLSK', 'SLSK_LOCAL', ''),
     ConfigDownloadTypes('SLSK', 'SLSK_DLTYPES', 'E'),
     ConfigStr('ANNA', 'ANNA_HOST', 'https://annas-archive.org'),
     ConfigStr('ANNA', 'ANNA_KEY', ''),
     ConfigBool('ANNA', 'ANNA', 0),
     ConfigInt('ANNA', 'ANNA_DLPRIORITY', 0),
     ConfigInt('ANNA', 'ANNA_DLLIMIT', 0),
+    ConfigInt('ANNA', 'ANNA_MAX_SERVERS', 1),
     ConfigStr('ANNA', 'ANNA_SEARCH_LANG', 'ANY'),  # upper case 2 letter language code or ANY
     ConfigDownloadTypes('ANNA', 'ANNA_DLTYPES', 'E'),
     ConfigStr('LIME', 'LIME_HOST', 'https://www.limetorrents.cc'),
@@ -318,6 +355,8 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigCSV('General', 'PREFER_WORDS', 'retail', force_lower=True),
     ConfigCSV('General', 'REJECT_AUDIO', 'epub, mobi', force_lower=True),
     ConfigInt('General', 'MAG_AGE', 31),
+    ConfigScheduler('SearchScan', 'TOTALS_INTERVAL', 'update_all_totals', 24, TimeUnit.HOUR,
+                    'UPDATEALLTOTALS', 'lazylibrarian.importer.update_all_totals', 'Update totals', False, persist=False),
     ConfigScheduler('SearchScan', 'SEARCH_BOOKINTERVAL', 'search_book', 360, TimeUnit.MIN,
                     'SEARCHALLBOOKS', 'lazylibrarian.searchbook.cron_search_book', 'Book search', True),
     ConfigScheduler('SearchScan', 'SEARCH_MAGINTERVAL', 'search_magazines', 360, TimeUnit.MIN,
@@ -369,6 +408,7 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigBool('LibraryScan', 'NO_LANG', 0),
     ConfigBool('LibraryScan', 'ISBN_LOOKUP', 1),
     ConfigBool('LibraryScan', 'IMP_IGNORE', 0),
+    ConfigBool('LibraryScan', 'DEL_SECONDARY', 0),
     ConfigBool('LibraryScan', 'CONTRIBUTING_AUTHORS', 1, onchange=ImportPrefs.contrib_changed),
     ConfigStr('PostProcess', 'CREATE_LINK', ''),
     ConfigFolder('PostProcess', 'EBOOK_DEST_FOLDER', '$Author/$Title'),
@@ -488,6 +528,9 @@ BASE_DEFAULTS: List[ConfigItem] = [
     ConfigStr('API', 'LT_DEVKEY', ''),
     ConfigBool('API', 'CV_WEBSEARCH', 0),
     ConfigBool('API', 'OL_API', 0),
+    ConfigBool('API', 'DNB_API', 0),
+    ConfigBool('API', 'RAN_API', 0),
+    ConfigBool('API', 'AU_API', 0),
     ConfigBool('API', 'HC_API', 0),
     ConfigBool('API', 'HC_SYNC', 0),
     ConfigBool('API', 'HC_SYNCREADONLY', 0),
@@ -545,9 +588,9 @@ BASE_DEFAULTS: List[ConfigItem] = [
 ]
 
 # (Sectionname, SectionNameTemplate, [Items])
-DefaultArrayDef = Tuple[str, str, List[ConfigItem]]
+DefaultArrayDef = tuple[str, str, list[ConfigItem]]
 
-ARRAY_DEFS: Dict[str, DefaultArrayDef] = {
+ARRAY_DEFS: dict[str, DefaultArrayDef] = {
     'NEWZNAB': ('HOST', 'Newznab_%s', [
         ConfigStr('', 'NAME', 'Newznab', persist=False),
         ConfigStr('', "DISPNAME", ''),
@@ -609,6 +652,10 @@ ARRAY_DEFS: Dict[str, DefaultArrayDef] = {
         ConfigInt('', "DLPRIORITY", 0),
         ConfigDownloadTypes('', "DLTYPES", 'E'),
         ConfigStr('', "LABEL", ''),
+        # an rss feed can be a private tracker's just as much as a torznab
+        # search can, so it needs the same seeding requirement
+        ConfigFloat('', "SEED_RATIO", 0),
+        ConfigInt('', "SEED_DURATION", 0),
     ]),
     'IRC': ('SERVER', 'IRC_%s', [
         ConfigStr('', 'NAME', 'IRC', persist=False),

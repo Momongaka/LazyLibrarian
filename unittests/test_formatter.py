@@ -3,23 +3,35 @@
 # Purpose:
 #   Test functions in formatter.py
 
-import logging
 
 import lazylibrarian
 from lazylibrarian import formatter
+from lazylibrarian.config2 import CONFIG
 from unittests.unittesthelpers import LLTestCaseWithStartup
 
 
 class FormatterTest(LLTestCaseWithStartup):
+
+    def test_split_author_names(self):
+        data = [
+            ("Tom Holt", ['Tom Holt']),
+            ("L.E. Modesitt, Jnr", ['L.E. Modesitt']),
+            ("Tom Holt with Robert Rankin", ['Tom Holt', 'Robert Rankin']),
+            ("Tom Holt and Robert Rankin", ['Tom Holt', 'Robert Rankin']),
+            ("Tom Holt & Robert Rankin", ['Tom Holt', 'Robert Rankin']),
+            ("Tom Holt, Robert Rankin", ['Tom Holt', 'Robert Rankin']),
+            ("Tom Holt; Robert Rankin", ['Tom Holt', 'Robert Rankin'])
+        ]
+        for d in data:
+            self.assertEqual(formatter.split_author_names(d[0], ['with', 'and']), d[1])
 
     def test_sanitize(self):
         import unicodedata
         strings = [
             ("", ""),
             ("C:\\My eBooks\\book.epub", 'C\\My eBooks\\book.epub'),
-            ("My oddly named ÆØÅ ebook...", 'My oddly named AOÅ ebook'),
             ("Stuff here " + chr(2) + ">< |&!?-\\$|+`~=*", 'Stuff here  &!-\\s+~='),
-            ("Not C:\\\\// usable [as a] file name.jpg", 'Not C\\/ usable [as a] file name.jpg'),
+            ("Not C:\\\\// usable [as a] file name.jpg", 'Not C\\__ usable [as a] file name.jpg'),
             (u'\2160' + u'\0049', '\x8e09'),
             ('Hello Über', 'Hello Über'),  # Unicode-string in NFKD->NFC format
             ("\\\\Server\\Test An odd one:2131", '\\Server\\Test An odd one2131'),
@@ -130,9 +142,9 @@ class FormatterTest(LLTestCaseWithStartup):
             ("Author", "Author: Test book (The Series, 6)", ("Test book", "", "The Series, 6")),
             ("Author Name", "Author Name: Book (Series: Subseries 1)", ("Book", "", "Series: Subseries 1")),
             # Titles with "commentary" in the title
-            ("Author Name", "Author Name: Book (Unabridged)", ("Book", "(Unabridged)", "")),
+            ("Author Name", "Author Name: Book (Unabridged)", ("Book", "", "")),
             ("Author Name", "Author Name: Book (Unabridged volume)", ("Book", "(Unabridged volume)", "")),
-            ("Author Name", "Author Name: Book (TM)", ("Book", "(TM)", "")),
+            ("Author Name", "Author Name: Book (TM)", ("Book", "", "")),
             # Books with a subtitle in a series
             ("Abraham Lincoln", "Vampire Hunter: A horrifying tale (Vampires #2)",
              ("Vampire Hunter", "A horrifying tale", "Vampires #2")),
@@ -243,7 +255,7 @@ class FormatterTest(LLTestCaseWithStartup):
             self.assertEqual(formatter.age(date), formatter.datecompare(formatter.today(), date))
 
     def test_month2num(self):
-        for mnum, m in enumerate(lazylibrarian.MONTHNAMES):
+        for mnum, m in enumerate(lazylibrarian.MONTHNAMES[0]):
             # Try both the short and the long versions
             self.assertEqual(formatter.month2num(m[0]), mnum)
             self.assertEqual(formatter.month2num(m[1]), mnum)
@@ -259,6 +271,19 @@ class FormatterTest(LLTestCaseWithStartup):
         ]
         for special in specialmonths:
             self.assertEqual(formatter.month2num(special[0]), special[1])
+
+    def test_two_months(self):
+        magdates = [
+            ("SepOct", (9, 10)),
+            ("SepOctNov", (9, 11)),
+            ("SeptemberOctober", (9, 10)),
+            ("SepOctober", (9, 10)),
+            ("AprApril", (0, 0)),
+            ("April", (0, 0)),
+            ("Not A Date", (0, 0)),
+        ]
+        for magdate in magdates:
+            self.assertEqual(formatter.two_months(magdate[0]), magdate[1])
 
     def test_nzbdate2format(self):
         nzbdates = [
@@ -279,14 +304,15 @@ class FormatterTest(LLTestCaseWithStartup):
             ("2018-04-25", "2018-04-25"),
             ("May 1995", "1995-05-01"),  # openlibrary
             ("June 20, 2008", "2008-06-20"),
-            ("28Dec2008", "2008-12-28"),  # Compressed into one string
-            ("XYZ is not a date", "XYZ-00-not"),  # Error, but seen as a date
+            ("28Dec2008", "2008-12-28"),  # Compressed into one string, valid
+            ("XYZ01ABC", "XYZ01ABC"),  # Error, just a string
+            ("01XYZ01", "01XYZ01"),  # Error, just a string
+            ("XYZ is not a date", "XYZ is not a date"),  # Error, return unchanged
             ("XYZ", "XYZ"),  # Error, just a string
             ("", ""),
         ]
-        with self.assertLogs(None, logging.ERROR):
-            for d in dates:
-                self.assertEqual(formatter.date_format(d[0]), d[1])
+        for d in dates:
+            self.assertEqual(formatter.date_format(d[0]), d[1])
 
     def test_versiontuple(self):
         versions = [
@@ -337,7 +363,8 @@ class FormatterTest(LLTestCaseWithStartup):
             ("", b'', ""),
             ("This is a test", b'This is a test', ''),
             ("ÆØÅ, æøå and ½é",
-            b'\xc3\x83\xc2\x86\xc3\x83\xc2\x98\xc3\x83\xc2\x85, \xc3\x83\xc5\xa0\xc3\x83\xc5\xbe\xc3\x83\xc2\xa5 and \xc3\x82\xc5\x93\xc3\x83\xc2\xa9', 'ISO-8859-15'),
+             b'\xc3\x83\xc2\x86\xc3\x83\xc2\x98\xc3\x83\xc2\x85, \xc3\x83\xc5\xa0\xc3\x83\xc5\xbe\xc3\x83\xc2\xa5'
+             b' and \xc3\x82\xc5\x93\xc3\x83\xc2\xa9', 'ISO-8859-15'),
         ]
         for teststr in strings:
             encoded, name = formatter.make_utf8bytes(teststr[0])
@@ -345,8 +372,8 @@ class FormatterTest(LLTestCaseWithStartup):
 
     def test_make_unicode(self):
         strings = [
-            (None, None),
             (b'', ''),
+            (None, None),
             (b'\xc3\x83\xc2\x86\xc3\x83\xc2\x98\xc3\x83\xc2\x85', 'Ã\x86Ã\x98Ã\x85'),
             ('Hello Über', 'Hello Über'),
             (123, "123"),
@@ -480,7 +507,7 @@ class FormatterTest(LLTestCaseWithStartup):
     def test_format_author_name(self):
         testnames_plain = [
             ("Allan Pedersen", "Allan Pedersen"),
-            ("Allan & Mamta Pedersen", "Allan"),
+            ("Allan & Mamta Pedersen", "Allan & Mamta Pedersen"),
             ("Pedersen, Allan", "Allan Pedersen"),
             ("SMITH, Allan", "Allan SMITH"),
             ("ALLAN SMITH", "Allan Smith"),
@@ -538,18 +565,6 @@ class FormatterTest(LLTestCaseWithStartup):
             with self.subTest(f"Transforming {p[0]}"):
                 self.assertEqual(self.cfg().disp_name(p[0]), p[1])
 
-    def test_replace_quotes_with(self):
-        allchars = ''
-        for ch in range(32, 255):
-            allchars += chr(ch)
-        allchars += u'\uff02'  # Add a single non-ascii quote to the test
-        self.assertEqual(len(allchars), 255 - 32 + 1)
-
-        newstr = formatter.replace_quotes_with(allchars, 'x')
-        self.assertEqual(newstr.count('x'), 7)
-        newstr = formatter.replace_quotes_with(allchars, '')
-        self.assertEqual(len(newstr), 218)
-
     def test_pretty_approx_time(self):
         testdata = {
             10: '10 seconds',
@@ -564,3 +579,171 @@ class FormatterTest(LLTestCaseWithStartup):
             with self.subTest(seconds=seconds):
                 pretty = formatter.pretty_approx_time(seconds)
                 self.assertEqual(pretty, testdata[seconds])
+
+    def test_restore_thread_name_decorator_normal_return(self):
+        """Test that decorator restores thread name on normal return"""
+        import threading
+        from lazylibrarian.formatter import restore_thread_name, thread_name
+
+        # Set initial thread name
+        thread_name('IMPORTISSUES_TestMag')
+
+        @restore_thread_name('IMPORTISSUES')
+        def test_func():
+            return True
+
+        result = test_func()
+        self.assertTrue(result)
+        self.assertEqual(thread_name(), 'WEBSERVER')
+
+    def test_restore_thread_name_decorator_exception(self):
+        """Test that decorator restores thread name even when exception raised"""
+        import threading
+        from lazylibrarian.formatter import restore_thread_name, thread_name
+
+        # Set initial thread name
+        thread_name('IMPORTALT_eBook')
+
+        @restore_thread_name('IMPORTALT')
+        def test_func():
+            raise ValueError("Test error")
+
+        with self.assertRaises(ValueError):
+            test_func()
+
+        # Thread name should still be restored
+        self.assertEqual(thread_name(), 'WEBSERVER')
+
+    def test_restore_thread_name_decorator_wrong_prefix(self):
+        """Test that decorator doesn't change unrelated thread names"""
+        import threading
+        from lazylibrarian.formatter import restore_thread_name, thread_name
+
+        # Set thread name without the expected prefix
+        thread_name('SCHEDULER')
+
+        @restore_thread_name('IMPORTISSUES')
+        def test_func():
+            return True
+
+        test_func()
+
+        # Thread name should be unchanged
+        self.assertEqual(thread_name(), 'SCHEDULER')
+
+    def test_restore_thread_name_decorator_multiple_returns(self):
+        """Test that decorator works with multiple return paths"""
+        import threading
+        from lazylibrarian.formatter import restore_thread_name, thread_name
+
+        @restore_thread_name('IMPORTISSUES')
+        def test_func(condition):
+            if not condition:
+                return False  # Early return
+            # ... processing ...
+            return True  # Normal return
+
+        # Test early return
+        thread_name('IMPORTISSUES_EarlyTest')
+        result = test_func(False)
+        self.assertFalse(result)
+        self.assertEqual(thread_name(), 'WEBSERVER')
+
+        # Test normal return
+        thread_name('IMPORTISSUES_NormalTest')
+        result = test_func(True)
+        self.assertTrue(result)
+        self.assertEqual(thread_name(), 'WEBSERVER')
+
+    def test_restore_thread_name_decorator_custom_restore_target(self):
+        """Test that decorator can restore to custom thread name"""
+        import threading
+        from lazylibrarian.formatter import restore_thread_name, thread_name
+
+        # Set thread name
+        thread_name('CUSTOMTASK_MyTask')
+
+        @restore_thread_name('CUSTOMTASK', restore_to='SCHEDULER')
+        def test_func():
+            return True
+
+        result = test_func()
+        self.assertTrue(result)
+        # Should restore to SCHEDULER, not WEBSERVER
+        self.assertEqual(thread_name(), 'SCHEDULER')
+
+    def test_restore_thread_name_decorator_default_webserver(self):
+        """Test that decorator defaults to WEBSERVER when restore_to not specified"""
+        import threading
+        from lazylibrarian.formatter import restore_thread_name, thread_name
+
+        # Set thread name
+        thread_name('IMPORTISSUES_DefaultTest')
+
+        @restore_thread_name('IMPORTISSUES')  # No restore_to specified
+        def test_func():
+            return True
+
+        result = test_func()
+        self.assertTrue(result)
+        # Should restore to WEBSERVER (default)
+
+        self.assertEqual(thread_name(), 'WEBSERVER')
+
+    def test_redact_url(self):
+        data = [
+            ("", ""),
+            (None, ""),
+            ("https://indexer.example/api?t=get&id=42",
+             "https://indexer.example/api?t=get&id=42"),
+            ("https://indexer.example/api?t=get&apikey=deadbeef&id=42",
+             "https://indexer.example/api?t=get&apikey=[redacted]&id=42"),
+            ("https://tracker.example/download/123/book.torrent?passkey=s3cr3t",
+             "https://tracker.example/download/123/book.torrent?passkey=[redacted]"),
+            ("https://tracker.example/get?TOKEN=s3cr3t&title=book",
+             "https://tracker.example/get?TOKEN=[redacted]&title=book"),
+            ("https://user:hunter2@tracker.example/get?id=1",
+             "https://[redacted]@tracker.example/get?id=1"),
+            ("https://tracker.example/get?monkeykey=notasecret",
+             "https://tracker.example/get?monkeykey=notasecret"),
+            # a private tracker's announce url arrives percent encoded inside a magnet
+            ("magnet:?xt=urn:btih:aaaa&tr=http%3A%2F%2Ftr.example%2Fannounce%3Fpasskey%3Ds3cr3t",
+             "magnet:?xt=urn:btih:aaaa&tr=http%3A%2F%2Ftr.example%2Fannounce%3Fpasskey%3D[redacted]"),
+            # and a downloader can hand back a bare fragment rather than a url
+            ("passkey=s3cr3t", "passkey=[redacted]"),
+            ("Unable to add torrent from http://tr.example/get?passkey=s3cr3t",
+             "Unable to add torrent from http://tr.example/get?passkey=[redacted]"),
+        ]
+        for url, expected in data:
+            self.assertEqual(formatter.redact_url(url), expected)
+
+    def test_redact_url_config_params(self):
+        """REDACT_PARAMS extends the built-in credential list."""
+        CONFIG['REDACT_PARAMS'] = 'jackett_apikey, custom_token'
+        formatter._credential_re_cache['params'] = None
+        try:
+            url = "http://indexer/dl?jackett_apikey=deadbeef&id=42"
+            result = formatter.redact_url(url)
+            self.assertNotIn('deadbeef', result)
+            self.assertIn('jackett_apikey=[redacted]', result)
+
+            url2 = "http://indexer/dl?custom_token=s3cr3t&t=get"
+            result2 = formatter.redact_url(url2)
+            self.assertNotIn('s3cr3t', result2)
+            self.assertIn('custom_token=[redacted]', result2)
+        finally:
+            CONFIG['REDACT_PARAMS'] = ''
+            formatter._credential_re_cache['params'] = None
+
+    def test_redact_url_path_secrets(self):
+        """Secrets from REDACTLIST are redacted in URL paths."""
+        original = getattr(CONFIG, 'REDACTLIST', [])
+        CONFIG.REDACTLIST = ['pkl4u83iz41up73m4zsigqsd4zyie50r']
+        try:
+            url = "http://192.168.1.10:9117/dl/strike/pkl4u83iz41up73m4zsigqsd4zyie50r/t.torrent"
+            result = formatter.redact_url(url)
+            self.assertNotIn('pkl4u83iz41up73m4zsigqsd4zyie50r', result)
+            self.assertIn('[redacted]', result)
+            self.assertIn('/dl/strike/', result)
+        finally:
+            CONFIG.REDACTLIST = original

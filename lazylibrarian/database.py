@@ -13,14 +13,13 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import with_statement
 
+import logging
 import os
 import sqlite3
 import threading
 import time
 import traceback
-import logging
 
 # DO NOT import from common in this module, circular import
 from lazylibrarian.filesystem import DIRS
@@ -31,8 +30,18 @@ db_lock = threading.Lock()
 
 class DBConnection:
     def __init__(self):
+        self.connection = None  # set before sqlite3.connect so exception handler can safely inspect it
+        self.logger = logging.getLogger(__name__)
+        self.dbcommslogger = logging.getLogger('special.dbcomms')
         try:
-            self.connection = sqlite3.connect(DIRS.get_dbfile(), 20,)
+            try:
+                self.dblog = DIRS.get_logfile('database.log')
+            except Exception:
+                self.dblog = DIRS.ensure_data_subdir('Logs')
+                self.dblog = os.path.join(self.dblog, 'database.log')
+
+            self.dbcommslogger.debug('open')
+            self.connection = sqlite3.connect(DIRS.get_dbfile(), timeout=20)
             # Use write-ahead logging to do fewer disk writes
             self.connection.execute("PRAGMA journal_mode = WAL")
             # sync less often as using WAL mode
@@ -43,29 +52,43 @@ class DBConnection:
             self.connection.execute("PRAGMA foreign_keys = ON")
             self.connection.execute("PRAGMA temp_store = 2")  # memory
             self.connection.row_factory = sqlite3.Row
-            try:
-                self.dblog = DIRS.get_logfile('database.log')
-            except Exception:
-                self.dblog = DIRS.ensure_data_subdir('Logs')
-                self.dblog = os.path.join(self.dblog, 'database.log')
-            self.logger = logging.getLogger(__name__)
-            self.dbcommslogger = logging.getLogger('special.dbcomms')
-            self.dbcommslogger.debug('open')
             self.threadname = threading.current_thread().name
             self.threadid = threading.get_ident()  # native_id is in Python 3.8+
             self.opened = 1
         except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.debug(str(e))
-            logger.debug(DIRS.get_dbfile())
-            logger.debug(str(os.stat(DIRS.get_dbfile())))
-            self.connection.close()
-            raise e
+            dbfile = DIRS.get_dbfile()
+            # Diagnose the root cause: permissions, too many open files, missing directory, etc.
+            if isinstance(e, sqlite3.OperationalError):
+                if os.path.exists(dbfile):
+                    try:
+                        import resource
+                        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+                        self.logger.warning(
+                            f"Database connection failed (OperationalError) for [{dbfile}]: {e}. "
+                            f"Open file limit: {soft}/{hard}. "
+                            f"If this is 'too many open files', reduce concurrent threads or increase the OS fd limit.")
+                    except Exception:
+                        self.logger.warning(f"Database connection failed (OperationalError) for [{dbfile}]: {e}")
+                else:
+                    self.logger.warning(
+                        f"Database connection failed: [{dbfile}] does not exist or is not accessible: {e}")
+            else:
+                self.logger.warning(f"Database connection failed: [{dbfile}] {e}")
+            if self.connection:
+                self.connection.close()
+            raise
 
     def __del__(self):
-        if hasattr(self, 'opened'):  # If not, the DB object was partially initialised and isn't valud
-            if self.opened > 0:
-                self.close()
+        if hasattr(self, 'opened') and self.opened > 0:
+            # If not, the DB object was partially initialised and isn't valud
+            self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
 
     def close(self):
         self.dbcommslogger.debug('close')
@@ -166,14 +189,13 @@ class DBConnection:
                     self.dbcommslogger.debug(f'Suppressed {msg}')
                     self.connection.commit()
                     break
-                else:
-                    self.dbcommslogger.debug(f'#{attempt} {elapsed:.4f} {query} [{args}]')
-                    self.dbcommslogger.debug(f'IntegrityError: {msg}')
+                self.dbcommslogger.debug(f'#{attempt} {elapsed:.4f} {query} [{args}]')
+                self.dbcommslogger.debug(f'IntegrityError: {msg}')
 
-                    self.logger.error(f'Database IntegrityError: {e}')
-                    self.logger.error(f"Failed query: [{query}]")
-                    self.logger.error(f"Failed args: [{str(args)}]")
-                    raise
+                self.logger.error(f'Database IntegrityError: {e}')
+                self.logger.error(f"Failed query: [{query}]")
+                self.logger.error(f"Failed args: [{str(args)}]")
+                raise
 
             except sqlite3.DatabaseError as e:
                 elapsed = time.time() - start

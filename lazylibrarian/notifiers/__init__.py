@@ -20,19 +20,22 @@ import logging
 import traceback
 
 from lazylibrarian.config2 import CONFIG
-from . import androidpn
-from . import apprise_notify
-from . import boxcar
-from . import custom_notify
-from . import email_notify
-from . import growl
-from . import prowl
-from . import pushbullet
-from . import pushover
-from . import slack
-from . import telegram
-from . import tweet
+
 from ..telemetry import TELEMETRY
+from . import (
+    androidpn,
+    apprise_notify,
+    boxcar,
+    custom_notify,
+    email_notify,
+    growl,
+    prowl,
+    pushbullet,
+    pushover,
+    slack,
+    telegram,
+    tweet,
+)
 
 # online
 twitter_notifier = tweet.TwitterNotifier()

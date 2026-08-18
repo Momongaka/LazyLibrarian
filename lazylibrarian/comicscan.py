@@ -21,12 +21,19 @@ from shutil import copyfile
 
 import lazylibrarian
 from lazylibrarian import database
-from lazylibrarian.comicid import cv_identify, cx_identify, comic_metadata, cv_issue, cx_issue
+from lazylibrarian.comicid import comic_metadata, cv_identify, cv_issue, cx_identify, cx_issue
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, path_isfile, syspath, walk, setperm, get_directory
-from lazylibrarian.formatter import plural, check_int, now, get_list, sanitize
+from lazylibrarian.filesystem import (
+    DIRS,
+    get_directory,
+    path_isfile,
+    setperm,
+    splitext,
+    syspath,
+)
+from lazylibrarian.formatter import check_int, get_list, now, plural, sanitize
 from lazylibrarian.images import create_mag_cover
-from lazylibrarian.postprocess import create_comic_opf
+from lazylibrarian.metadata_opf import create_comic_opf
 
 
 def comic_scan(comicid=None):
@@ -94,7 +101,7 @@ def comic_scan(comicid=None):
 
         logger.info(f" Checking [{mag_path}] for {CONFIG['COMIC_TYPE']}")
 
-        for rootdir, _, filenames in walk(mag_path):
+        for rootdir, _, filenames in os.walk(mag_path):
             for fname in filenames:
                 if CONFIG.is_valid_booktype(fname, booktype='comic'):
                     title = ''
@@ -253,7 +260,7 @@ def comic_scan(comicid=None):
                             db.upsert("comicissues", new_value_dict, control_value_dict)
                             if not iss_entry:
                                 dest_path, global_name = os.path.split(issuefile)
-                                global_name = os.path.splitext(global_name)[0]
+                                global_name = splitext(global_name)[0]
                                 data = control_value_dict
                                 data.update(new_value_dict)
                                 data['Title'] = title
@@ -266,8 +273,8 @@ def comic_scan(comicid=None):
                         ignorefile = os.path.join(os.path.dirname(issuefile), '.ll_ignore')
                         try:
                             with open(syspath(ignorefile), 'w', encoding='utf-8') as f:
-                                f.write(u'comic')
-                        except IOError as e:
+                                f.write('comic')
+                        except OSError as e:
                             logger.warning(f"Unable to create/write to ignorefile: {str(e)}")
 
                         # see if this issues date values are useful

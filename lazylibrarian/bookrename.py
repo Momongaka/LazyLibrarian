@@ -11,18 +11,39 @@
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
 
+import logging
 import os
 import re
 import shutil
-import logging
 import traceback
+
 from rapidfuzz import fuzz
-from lazylibrarian.config2 import CONFIG
+
 from lazylibrarian import database
 from lazylibrarian.common import multibook, only_punctuation
-from lazylibrarian.filesystem import syspath, remove_file, listdir, safe_move, opf_file, get_directory, copy_tree
-from lazylibrarian.formatter import plural, check_int, get_list, make_unicode, sort_definite, surname_first, \
-    sanitize, replacevars
+from lazylibrarian.config2 import CONFIG
+from lazylibrarian.filesystem import (
+    copy_tree,
+    get_directory,
+    listdir,
+    opf_file,
+    path_isdir,
+    path_isfile,
+    remove_file,
+    safe_move,
+    splitext,
+    syspath,
+)
+from lazylibrarian.formatter import (
+    check_int,
+    get_list,
+    make_unicode,
+    plural,
+    replacevars,
+    sanitize,
+    sort_definite,
+    surname_first,
+)
 from lazylibrarian.opfedit import opf_read
 
 try:
@@ -34,7 +55,7 @@ except ImportError:
 # noinspection PyUnusedLocal
 def id3read(filename):
     logger = logging.getLogger(__name__)
-    loggerlibsync = logging.getLogger('special.libsync')
+    libsynclogger = logging.getLogger('special.libsync')
     mydict = {}
     if not TinyTag:
         logger.warning("TinyTag library not available")
@@ -84,10 +105,10 @@ def id3read(filename):
         else:
             albumartist = ''
 
-        if loggerlibsync.isEnabledFor(logging.DEBUG):
+        if libsynclogger.isEnabledFor(logging.DEBUG):
             for tag in ['filename', 'artist', 'albumartist', 'composer', 'album', 'title', 'track',
                         'track_total', 'comment']:
-                loggerlibsync.debug(f"id3r.{tag} [{eval(tag)}]")
+                libsynclogger.debug(f"id3r.{tag} [{eval(tag)}]")
 
         if artist == 'None':
             artist = ''
@@ -145,7 +166,7 @@ def id3read(filename):
             logger.debug(str(e))
 
         db.close()
-        if author and type(author) is list:
+        if author and isinstance(author, list):
             lst = ', '.join(author)
             logger.debug(f"id3reader author list [{lst}]")
             author = author[0]  # if multiple authors, just use the first one
@@ -194,13 +215,11 @@ def audio_parts(folder, bookname, authorname):
                 prt = entry[-1]
                 partlist.append([chap, prt, f])
                 parts.append(prt)
-                if not abridged:
+                if not abridged and 'unabr' in f.lower():
                     # unabridged is sometimes shortened to unabr.
-                    if 'unabr' in f.lower():
-                        abridged = 'Unabridged'
-                if not abridged:
-                    if 'abridged' in f.lower():
-                        abridged = 'Abridged'
+                    abridged = 'Unabridged'
+                if not abridged and 'abridged' in f.lower():
+                    abridged = 'Abridged'
 
     parts = list(set(parts))
     if len(parts) > 1:
@@ -245,14 +264,12 @@ def audio_parts(folder, bookname, authorname):
                         if not book:
                             book = id3r['title']
 
-                        if author and book:
+                        if author and book and track != 0 and not (track == 1 and total == 1):
                             # ignore part0 and part1of1
-                            if track != 0 and not (track == 1 and total == 1):
-                                parts.append([track, book, author, f])
+                            parts.append([track, book, author, f])
 
                     except Exception as e:
                         logger.error(f"id3tag {type(e).__name__} {str(e)}")
-                        pass
         logger.debug(f"ID3read found {len(parts)}")
         total_parts = cnt
 
@@ -261,7 +278,7 @@ def audio_parts(folder, bookname, authorname):
         chapters = []
         for part in partlist:
             chapters.append(int(part[0]))
-        chapters = sorted(list(set(chapters)))
+        chapters = sorted(set(chapters))
         num_chapters = len(chapters)
         cnt = 1
         while cnt <= num_chapters:
@@ -334,41 +351,40 @@ def audio_parts(folder, bookname, authorname):
             logger.debug("No usable track info from id3")
             if len(parts) == 1:
                 return parts, failed, '', abridged
-            else:
-                # try to extract part information from filename. Search for token style of part 1 in this order...
-                for token in [' 001.', ' 01.', ' 1.', ' 001 ', ' 01 ', ' 1 ', '001', '01']:
-                    if tokmatch:
+            # try to extract part information from filename. Search for token style of part 1 in this order...
+            for token in [' 001.', ' 01.', ' 1.', ' 001 ', ' 01 ', ' 1 ', '001', '01']:
+                if tokmatch:
+                    break
+                for part in parts:
+                    if token in part[3]:
+                        logger.debug(f"Using token '{token}' from {part[3]}")
+                        tokmatch = token
                         break
+            if tokmatch:  # we know the numbering style, get numbers for the other parts
+                cnt = 0
+                while cnt < len(parts):
+                    cnt += 1
+                    if tokmatch == ' 001.':
+                        pattern = f' {str(cnt).zfill(3)}.'
+                    elif tokmatch == ' 01.':
+                        pattern = f' {str(cnt).zfill(2)}.'
+                    elif tokmatch == ' 1.':
+                        pattern = f' {str(cnt)}.'
+                    elif tokmatch == ' 001 ':
+                        pattern = f' {str(cnt).zfill(3)} '
+                    elif tokmatch == ' 01 ':
+                        pattern = f' {str(cnt).zfill(2)} '
+                    elif tokmatch == ' 1 ':
+                        pattern = f' {str(cnt)} '
+                    elif tokmatch == '001':
+                        pattern = f'{str(cnt).zfill(3)}'
+                    else:
+                        pattern = f'{str(cnt).zfill(2)}'
+                    # standardise numbering of the parts
                     for part in parts:
-                        if token in part[3]:
-                            logger.debug(f"Using token '{token}' from {part[3]}")
-                            tokmatch = token
+                        if pattern in part[3]:
+                            part[0] = cnt
                             break
-                if tokmatch:  # we know the numbering style, get numbers for the other parts
-                    cnt = 0
-                    while cnt < len(parts):
-                        cnt += 1
-                        if tokmatch == ' 001.':
-                            pattern = f' {str(cnt).zfill(3)}.'
-                        elif tokmatch == ' 01.':
-                            pattern = f' {str(cnt).zfill(2)}.'
-                        elif tokmatch == ' 1.':
-                            pattern = f' {str(cnt)}.'
-                        elif tokmatch == ' 001 ':
-                            pattern = f' {str(cnt).zfill(3)} '
-                        elif tokmatch == ' 01 ':
-                            pattern = f' {str(cnt).zfill(2)} '
-                        elif tokmatch == ' 1 ':
-                            pattern = f' {str(cnt)} '
-                        elif tokmatch == '001':
-                            pattern = f'{str(cnt).zfill(3)}'
-                        else:
-                            pattern = f'{str(cnt).zfill(2)}'
-                        # standardise numbering of the parts
-                        for part in parts:
-                            if pattern in part[3]:
-                                part[0] = cnt
-                                break
 
     except Exception as e:
         logger.error(str(e))
@@ -400,7 +416,7 @@ def audio_parts(folder, bookname, authorname):
     return parts, failed, tokmatch, abridged
 
 
-def audio_rename(bookid, rename=False, playlist=False):
+def audio_rename(bookid, rename=False, playlist=False, overwrite=False):
     """
     :param bookid: book to process
     :param rename: rename to match audiobook filename pattern
@@ -458,7 +474,7 @@ def audio_rename(bookid, rename=False, playlist=False):
 
     if rename and old_path != dest_path:
         try:
-            if len(old_path) > len(dest_path) and old_path.startswith(dest_path):
+            if len(old_path) > len(dest_path) and old_path.startswith(dest_path + os.sep):
                 # old_path is a subdir within new correct destination
                 logger.debug(f"move contents of folder {old_path} to {dest_path}")
                 failed, err = copy_tree(old_path, dest_path)
@@ -466,16 +482,22 @@ def audio_rename(bookid, rename=False, playlist=False):
                     logger.error(f"Failed to copy {failed} files to {dest_path}")
                     logger.debug(f"{err}")
                     return ''
-                else:
-                    shutil.rmtree(old_path)
+                logger.debug(f"Removing folder {old_path}")
+                shutil.rmtree(old_path)
             else:
-                logger.debug(f"moving folder {old_path} to {dest_path}")
-                dest_path = safe_move(old_path, dest_path)
-            book_filename = os.path.join(dest_path, os.path.basename(book_filename))
+                if path_isdir(dest_path) and not overwrite:
+                    logger.debug(f"Not moving folder {old_path} as {dest_path} exists")
+                else:
+                    logger.debug(f"moving folder {old_path} to {dest_path}")
+                    dest_path = safe_move(old_path, dest_path)
+                    book_filename = os.path.join(dest_path, os.path.basename(book_filename))
         except Exception as why:
             msg = f'Rename failed: {why}'
             logger.error(msg)
             return ''
+
+    if not rename:
+        dest_path = old_path
 
     if playlist:
         try:
@@ -490,7 +512,8 @@ def audio_rename(bookid, rename=False, playlist=False):
         bookfile = namevars['AudioSingleFile']
         if not bookfile:
             bookfile = f"{exists['AuthorName']} - {exists['BookName']}"
-        out_type = os.path.splitext(part[3])[1]
+        bookfile = sanitize(bookfile, True)
+        out_type = splitext(part[3])[1]
         outfile = bookfile + out_type
         if playlist:
             if rename:
@@ -505,9 +528,13 @@ def audio_rename(bookid, rename=False, playlist=False):
                 n = o
             if o != n:
                 try:
-                    n = safe_move(o, n)
+                    if path_isfile(n) and not overwrite:
+                        logger.debug(f"Not moving {o} as {n} exists")
+                        n = o
+                    else:
+                        logger.debug(f"{exists['BookName']}: audio_rename [{o}] to [{n}]")
+                        n = safe_move(o, n)
                     book_filename = n  # return part 1 of set
-                    logger.debug(f"{exists['BookName']}: audio_rename [{o}] to [{n}]")
                 except Exception as e:
                     logger.error(f'Unable to rename [{o}] to [{n}] {type(e).__name__} {str(e)}')
     else:
@@ -517,9 +544,9 @@ def audio_rename(bookid, rename=False, playlist=False):
                 '$Part', str(part[0]).zfill(len(str(len(parts))))).replace(
                 '$Total', str(len(parts)))
             pattern = ' '.join(pattern.split()).strip()
-            pattern = pattern + os.path.splitext(part[3])[1]
+            pattern = pattern + splitext(part[3])[1]
             if rename:
-                pattern = sanitize(pattern)
+                pattern = sanitize(pattern, True)
 
             if playlist:
                 if rename:
@@ -534,7 +561,11 @@ def audio_rename(bookid, rename=False, playlist=False):
                     n = o
                 if o != n:
                     try:
-                        n = safe_move(o, n)
+                        if path_isfile(n) and not overwrite:
+                            logger.debug(f"Not renaming [{o}] as [{n}] exists")
+                            n = o
+                        else:
+                            n = safe_move(o, n)
                         if part[0] == 1:
                             book_filename = n  # return part 1 of set
                         logger.debug(f"{exists['BookName']}: audio_rename [{o}] to [{n}]")
@@ -559,7 +590,7 @@ def stripspaces(pathname):
     return pathname
 
 
-def book_rename(bookid):
+def book_rename(bookid, overwrite=False):
     logger = logging.getLogger(__name__)
     db = database.DBConnection()
     cmd = ('select AuthorName,BookName,BookFile from books,authors where '
@@ -607,7 +638,7 @@ def book_rename(bookid):
     new_basename = namevars['BookFile']
 
     if fullname and not os.path.isfile(fullname):
-        _, extn = os.path.splitext(fullname)
+        _, extn = splitext(fullname)
         if extn:
             new_location = os.path.join(dest_path, new_basename + extn)
             if os.path.isfile(new_location):
@@ -638,10 +669,10 @@ def book_rename(bookid):
     for fname in listdir(old_path):
         extn = ''
         if CONFIG.is_valid_booktype(fname, booktype='ebook'):
-            extn = os.path.splitext(fname)[1]
-        elif fname.endswith('.opf') and not fname == 'metadata.opf':
+            extn = splitext(fname)[1]
+        elif fname.endswith('.opf') and fname != 'metadata.opf':
             extn = '.opf'
-        elif fname.endswith('.jpg') and not fname == 'cover.jpg':
+        elif fname.endswith('.jpg') and fname != 'cover.jpg':
             extn = '.jpg'
         if extn:
             ofname = os.path.join(old_path, fname)
@@ -651,8 +682,12 @@ def book_rename(bookid):
                 nfname = ofname
             if ofname != nfname:
                 try:
-                    nfname = safe_move(ofname, nfname)
-                    m = f"move file {ofname} to {nfname} "
+                    if path_isfile(nfname) and not overwrite:
+                        m = f"Not moving {ofname} as {nfname} exists"
+                        nfname = ofname
+                    else:
+                        nfname = safe_move(ofname, nfname)
+                        m = f"move file {ofname} to {nfname} "
                     logger.debug(m)
                     msg += m
                     if ofname == exists['BookFile']:  # if we renamed/moved the preferred file, return new name
@@ -669,8 +704,12 @@ def book_rename(bookid):
                 nfname = ofname
             if ofname != nfname:
                 try:
-                    nfname = safe_move(ofname, nfname)
-                    m = f"move file {ofname} to {nfname} "
+                    if path_isfile(nfname) and not overwrite:
+                        m = f"Not moving {ofname} as {nfname} exists"
+                        nfname = ofname
+                    else:
+                        nfname = safe_move(ofname, nfname)
+                        m = f"move file {ofname} to {nfname} "
                     logger.debug(m)
                     msg += m
                 except Exception as e:
@@ -680,12 +719,14 @@ def book_rename(bookid):
 
     if not len(listdir(old_path)):
         # everything moved out...
+        logger.debug(f"Removing empty {old_path}")
         os.rmdir(old_path)
 
     return fullname, msg
 
 
 def delete_empty_folders(startdir):
+    logger = logging.getLogger(__name__)
     deleted = set()
     for current_dir, subdirs, files in os.walk(startdir, topdown=False):
         still_has_subdirs = False
@@ -697,6 +738,8 @@ def delete_empty_folders(startdir):
         if not any(files) and not still_has_subdirs:
             os.rmdir(current_dir)
             deleted.add(current_dir)
+    if deleted:
+        logger.debug(f"Removed empty {deleted}")
     return deleted
 
 
@@ -713,7 +756,7 @@ def name_vars(bookid, abridged=''):
         SerYear is the publication year of the first book in the series or empty string
         Language is the language(s) if known or empty string
         """
-    loggermatching = logging.getLogger('special.matching')
+    matchinglogger = logging.getLogger('special.matching')
     mydict = {}
     seriesnum = ''
     seriesname = ''
@@ -776,7 +819,6 @@ def name_vars(bookid, abridged=''):
                 break
             except ValueError:
                 seriesnum = ''
-                pass
 
         padnum = ''
         if res and seriesnum == '':
@@ -797,10 +839,9 @@ def name_vars(bookid, abridged=''):
             res = db.match(cmd, (seriesid,))
             if res:
                 seriesname = res['SeriesName']
-                if seriesnum == '':
+                if seriesnum == '' and seriesname and serieslist:
                     # add what we got back to end of series name
-                    if seriesname and serieslist:
-                        seriesname = f"{seriesname} {serieslist}"
+                    seriesname = f"{seriesname} {serieslist}"
 
         seriesname = ' '.join(seriesname.split())  # strip extra spaces
         if only_punctuation(seriesname):  # but don't return just whitespace or punctuation
@@ -872,24 +913,18 @@ def name_vars(bookid, abridged=''):
                 mydict['SortTitle'] = ''
 
     except Exception as e:
-        loggermatching.debug(str(e))
+        matchinglogger.debug(str(e))
     db.close()
 
-    mydict['FolderName'] = stripspaces(sanitize(replacevars(CONFIG['EBOOK_DEST_FOLDER'],
-                                                            mydict)))
-    mydict['AudioFolderName'] = stripspaces(sanitize(replacevars(CONFIG['AUDIOBOOK_DEST_FOLDER'],
-                                                                 mydict)))
-    mydict['BookFile'] = stripspaces(sanitize(replacevars(CONFIG['EBOOK_DEST_FILE'],
-                                                          mydict)))
-    mydict['AudioFile'] = stripspaces(sanitize(replacevars(CONFIG['AUDIOBOOK_DEST_FILE'],
-                                                           mydict))).replace('sPart',
-                                                                             '$Part').replace('sTotal',
-                                                                                              '$Total')
-    mydict['AudioSingleFile'] = stripspaces(sanitize(replacevars(CONFIG['AUDIOBOOK_SINGLE_FILE'],
-                                                                 mydict))).replace('sPart',
-                                                                                   '$Part').replace('sTotal',
-                                                                                                    '$Total')
+    mydict['FolderName'] = stripspaces(replacevars(CONFIG['EBOOK_DEST_FOLDER'], mydict, True))
+    mydict['AudioFolderName'] = stripspaces(replacevars(CONFIG['AUDIOBOOK_DEST_FOLDER'], mydict, True))
+    mydict['BookFile'] = stripspaces(replacevars(CONFIG['EBOOK_DEST_FILE'], mydict, True))
+    mydict['AudioFile'] = (stripspaces(replacevars(CONFIG['AUDIOBOOK_DEST_FILE'], mydict))
+                           .replace('sPart', '$Part')
+                           .replace('sTotal', '$Total'))
+    mydict['AudioSingleFile'] = (stripspaces(replacevars(CONFIG['AUDIOBOOK_SINGLE_FILE'], mydict, True))
+                                 .replace('sPart', '$Part')
+                                 .replace('sTotal', '$Total'))
     if bookid != 'test':
-        loggermatching.debug(str(mydict))
+        matchinglogger.debug(str(mydict))
     return mydict
-

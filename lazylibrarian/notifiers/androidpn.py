@@ -24,7 +24,7 @@ import requests
 
 from lazylibrarian.common import proxy_list
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 
 class AndroidPNNotifier:
@@ -50,29 +50,27 @@ class AndroidPNNotifier:
         try:
             timeout = CONFIG.get_int('HTTP_TIMEOUT')
             r = requests.get(url, params=data, timeout=timeout, proxies=proxies)
-            status = str(r.status_code)
-            if status.startswith('2'):
+            if r.status_code == 200:
                 logger.debug("ANDROIDPN: Notification successful.")
                 return True
 
             # HTTP status 404 if the provided email address isn't a AndroidPN user.
-            if status == '404':
+            if r.status_code == 404:
                 logger.warning("ANDROIDPN: Username is wrong/not a AndroidPN email. AndroidPN will send an email to it")
             # For HTTP status code 401's, it is because you are passing in either an
             # invalid token, or the user has not added your service.
-            elif status == '401':
+            elif r.status_code == 401:
                 subscribe_note = self._send_android_pn(title, msg, url, username, broadcast)
                 if subscribe_note:
                     logger.debug("ANDROIDPN: Subscription sent")
                     return True
-                else:
-                    logger.error("ANDROIDPN: Subscription could not be sent")
+                logger.error("ANDROIDPN: Subscription could not be sent")
 
             # If you receive an HTTP status code of 400, it is because you failed to send the proper parameters
-            elif status == '400':
+            elif r.status_code == 400:
                 logger.error("ANDROIDPN: Wrong data sent to AndroidPN")
             else:
-                logger.error(f"ANDROIDPN: Got error code {status}")
+                logger.error(f"ANDROIDPN: Got error code {r.status_code}")
             return False
 
         except Exception as e:
@@ -129,13 +127,13 @@ class AndroidPNNotifier:
     def notify_snatch(self, ep_name, fail=False):
         if CONFIG.get_bool('ANDROIDPN_NOTIFY_ONSNATCH'):
             if fail:
-                self._notify(notifyStrings[NOTIFY_FAIL], ep_name)
+                self._notify(notify_strings[NOTIFY_FAIL], ep_name)
             else:
-                self._notify(notifyStrings[NOTIFY_SNATCH], ep_name)
+                self._notify(notify_strings[NOTIFY_SNATCH], ep_name)
 
     def notify_download(self, ep_name):
         if CONFIG.get_bool('ANDROIDPN_NOTIFY_ONDOWNLOAD'):
-            self._notify(notifyStrings[NOTIFY_DOWNLOAD], ep_name)
+            self._notify(notify_strings[NOTIFY_DOWNLOAD], ep_name)
 
     def test_notify(self):
         return self._notify("Test", "This is a test notification from LazyLibrarian", force=True)

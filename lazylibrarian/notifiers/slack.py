@@ -19,7 +19,7 @@ import requests
 
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.formatter import unaccented
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 
 class SlackNotifier:
@@ -59,7 +59,7 @@ class SlackNotifier:
         #   Removed attachment approach to text and icon_url in slack formatting cleanup effort - bbq 20180724
         postdata += (f'"icon_url": "https://{CONFIG["GIT_HOST"]}/{CONFIG["GIT_USER"]}/{CONFIG["GIT_REPO"]}'
                      f'/raw/master/data/images/ll.png", ')
-        postdata += '"text":"%s %s"}' % (message, event)
+        postdata += f'"text":"{message} {event}"'
         r = requests.request(method,
                              url,
                              data=postdata,
@@ -96,13 +96,13 @@ class SlackNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG.get_bool('SLACK_NOTIFY_ONSNATCH'):
             if fail:
-                self._notify(message=title, event=notifyStrings[NOTIFY_FAIL])
+                self._notify(message=title, event=notify_strings[NOTIFY_FAIL])
             else:
-                self._notify(message=title, event=notifyStrings[NOTIFY_SNATCH])
+                self._notify(message=title, event=notify_strings[NOTIFY_SNATCH])
 
     def notify_download(self, title):
         if CONFIG.get_bool('SLACK_NOTIFY_ONDOWNLOAD'):
-            self._notify(message=title, event=notifyStrings[NOTIFY_DOWNLOAD])
+            self._notify(message=title, event=notify_strings[NOTIFY_DOWNLOAD])
 
     def test_notify(self, title="Test"):
         return self._notify(message="This is a test notification from LazyLibrarian",

@@ -23,7 +23,7 @@ import logging
 from base64 import standard_b64encode
 from http.client import HTTPException
 from urllib.parse import quote
-from xmlrpc.client import ServerProxy, ProtocolError
+from xmlrpc.client import ProtocolError, ServerProxy
 
 import lazylibrarian
 from lazylibrarian.config2 import CONFIG
@@ -43,9 +43,8 @@ def delete_nzb(nzbid, remove_data=False):
     if remove_data:
         send_nzb(cmd='GroupFinalDelete', nzbid=nzbid)
         return send_nzb(cmd='HistoryFinalDelete', nzbid=nzbid)
-    else:
-        send_nzb(cmd='GroupDelete', nzbid=nzbid)
-        return send_nzb(cmd='HistoryDelete', nzbid=nzbid)
+    send_nzb(cmd='GroupDelete', nzbid=nzbid)
+    return send_nzb(cmd='HistoryDelete', nzbid=nzbid)
 
 
 def send_nzb(nzb=None, cmd=None, nzbid=None, library='eBook', label=''):
@@ -104,8 +103,7 @@ def send_nzb(nzb=None, cmd=None, nzbid=None, library='eBook', label=''):
                 res = "Successfully connected to NZBget, unable to send message"
                 logger.debug(res)
                 return False, res
-            else:
-                logger.warning(f"Successfully connected to NZBget, but unable to send {nzb.name}.nzb")
+            logger.warning(f"Successfully connected to NZBget, but unable to send {nzb.name}.nzb")
 
     except HTTPException as e:
         res = "Please check your NZBget host and port (if it is running). "
@@ -129,21 +127,34 @@ def send_nzb(nzb=None, cmd=None, nzbid=None, library='eBook', label=''):
         return False, res
 
     if cmd == 'history':
-        return nzb_get_rpc.history(), ''
-    elif cmd == 'listgroups':
-        return nzb_get_rpc.listgroups(), ''
-    elif nzbid is not None:
+        try:
+            res = nzb_get_rpc.history()
+            return res, ''
+        except Exception as e:
+            logger.error(f"NZBget history: {e}")
+            logger.error(f"NZBget url [{url}]")
+            return '' , str(e)
+
+    if cmd == 'listgroups':
+        try:
+            res = nzb_get_rpc.listgroups()
+            return res, ''
+        except Exception as e:
+            logger.error(f"NZBget listgroups: {e}")
+            logger.error(f"NZBget url [{url}]")
+            return '' , str(e)
+
+    if nzbid is not None:
         # its a command for an existing task
         id_array = [int(nzbid)]
         if cmd in ['GroupDelete', 'GroupFinalDelete', 'HistoryDelete', 'HistoryFinalDelete', 'GroupPause']:
             return nzb_get_rpc.editqueue(cmd, 0, "", id_array), ''
-        else:
-            res = f'Unsupported nzbget command {repr(cmd)}'
-            logger.debug(res)
-            return False, res
+        res = f'Unsupported nzbget command {repr(cmd)}'
+        logger.debug(res)
+        return False, res
 
     nzbcontent64 = None
-    if nzb.resultType == "nzbdata":
+    if nzb.result_type == "nzbdata":
         data = nzb.extraInfo[0]
         nzbcontent64 = make_unicode(standard_b64encode(data))
 
@@ -198,10 +209,9 @@ def send_nzb(nzb=None, cmd=None, nzbid=None, library='eBook', label=''):
         if nzbget_result:
             logger.debug("NZB sent to NZBget successfully")
             return nzbget_result, ''
-        else:
-            res = f"NZBget could not add {nzb.name}.nzb to the queue"
-            logger.error(res)
-            return False, res
+        res = f"NZBget could not add {nzb.name}.nzb to the queue"
+        logger.error(res)
+        return False, res
     except Exception as e:
         res = f"Connect Error to NZBget: could not add {nzb.name}.nzb to the queue: {type(e).__name__} {e}"
         logger.error(res)

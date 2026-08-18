@@ -21,7 +21,7 @@ import time
 from abc import ABC
 from enum import Enum
 from http.client import responses
-from typing import Any, Optional, Dict, Union
+from typing import Any
 from xml.etree import ElementTree
 
 import requests
@@ -31,9 +31,24 @@ from lazylibrarian import database
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.common import get_user_agent, proxy_list
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, path_isfile, path_isdir, syspath, remove_file, listdir
-from lazylibrarian.formatter import check_int, md5_utf8, make_bytestr, seconds_to_midnight, plural, make_unicode, \
-    thread_name
+from lazylibrarian.filesystem import (
+    DIRS,
+    listdir,
+    path_isdir,
+    path_isfile,
+    remove_file,
+    splitext,
+    syspath,
+)
+from lazylibrarian.formatter import (
+    check_int,
+    make_bytestr,
+    make_unicode,
+    md5_utf8,
+    plural,
+    seconds_to_midnight,
+    thread_name,
+)
 
 
 class ImageType(Enum):
@@ -45,7 +60,7 @@ class ImageType(Enum):
     TEST = 'test'
 
 
-service_blocked = ['goodreads', 'librarything', 'googleapis', 'openlibrary', 'hardcover']
+service_blocked = ['GoodReads', 'LibraryThing', 'Google', 'OpenLibrary', 'HardCover', 'DNB', 'RanobeDB', 'ISBN']
 
 
 def gr_api_sleep():
@@ -81,14 +96,15 @@ def init_hex_caches() -> bool:
     return ok
 
 
-def fetch_url(url: str, headers: Optional[Dict] = None, retry=True, timeout=True,
-              raw: bool = False) -> (Union[str, bytes], bool):
+def fetch_url(url: str, headers: dict | None = None, retry=True, timeout=True,
+              raw: bool = False) -> tuple[str | bytes, bool]:
     """ Return the result of fetching a URL and True if success
         Otherwise return error message and False
         Return data as raw/bytes, if raw == True
         Default to unicode, need to set raw=True for images/data
         Allow one retry on timeout by default """
     logger = logging.getLogger(__name__)
+    cachelogger = logging.getLogger('special.cache')
     http.client.HTTPConnection.debuglevel = 1 if lazylibrarian.REQUESTSLOG else 0
     # for key in logging.Logger.manager.loggerDict:
     #     print(key)
@@ -98,7 +114,7 @@ def fetch_url(url: str, headers: Optional[Dict] = None, retry=True, timeout=True
     url = make_unicode(url)
 
     for blk in service_blocked:
-        if blk in url and BLOCKHANDLER.is_blocked(blk):
+        if blk in url and BLOCKHANDLER.is_blocked(blk.split('.')[0]):
             return 'Blocked', False
 
     if headers is None:
@@ -116,19 +132,18 @@ def fetch_url(url: str, headers: Optional[Dict] = None, retry=True, timeout=True
         else:
             timeout = CONFIG.get_int('HTTP_TIMEOUT')
 
-    payload = {}
+    req_kwargs = {}
     if timeout:
-        payload["timeout"] = timeout
+        req_kwargs["timeout"] = timeout
     if proxies:
-        payload["proxies"] = proxies
+        req_kwargs["proxies"] = proxies
     verify = False
-    if url.startswith('https'):
-        if CONFIG.get_bool('SSL_VERIFY'):
-            verify = True
-            if CONFIG['SSL_CERTS']:
-                verify = CONFIG['SSL_CERTS']
+    if url.startswith('https') and CONFIG.get_bool('SSL_VERIFY'):
+        verify = True
+        if CONFIG['SSL_CERTS']:
+            verify = CONFIG['SSL_CERTS']
     try:
-        r = requests.get(url, verify=verify, params=payload, headers=headers)
+        r = requests.get(url, verify=verify, headers=headers, **req_kwargs)
     except requests.exceptions.TooManyRedirects as e:
         # This is to work around an oddity (bug??) with verified https goodreads requests
         # Goodreads sometimes redirects back to the same page in a loop using code 301,
@@ -140,7 +155,7 @@ def fetch_url(url: str, headers: Optional[Dict] = None, retry=True, timeout=True
             return f"TooManyRedirects {str(e)}", False
         logger.debug(f"Retrying - got TooManyRedirects on {url}")
         try:
-            r = requests.get(url, verify=False, params=payload, headers=headers)
+            r = requests.get(url, verify=False, headers=headers, **req_kwargs)
             logger.debug(f"TooManyRedirects retry status code {r.status_code}")
         except Exception as e:
             return f"Exception {type(e).__name__}: {str(e)}", False
@@ -150,13 +165,19 @@ def fetch_url(url: str, headers: Optional[Dict] = None, retry=True, timeout=True
             return f"Timeout {str(e)}", False
         logger.debug(f"fetch_url: retrying - got timeout on {url}")
         try:
-            r = requests.get(url, verify=verify, params=payload, headers=headers)
+            r = requests.get(url, verify=verify, headers=headers, **req_kwargs)
         except Exception as e:
             return f"Exception {type(e).__name__}: {str(e)}", False
     except Exception as e:
         return f"Exception {type(e).__name__}: {str(e)}", False
 
-    if str(r.status_code).startswith('2'):  # (200 OK etc)
+    if r.status_code == 202:
+        h = r.headers
+        cachelogger.debug(f"{h}")
+        logger.debug(f"{r.status_code} {len(r.content)}, {h.get('X-Cache')}")
+        r = requests.get(url, verify=verify, headers=headers, **req_kwargs)
+        logger.debug(f"Retry: {r.status_code} {len(r.content)}, {h.get('X-Cache')}")
+    if r.status_code == 200:
         if raw:
             return r.content, True
         return r.text, True
@@ -182,32 +203,30 @@ def fetch_url(url: str, headers: Optional[Dict] = None, retry=True, timeout=True
         else:
             logger.debug(f"Error {r.status_code} url={url}")
 
-    elif 'googleapis' in url:
+    elif 'googleapis' in url or 'google.com/search?q=ISBN' in url:
+        prov = 'googleapis' if 'googleapis' in url else 'ISBN'
         if 'Limit Exceeded' in msg:
             # how long until midnight Pacific Time when google reset the quotas
             delay = seconds_to_midnight() + 28800  # PT is 8hrs behind UTC
             if delay > 86400:
                 delay -= 86400  # no roll-over to next day
         elif r.status_code == 429:  # too many requests
-            delay = 10
+            delay = 60
         else:
             # might be forbidden for a different reason where midnight might not matter
             # eg "Cannot determine user location for geographically restricted operation"
             delay = 3600
 
-        logger.debug(f'Request denied, {r.status_code}, blocking googleapis for {delay} seconds: {msg}')
-        BLOCKHANDLER.replace_provider_entry('googleapis', delay, msg)
+        logger.debug(f'Request denied, {r.status_code}, blocking {prov} for {delay} seconds: {msg}')
+        BLOCKHANDLER.replace_provider_entry(prov, delay, msg)
     else:
         logger.debug(f"Error {r.status_code} url={url}")
 
-    if r.status_code in responses:
-        msg = responses[r.status_code]
-    else:
-        msg = r.text
+    msg = responses.get(r.status_code, r.text)
     return f"Response status {r.status_code}: {msg}", False
 
 
-def cache_img(img_type: ImageType, img_id: str, img_url: str, refresh=False) -> (str, bool, bool):
+def cache_img(img_type: ImageType, img_id: str, img_url: str, refresh=False) -> tuple[str, bool, bool]:
     """ Cache the image from the given filename or URL in the local images cache
         linked to the id.
         On success, return the link to the cached file, True, was_in_cache
@@ -223,8 +242,7 @@ def cache_img(img_type: ImageType, img_id: str, img_url: str, refresh=False) -> 
             cachelogger = logging.getLogger('special.cache')
             cachelogger.debug(f"Cached {img_type.name} image exists {cachefile}")
             return link, True, True
-        else:
-            had_cache = True
+        had_cache = True
 
     if img_url.startswith('http'):
         result, success = fetch_url(img_url, raw=True)
@@ -254,18 +272,18 @@ def cache_img(img_type: ImageType, img_id: str, img_url: str, refresh=False) -> 
     return msg, False, False
 
 
-def gr_xml_request(my_url, use_cache=True, expire=True) -> (Any, bool):
+def gr_xml_request(my_url, use_cache=True, expire=True) -> tuple[Any, bool]:
     # respect goodreads api limit
     result, in_cache = XMLCacheRequest(url=my_url, use_cache=use_cache, expire=expire).get_cached_request()
     return result, in_cache
 
 
-def json_request(my_url, use_cache=True, expire=True) -> (Any, bool):
+def json_request(my_url, use_cache=True, expire=True) -> tuple[Any, bool]:
     result, in_cache = JSONCacheRequest(url=my_url, use_cache=use_cache, expire=expire).get_cached_request()
     return result, in_cache
 
 
-def html_request(my_url, use_cache=True, expire=True) -> (Any, bool):
+def html_request(my_url, use_cache=True, expire=True) -> tuple[Any, bool]:
     result, in_cache = HTMLCacheRequest(url=my_url, use_cache=use_cache, expire=expire).get_cached_request()
     return result, in_cache
 
@@ -284,27 +302,24 @@ class CacheRequest(ABC):
     @abc.abstractmethod
     def name(cls) -> str:
         """ Return the name of the cache, such as XML, HTML or JSON """
-        pass
 
     @classmethod
     def cachedir_name(cls) -> str:
         return f"{cls.name()}Cache"
 
     @abc.abstractmethod
-    def read_from_cache(self, hashfilename: str) -> (str, bool):
+    def read_from_cache(self, hashfilename: str) -> tuple[str, bool]:
         """ Read the source from cache """
-        pass
 
-    def fetch_data(self) -> (str, bool):
+    def fetch_data(self) -> tuple[str, bool]:
         """ Fetch the data; called if it's not in the cache """
         return fetch_url(self.url, headers=None)
 
     @abc.abstractmethod
-    def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> (str, bool):
+    def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> tuple[str, bool]:
         """ Load the value from result and store it in cache if docache is True """
-        pass
 
-    def get_cached_request(self) -> (Any, bool):
+    def get_cached_request(self) -> tuple[Any, bool]:
         # hashfilename = hash of url
         # if hashfilename exists in cache and isn't too old, return its contents
         # if not, read url and store the result in the cache
@@ -330,14 +345,17 @@ class CacheRequest(ABC):
 
             result, success = self.fetch_data()
             if success:
-                self.cachelogger.debug(f"CacheHandler: Storing {self.name()} {myhash} for {self.url}")
+                self.cachelogger.debug(f"CacheHandler: Storing {self.name()} {myhash} {len(result)} bytes for {self.url}")
                 source, result = self.load_from_result_and_cache(result, hashfilename, expire_older_than)
+                self.cachelogger.debug(result)
+            elif '404' in result or '202' in result:  # don't block on "not found" or "accepted"
+                return None, False
             else:
                 msg = f"Got error response for {self.url}: {result.split('<')[0]}"
                 self.logger.debug(msg)
                 to_block = ''
                 for blk in service_blocked:
-                    if blk in self.url:
+                    if blk.lower() in self.url:
                         to_block = blk
                         break
                 if to_block:
@@ -349,20 +367,19 @@ class CacheRequest(ABC):
 
     def is_in_cache(self, expiry: int, hashfilename: str, myhash: str) -> bool:
         if self.use_cache and path_isfile(hashfilename):
+            file_size = os.stat(hashfilename).st_size
             cache_modified_time = os.stat(hashfilename).st_mtime
             time_now = time.time()
-            if self.expire and cache_modified_time < time_now - expiry:
-                # Cache entry is too old, delete it
+            if not file_size or (self.expire and cache_modified_time < time_now - expiry):
+                # Cache entry is empty or too old, delete it
                 cachelogger = logging.getLogger('special.cache')
                 cachelogger.debug(f"Expiring {myhash}")
                 os.remove(syspath(hashfilename))
                 return False
-            else:
-                return True
-        else:
-            return False
+            return True
+        return False
 
-    def get_hashed_filename(self, cache_location: str) -> (str, str):
+    def get_hashed_filename(self, cache_location: str) -> tuple[str, str]:
         myhash = md5_utf8(self.url)
         hashfilename = os.path.join(cache_location, myhash[0], myhash[1], f"{myhash}.{self.name().lower()}")
         return hashfilename, myhash
@@ -373,7 +390,7 @@ class XMLCacheRequest(CacheRequest):
     def name(cls) -> str:
         return "XML"
 
-    def read_from_cache(self, hashfilename: str) -> (str, bool):
+    def read_from_cache(self, hashfilename: str):
         with open(syspath(hashfilename), "rb") as cachefile:
             result = cachefile.read()
         source = None
@@ -399,42 +416,58 @@ class XMLCacheRequest(CacheRequest):
             return None, False
         return source, True
 
-    def fetch_data(self) -> (str, bool):
+    def fetch_data(self) -> tuple[str, bool]:
         gr_api_sleep()
-        return fetch_url(self.url, raw=True, headers=None)
+        headers = {'User-Agent': get_user_agent(), 'Accept': 'application/xml', 'Accept-Language': 'en-US,en;q=0.5'}
+        return fetch_url(self.url, raw=True, headers=headers)
 
-    def load_from_result_and_cache(self, result: str, filename: str, docache: bool) -> (str, bool):
+    def load_from_result_and_cache(self, result: str, filename: str, docache: bool):
         source = None
         result = make_bytestr(result)
-        if result and result.startswith(b'<?xml'):
-            try:
-                source = ElementTree.fromstring(result)
-                if not docache:
-                    self.cachelogger.debug(f"Returning {len(source)} bytes xml uncached")
-                    return source, False
-            except UnicodeEncodeError:
-                # sometimes we get utf-16 data labelled as utf-8
+        if not result:
+            self.cachelogger.debug("No result returned")
+        else:
+            if not result.startswith(b'<?xml'):
+                self.cachelogger.debug(f"{len(result)} bytes is not xml")
+            else:
                 try:
-                    result = result.decode('utf-16').encode('utf-8')
                     source = ElementTree.fromstring(result)
                     if not docache:
                         self.cachelogger.debug(f"Returning {len(source)} bytes xml uncached")
                         return source, False
-                except (ElementTree.ParseError, UnicodeEncodeError, UnicodeDecodeError):
+                except UnicodeEncodeError:
+                    # sometimes we get utf-16 data labelled as utf-8
+                    try:
+                        result = result.decode('utf-16').encode('utf-8')
+                        source = ElementTree.fromstring(result)
+                        if not docache:
+                            self.cachelogger.debug(f"Returning {len(source)} bytes xml uncached")
+                            return source, False
+                    except (ElementTree.ParseError, UnicodeEncodeError, UnicodeDecodeError):
+                        self.logger.error(f"Error parsing xml from {self.url}")
+                        source = None
+                except ElementTree.ParseError:
                     self.logger.error(f"Error parsing xml from {self.url}")
                     source = None
-            except ElementTree.ParseError:
-                self.logger.error(f"Error parsing xml from {self.url}")
-                source = None
 
         if source is not None:
-            with open(syspath(filename), "wb") as cachefile:
-                cachefile.write(result)
-                self.cachelogger.debug(f"Cached {len(source)} bytes xml {filename}")
+            try:
+                with open(syspath(filename), "wb") as cachefile:
+                    cachefile.write(result)
+                    self.cachelogger.debug(f"Cached {len(result)} bytes xml {filename}")
+            except Exception as e:
+                self.logger.error(f"Exception {e} writing {filename}")
+                return source, False
         else:
             self.logger.error(f"Error getting xml data from {self.url}")
             if result:
-                self.logger.error(f"Result: {result[:40]}")
+                self.logger.error(f"Result: {result[:80]}")
+                try:
+                    with open(syspath(f"{filename}.err"), "wb") as cachefile:
+                        cachefile.write(result)
+                        self.logger.error(f"Cached {len(result)} bytes {filename}.err")
+                except Exception as e:
+                    self.logger.error(f"Exception {e} writing {filename}.err")
             return None, False
         return source, True
 
@@ -444,16 +477,25 @@ class HTMLCacheRequest(CacheRequest):
     def name(cls) -> str:
         return "HTML"
 
-    def read_from_cache(self, hashfilename: str) -> (str, bool):
-        with open(syspath(hashfilename), "rb") as cachefile:
-            source = cachefile.read()
-        return source, True
+    def read_from_cache(self, hashfilename: str) -> tuple[bytes, bool]:
+        try:
+            with open(syspath(hashfilename), "rb") as cachefile:
+                source = cachefile.read()
+            return source, True
+        except Exception as e:
+            self.logger.error(f"Exception {e} reading {hashfilename}")
+            return b'', False
 
-    def load_from_result_and_cache(self, result: str, filename, docache) -> (str, bool):
+
+    def load_from_result_and_cache(self, result: str, filename, docache) -> tuple[str, bool]:
         source = make_bytestr(result)
-        with open(syspath(filename), "wb") as cachefile:
-            cachefile.write(source)
-        return source, True
+        try:
+            with open(syspath(filename), "wb") as cachefile:
+                cachefile.write(source)
+            return source, True
+        except Exception as e:
+            self.logger.error(f"Exception {e} writing {filename}")
+            return source, False
 
 
 class JSONCacheRequest(CacheRequest):
@@ -461,7 +503,7 @@ class JSONCacheRequest(CacheRequest):
     def name(cls) -> str:
         return "JSON"
 
-    def read_from_cache(self, hashfilename: str) -> (str, bool):
+    def read_from_cache(self, hashfilename: str) -> tuple[str | None, bool]:
         try:
             try:
                 with open(hashfilename) as f:
@@ -476,7 +518,7 @@ class JSONCacheRequest(CacheRequest):
             return None, False
         return source, True
 
-    def load_from_result_and_cache(self, result: str, filename: str, docache) -> (str, bool):
+    def load_from_result_and_cache(self, result: str, filename: str, docache) -> tuple[str | None, bool]:
         try:
             source = json.loads(result)
             if not docache:
@@ -485,9 +527,13 @@ class JSONCacheRequest(CacheRequest):
             self.logger.error(f"{type(e).__name__} decoding json from {self.url}")
             self.logger.debug(f"{e} : {result}")
             return None, False
-        json.dump(source, open(filename, "w"))
-        return source, True
-
+        try:
+            with open(filename, "w") as outfile:
+                json.dump(source, outfile)
+            return source, True
+        except Exception as e:
+            self.logger.error(f"Exception {e} writing {outfile}")
+            return source, False
 
 def clean_cache():
     """ Remove unused files from the cache - delete if expired or unused.
@@ -503,6 +549,7 @@ def clean_cache():
     db = database.DBConnection()
     result = []
     try:
+        logger.debug("Storing start time for CLEANCACHE")
         db.upsert("jobs", {'Start': time.time()}, {'Name': 'CLEANCACHE'})
         result = [
             # Remove files that are too old from cache directories
@@ -554,6 +601,7 @@ def clean_cache():
     except Exception as e:
         logger.error(str(e))
 
+    logger.debug("Storing finish time for CLEANCACHE")
     db.upsert("jobs", {'Finish': time.time()}, {'Name': 'CLEANCACHE'})
     db.close()
     thread_name(threadname)
@@ -668,10 +716,9 @@ class OrphanCleaner(FileCleaner):
         name = os.path.basename(filename)
         if self.dotsplit:
             return name.split('.')[0]
-        else:
-            # Magazines use a different encoding scheme in the file name.
-            fname, extn = os.path.splitext(name)
-            return fname.split('_')[0] + extn
+        # Magazines use a different encoding scheme in the file name.
+        fname, extn = splitext(name)
+        return fname.split('_')[0] + extn
 
     def clean_file(self, filename):
         try:
@@ -729,7 +776,7 @@ class DBCleaner(CacheCleaner):
             imgfile = ''
             if item[self.fimg] is None or item[self.fimg] == '':
                 keep = False
-            if keep and not item[self.fimg].startswith('http') and not item[self.fimg] == self.fallback:
+            if keep and not item[self.fimg].startswith('http') and item[self.fimg] != self.fallback:
                 # html uses '/' as separator, but os might not
                 imgname = item[self.fimg].rsplit('/')[-1]
                 imgfile = os.path.join(self.cache, imgname)

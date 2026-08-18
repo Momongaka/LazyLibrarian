@@ -13,3296 +13,4134 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
+import contextlib
 import datetime
 import json
 import logging
 import os
 import re
 import shutil
-import subprocess
-import tarfile
-import tempfile
 import threading
 import time
 import traceback
 import uuid
 import zipfile
+from dataclasses import dataclass
+from typing import Final
 
-from deluge_client import DelugeRPCClient
 from rapidfuzz import fuzz
 
 import lazylibrarian
-from lazylibrarian import database, utorrent, transmission, qbittorrent, \
-    deluge, rtorrent, synology, sabnzbd, nzbget
-from lazylibrarian.bookrename import name_vars, audio_rename, stripspaces, id3read
-from lazylibrarian.cache import cache_img, ImageType
-from lazylibrarian.calibre import calibredb, get_calibre_id
-from lazylibrarian.common import run_script, multibook, calibre_prg
+from lazylibrarian import database
+from lazylibrarian.archive_utils import unpack_archive, unpack_multipart
+from lazylibrarian.bookrename import audio_rename, name_vars, stripspaces
+from lazylibrarian.cache import ImageType, cache_img
+from lazylibrarian.calibre_integration import send_to_calibre
+from lazylibrarian.common import multibook, run_script
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, path_isfile, path_isdir, syspath, path_exists, remove_file, listdir, \
-    setperm, make_dirs, safe_move, safe_copy, opf_file, bts_file, jpg_file, book_file, get_directory, walk, \
-    copy_tree, remove_dir
-from lazylibrarian.formatter import unaccented, plural, now, today, \
-    replace_all, get_list, surname_first, make_unicode, check_int, is_valid_type, split_title, \
-    make_utf8bytes, sanitize, thread_name
-from lazylibrarian.gb import GoogleBooks
-from lazylibrarian.gr import GoodReads
-from lazylibrarian.hc import HardCover
-from lazylibrarian.au import Audible
-from lazylibrarian.images import create_mag_cover
-from lazylibrarian.images import createthumbs
-from lazylibrarian.importer import add_author_to_db, add_author_name_to_db, update_totals, search_for, import_book
-from lazylibrarian.librarysync import get_book_info, find_book_in_db, library_scan, get_book_meta
-from lazylibrarian.magazinescan import create_id, format_issue_filename, get_dateparts
+from lazylibrarian.download_client import (
+    check_contents,
+    delete_task,
+    get_download_content_path,
+    get_download_folder,
+    get_download_name,
+    get_download_progress,
+    may_delete_data,
+)
+from lazylibrarian.filesystem import (
+    DIRS,
+    book_file,
+    bts_file,
+    copy_tree,
+    get_directory,
+    jpg_file,
+    listdir,
+    make_dirs,
+    path_exists,
+    path_isdir,
+    path_isfile,
+    remove_file,
+    safe_copy,
+    safe_move,
+    setperm,
+    syspath,
+)
+from lazylibrarian.formatter import (
+    check_int,
+    get_list,
+    is_valid_type,
+    make_unicode,
+    md5_utf8,
+    now,
+    plural,
+    sanitize,
+    thread_name,
+    today,
+    unaccented,
+)
+from lazylibrarian.images import create_mag_cover, createthumbs
+from lazylibrarian.importer import update_totals
+from lazylibrarian.magazinescan import create_id
 from lazylibrarian.mailinglist import mailing_list
-from lazylibrarian.notifiers import notify_download, custom_notify_download, notify_snatch, custom_notify_snatch
-from lazylibrarian.ol import OpenLibrary
-from lazylibrarian.preprocessor import preprocess_ebook, preprocess_audio, preprocess_magazine
-from lazylibrarian.scheduling import schedule_job, SchedulerCommand
+from lazylibrarian.metadata_opf import create_comic_opf, create_mag_opf, create_opf
+from lazylibrarian.notifiers import (
+    custom_notify_download,
+    custom_notify_snatch,
+    notify_download,
+    notify_snatch,
+)
+from lazylibrarian.postprocess_metadata import (
+    BookMetadata,
+    BookType,
+    ComicMetadata,
+    EbookMetadata,
+    MagazineMetadata,
+    prepare_book_metadata,
+    prepare_comic_metadata,
+    prepare_magazine_metadata,
+)
+from lazylibrarian.postprocess_utils import enforce_bytes, enforce_str
+from lazylibrarian.preprocessor import (
+    preprocess_audio,
+    preprocess_ebook,
+    preprocess_magazine,
+)
+from lazylibrarian.scheduling import SchedulerCommand, schedule_job
 from lazylibrarian.telemetry import TELEMETRY
 
 
+@dataclass
+class BookState:
+    """
+    Represents the state of a book/magazine being processed.
 
-def update_downloads(provider):
-    db = database.DBConnection()
-    try:
-        entry = db.match('SELECT Count FROM downloads where Provider=?', (provider,))
-        if entry:
-            counter = int(entry['Count'])
-            db.action('UPDATE downloads SET Count=? WHERE Provider=?', (counter + 1, provider))
-        else:
-            db.action('INSERT into downloads (Count, Provider) VALUES  (?, ?)', (1, provider))
-    finally:
-        db.close()
+    This class tracks the download item as it moves through the postprocessing
+    pipeline, maintaining information about the candidate file/folder location,
+    metadata, and processing status.
 
+    Attributes:
+        book_id: Unique identifier for the book/magazine
+        book_title: Normalized title for matching
+        aux_type: Type of media from aux_info field (eBook, AudioBook, Magazine)
+        aux_info: Auxiliary information (e.g., issue date for magazines)
+        completed_at: Unix timestamp when download completed
+        mode_type: Download mode (torrent, magnet, torznab, nzb, etc.)
 
-def process_mag_from_file(source_file=None, title=None, issuenum=None):
-    # import a magazine issue by title/num
-    # Assumes the source file is the correct file for the issue and renames it to match
-    # Adds the magazine id to the database if not already there
-    logger = logging.getLogger(__name__)
-    db = database.DBConnection()
-    # noinspection PyBroadException
-    try:
-        if not source_file or not path_isfile(source_file):
-            logger.warning(f"{source_file} is not a file")
-            return False
-        _, extn = os.path.splitext(source_file)
-        extn = extn.lstrip('.')
-        if not extn or extn not in get_list(CONFIG['MAG_TYPE']):
-            logger.warning(f"{source_file} is not a valid issue file")
-            return False
-        title = unaccented(sanitize(title), only_ascii=False)
-        if not title:
-            logger.warning(f"No title for {source_file}, rejecting")
-            return False
+        candidate_ptr: Current path to the candidate file/folder being evaluated.
+                      This pointer gets updated as we drill down through folders
+                      and extract archives to find the actual media file.
 
-        TELEMETRY.record_usage_data('Process/Magazine/FromFile')
-        entry = db.match('SELECT * FROM magazines where Title=?', (title,))
-        if not entry:
-            logger.debug(f"Magazine title [{title}] not found, adding it")
-            control_value_dict = {"Title": title}
-            new_value_dict = {"LastAcquired": today(),
-                              "IssueStatus": CONFIG['FOUND_STATUS'],
-                              "IssueDate": "",
-                              "LatestCover": ""}
-            db.upsert("magazines", new_value_dict, control_value_dict)
-        # rename issuefile to match pattern
-        # update magazine lastissue/cover as required
-        entry = db.match('SELECT * FROM magazines where Title=?', (title,))
-        mostrecentissue = entry['IssueDate']
-        dateparts = get_dateparts(issuenum)
-        dest_path = format_issue_filename(CONFIG['MAG_DEST_FOLDER'], title, dateparts)
+        skipped_reason: Reason why processing was skipped (if applicable)
+        copy_to_destination: Whether to copy (vs move) files to destination
+    """
 
-        if CONFIG.get_bool('MAG_RELATIVE'):
-            dest_dir = get_directory('eBook')
-            dest_path = stripspaces(os.path.join(dest_dir, dest_path))
-            dest_path = make_utf8bytes(dest_path)[0]
-        else:
-            dest_path = make_utf8bytes(dest_path)[0]
+    # Core identifiers (from database row)
+    book_id: str
+    download_title: str  # NZBtitle (download/torrent name) - for location finding
+    book_title: str = ""  # Actual book title from books table - for drill-down matching
+    aux_type: str = (
+        ""  # case sensitive AuxInfo book type (eBook, AudioBook, Magazine, comic)
+    )
+    aux_info: str = ""
 
-        if not dest_path or not make_dirs(dest_path):
-            logger.error(f'Unable to create destination directory {dest_path}')
-            return False
+    # Download metadata
+    completed_at: int = 0
+    mode_type: str = ""
+    source: str = ""  # Download client source (SABnzbd, Deluge, etc.)
+    download_id: str = ""  # ID in download client for tracking/deletion
+    download_folder: str = ""  # Folder path from download client (for targeted search)
+    download_url: str = ""  # URL of the download (unique identifier)
+    download_provider: str = ""  # Provider name (for stats/notifications)
+    status: str = "Snatched"  # Current status (Snatched, Seeding, Aborted, etc.)
+    snatched_date: str = ""  # When snatched (for timeout calculations)
 
-        global_name = format_issue_filename(CONFIG['MAG_DEST_FILE'], title, dateparts)
-        tempdir = tempfile.mkdtemp()
+    # Processing state - mutable as we search for matches
+    candidate_ptr: str | None = None
+    skipped_reason: str | None = None
+
+    # Failure tracking - populated during processing
+    failure_reason: str = ""
+    processing_stage: str = (
+        ""  # "matching", "validation", "metadata", "destination", "post"
+    )
+    was_processed: bool = False  # True if successfully processed
+
+    # Configuration flags
+    copy_to_destination: bool = False
+
+    # Runtime state (for unprocessed download tracking)
+    aborted: bool = False
+    finished: bool = False
+    progress: int | str = "Unknown"
+
+    @classmethod
+    def from_db_row(cls, book_row: dict, config) -> "BookState":
+        """
+        Create a BookState instance from a database row.
+
+        Args:
+            book_row: Database row from 'wanted' table
+            config: Configuration object
+
+        Returns:
+            Initialized BookState instance
+        """
+        book_data = dict(book_row)
+        normalized_download_title = _normalize_title(book_data["NZBtitle"])
+        mode_type = book_data["NZBmode"]
+
+        return cls(
+            book_id=book_data["BookID"],
+            download_title=normalized_download_title,
+            book_title="",  # Will be populated later if needed for drill-down
+            aux_type=_extract_aux_type(book_data),
+            aux_info=book_data["AuxInfo"],
+            completed_at=check_int(book_data["Completed"], 0),
+            mode_type=mode_type,
+            source=book_data.get("Source", ""),
+            download_id=book_data.get("DownloadID", ""),
+            download_folder="",  # Will be populated in _get_ready_snatched_books
+            download_url=book_data.get("NZBurl", ""),
+            download_provider=book_data.get("NZBprov", ""),
+            status=book_data.get("Status", "Snatched"),
+            snatched_date=book_data.get("NZBdate", ""),
+            copy_to_destination=config.get_bool("DESTINATION_COPY"),
+            candidate_ptr=None,
+            skipped_reason=None,
+        )
+
+    def is_completed(self) -> bool:
+        """Check if the download has a completion timestamp."""
+        return self.completed_at > 0
+
+    def seconds_since_completion(self) -> int:
+        """Calculate seconds since download completed (rounded up)."""
+        if not self.is_completed():
+            return 0
+        completion = time.time() - self.completed_at
+        return int(-(-completion // 1))  # Round up to int
+
+    def should_delay_processing(self, delay_seconds: int) -> "tuple[bool, int]":
+        """
+        Check if processing should be delayed based on completion time.
+
+        Args:
+            delay_seconds: Required delay in seconds from config (PP_DELAY)
+
+        Returns:
+            Tuple of (should_delay, seconds_since_completion)
+        """
+        if not self.is_completed():
+            return False, 0
+
+        seconds_elapsed = self.seconds_since_completion()
+        should_delay = seconds_elapsed < delay_seconds
+
+        return should_delay, seconds_elapsed
+
+    def update_candidate(self, new_path: str) -> None:
+        """
+        Update the candidate pointer to a new location.
+
+        This is called as we drill down through directories and extract archives
+        to find the actual media file.
+
+        Args:
+            new_path: New path to set as candidate
+        """
+        self.candidate_ptr = new_path
+
+    def mark_skipped(self, reason: str) -> None:
+        """
+        Mark this item as skipped with a reason.
+
+        Args:
+            reason: Human-readable reason for skipping
+        """
+        self.skipped_reason = reason
+
+    def is_skipped(self) -> bool:
+        """Check if this item was marked as skipped."""
+        return self.skipped_reason is not None
+
+    def is_torrent(self) -> bool:
+        """Convenience flag indicating if this is a torrent download"""
+        return self.mode_type in ["torrent", "magnet", "torznab"]
+
+    def has_candidate(self) -> bool:
+        """Check if we have found a candidate file/folder."""
+        return self.candidate_ptr is not None
+
+    def is_book(self) -> bool:
+        """Check if this is a book (ebook or audiobook)."""
+        book_type_enum = self.get_book_type_enum()
+        return book_type_enum in [BookType.EBOOK, BookType.AUDIOBOOK]
+
+    def is_magazine(self) -> bool:
+        """Check if this is a magazine."""
+        book_type_enum = self.get_book_type_enum()
+        return book_type_enum in [BookType.MAGAZINE]
+
+    def get_book_type_str(self) -> str:
+        """
+        Get the book type as a string
+
+        Returns:
+            gets normalized string for book type based on aux info type
+        """
+        book_type_str = ""
         try:
-            _ = safe_copy(source_file, os.path.join(tempdir, global_name))
-        except Exception as e:
-            logger.warning(f"Failed to copy source file: {str(e)}")
+            book_type_str = self.get_book_type_enum().value
+        except ValueError:
+            contextlib.suppress(ValueError)
+
+        return book_type_str
+
+    def get_book_type_enum(self) -> BookType:
+        """
+        Get the book type as a string
+
+        Returns:
+            gets normalized string for book type based on aux info type
+        Raises ValueError if aux_type is invalid book type
+        """
+        return BookType.from_string(self.aux_type)
+
+    def has_download_client(self) -> bool:
+        """
+        Check if this download has a source and download ID.
+
+        Returns:
+            True if both source and download_id are set
+        """
+        return bool(self.source and self.download_id)
+
+    def can_delete_from_client(self) -> bool:
+        """
+        Check if we can delete this from the download client.
+
+        Returns:
+            True if download can be deleted from client
+        """
+        if not self.source:
             return False
-        data = {"IssueDate": issuenum, "Title": title}
-        success, dest_file, pp_path = process_destination(tempdir, dest_path, global_name, data, "magazine")
-        shutil.rmtree(tempdir, ignore_errors=True)
+        if not self.download_id or self.download_id == "unknown":
+            return False
+        return self.source != "DIRECT"
+
+    def get_display_name(self, config) -> str:
+        """
+        Get formatted provider name for notifications.
+
+        Args:
+            config: Configuration object
+
+        Returns:
+            Formatted display name with optional title/URL
+        """
+        dispname = config.disp_name(self.download_provider)
+
+        if config.get_bool("NOTIFY_WITH_TITLE"):
+            dispname = f"{dispname}: {self.book_title}"
+
+        if config.get_bool("NOTIFY_WITH_URL"):
+            dispname = f"{dispname}: {self.download_url}"
+
+        return dispname
+
+    def is_seeding(self) -> bool:
+        """Check if status indicates seeding."""
+        return self.status == "Seeding"
+
+    def is_snatched(self) -> bool:
+        """Check if status indicates snatched."""
+        return self.status == "Snatched"
+
+    def is_aborted(self) -> bool:
+        """Check if status indicates aborted."""
+        return self.status == "Aborted"
+
+    def mark_failed(self, stage: str, reason: str) -> None:
+        """
+        Mark this item as failed with stage and reason.
+
+        Args:
+            stage: Processing stage where failure occurred
+                   ("matching", "validation", "metadata", "destination", "post")
+            reason: Human-readable reason for failure
+        """
+        self.processing_stage = stage
+        self.failure_reason = reason
+
+    def mark_processed(self) -> None:
+        """Mark this item as successfully processed"""
+        self.was_processed = True
+
+    def has_failed(self) -> bool:
+        """Check if this item failed during processing"""
+        return bool(self.failure_reason)
+
+    def enrich_with_download_info(self, db) -> None:
+        """
+        Populate download_folder and book_title from download client and database.
+
+        This is called after BookState creation to add:
+        - download_folder: Exact folder path from download client (for targeted search)
+        - book_title: Actual book title from books table (for drill-down matching)
+
+        Args:
+            db: Database connection for querying book title
+        """
+        # Get specific download folder by combining general folder + download name
+        logger = logging.getLogger(__name__)
+
+        if self.source and self.download_id:
+            general_folder = get_download_folder(self.source, self.download_id)
+            res = None
+            if self.source == 'DIRECT':
+                res = db.match("SELECT NZBprov,NZBtitle,NZBurl from wanted where source='DIRECT' and DownloadID=?", (self.download_id, ))
+                download_name = res['NZBtitle']
+            else:
+                download_name = get_download_name(self.download_title, self.source, self.download_id)
+            # For usenet clients (SABnzbd, NZBGet), the storage field already contains
+            # the complete download path including the folder name
+            if self.source in ("SABNZBD", "NZBGET") and general_folder:
+                if os.path.isdir(general_folder):
+                    self.download_folder = general_folder
+                else:
+                    self.download_folder = os.path.dirname(general_folder)
+            elif res and res['NZBprov'] == 'soulseek':
+                try:
+                    soulseek = json.loads(res['NZBurl'].split('^')[1].replace('\\','/'))
+                    self.download_folder = os.path.join(get_directory('Download'), soulseek.get("name", '').rsplit('/', 1)[1])
+                except (KeyError, IndexError):
+                    self.download_folder = general_folder
+            elif res and (res['NZBprov'] in ['annas', 'zlibrary'] or res['NZBprov'].startswith('libgen')):
+                # these download into first download directory
+                self.download_folder = get_directory('Download')
+            elif self.source == "QBITTORRENT" and general_folder:
+                if os.path.isdir(general_folder):
+                    # root directory for multi-file torrents
+                    self.download_folder = general_folder
+                else:
+                    # absolute file path for single-file torrents
+                    self.download_folder = os.path.dirname(general_folder)
+                    self.download_title = os.path.basename(general_folder)
+            # For other torrent clients, combine base folder with download name
+            elif general_folder and download_name:
+                self.download_folder = os.path.join(general_folder, download_name)
+                # qBittorrent (and some clients) rename the torrent 'name' independently of the
+                # on-disk content folder, so the name-based path may not exist. Fall back to the
+                # client's actual content path so we process the real files with the known BookID.
+                if not os.path.isdir(self.download_folder):
+                    content = get_download_content_path(self.source, self.download_id)
+                    if content:
+                        self.download_folder = content if os.path.isdir(content) else os.path.dirname(content)
+            elif general_folder:
+                # Fallback: use general folder as-is
+                self.download_folder = general_folder
+
+            logger.debug(f"General:{general_folder} DownloadName:{download_name} "
+                          f"DownloadFolder:{self.download_folder} DownloadTitle:{self.download_title}")
+        # Get actual book title for drill-down matching
+        if self.book_id and self.is_book():
+            result = db.match(
+                "SELECT AuthorName, BookName FROM books,authors "
+                "WHERE books.BookID=? AND books.AuthorID=authors.AuthorID",
+                (self.book_id,),
+            )
+            if result:
+                data = dict(result)
+                # Combine author and book name for better matching
+                self.book_title = _normalize_title(
+                    f"{data.get('AuthorName', '')} - {data.get('BookName', '')}"
+                )
+        elif self.book_id and self.is_magazine():
+            result = db.match(
+                "SELECT Title FROM magazines WHERE Title=?", (self.book_id,)
+            )
+            if result:
+                data = dict(result)
+                self.book_title = _normalize_title(data.get("Title", ""))
+        logger.debug(f"IsBook:{self.is_book()} IsMag:{self.is_magazine()} Title:{self.book_title}")
+
+    def __repr__(self) -> str:
+        """String representation for debugging."""
+        return (
+            f"BookState(id={self.book_id}, type={self.aux_type}, "
+            f"download_title='{self.download_title[:30]}...', source={self.source}, "
+            f"status={self.status}, candidate={self.candidate_ptr}, "
+            f"skipped={self.is_skipped()})"
+        )
+
+
+def PostProcessor():  # was cron_process_dir
+    """Scheduled postprocessor entry point.
+
+    Thread safety is handled inside process_dir() itself.
+    """
+    logger = logging.getLogger(__name__)
+    if lazylibrarian.STOPTHREADS:
+        logger.debug("STOPTHREADS is set, not starting postprocessor")
+        schedule_job(SchedulerCommand.STOP, target="PostProcessor")
+    else:
+        # process_dir() has its own thread safety and thread naming
+        process_dir()
+
+
+def process_img(
+    dest_path: str,
+    bookid,
+    bookimg,
+    global_name,
+    cache: ImageType = ImageType.BOOK,
+    overwrite=False,
+):
+    """cache the bookimg from url or filename, and optionally copy it to bookdir"""
+    # if lazylibrarian.CONFIG['IMP_AUTOADD_BOOKONLY']:
+    #     logger.debug('Not creating coverfile, bookonly is set')
+    #     return
+
+    logger = logging.getLogger(__name__)
+    coverfile = jpg_file(dest_path)
+    if not overwrite and coverfile:
+        logger.debug(f"Cover {coverfile} already exists")
+        return
+    if not bookimg:
+        logger.debug(f"No cover to cache for {bookid}")
+        return
+
+    TELEMETRY.record_usage_data("Process/Image")
+    if bookimg.startswith("cache/"):
+        img = bookimg.replace("cache/", "")
+        if os.path.__name__ == "ntpath":
+            img = img.replace("/", "\\")
+        cachefile = os.path.join(DIRS.CACHEDIR, img)
+    else:
+        link, success, _ = cache_img(cache, bookid, bookimg, False)
         if not success:
-            logger.error(f"Unable to import {source_file}: {dest_file}")
-            return False
+            logger.error(f"Error caching cover from {bookimg}, {link}")
+            return
+        cachefile = os.path.join(DIRS.DATADIR, link)
 
-        old_folder = os.path.dirname(source_file)
-        basename, extn = os.path.splitext(source_file)
-        remove_file(source_file)
-        remove_file(f"{basename}.opf")
-        remove_file(f"{basename}.jpg")
-        if len(listdir(old_folder)) == 0:
-            remove_dir(old_folder)
-
-        if mostrecentissue:
-            if mostrecentissue.isdigit() and str(issuenum).isdigit():
-                older = (int(mostrecentissue) > int(issuenum))  # issuenumber
-            else:
-                older = (mostrecentissue > issuenum)  # YYYY-MM-DD
-        else:
-            older = False
-
-        maginfo = db.match("SELECT CoverPage from magazines WHERE Title=?", (title,))
-        # create a thumbnail cover for the new issue
-        coverfile = create_mag_cover(dest_file, pagenum=check_int(maginfo['CoverPage'], 1), refresh=True)
-        if coverfile:
-            myhash = uuid.uuid4().hex
-            hashname = os.path.join(DIRS.CACHEDIR, 'magazine', f'{myhash}.jpg')
-            shutil.copyfile(coverfile, hashname)
-            setperm(hashname)
-            coverfile = f'cache/magazine/{myhash}.jpg'
-            createthumbs(hashname)
-
-        issueid = create_id(f"{title} {issuenum}")
-        control_value_dict = {"Title": title, "IssueDate": issuenum}
-        new_value_dict = {"IssueAcquired": today(),
-                          "IssueFile": dest_file,
-                          "IssueID": issueid,
-                          "Cover": coverfile
-                          }
-        db.upsert("issues", new_value_dict, control_value_dict)
-
-        control_value_dict = {"Title": title}
-        if older:  # check this in case processing issues arriving out of order
-            new_value_dict = {"LastAcquired": today(),
-                              "IssueStatus": CONFIG['FOUND_STATUS']}
-        else:
-            new_value_dict = {"LastAcquired": today(),
-                              "IssueStatus": CONFIG['FOUND_STATUS'],
-                              "IssueDate": issuenum,
-                              "LatestCover": coverfile}
-        db.upsert("magazines", new_value_dict, control_value_dict)
-
-        if not CONFIG.get_bool('IMP_MAGOPF'):
-            logger.debug('create_mag_opf is disabled')
-        else:
-            basename, extn = os.path.splitext(source_file)
-            opffile = f"{basename}.opf"
-            remove_file(opffile)
-            _ = create_mag_opf(dest_file, title, issuenum, issueid,
-                               language=entry['Language'], genres=entry['Genre'], overwrite=True)
-        if CONFIG['IMP_AUTOADDMAG']:
-            dest_path = os.path.dirname(dest_file)
-            process_auto_add(dest_path, booktype='mag')
-        return True
-
-    except Exception:
-        logger.error(f'Unhandled exception in import_mag: {traceback.format_exc()}')
-        return False
-    finally:
-        db.close()
+    try:
+        coverfile = os.path.join(dest_path, f"{global_name}.jpg")
+        coverfile = safe_copy(cachefile, coverfile)
+        setperm(coverfile)
+    except Exception as e:
+        logger.error(
+            f"Error copying image {bookimg} to {coverfile}, {type(e).__name__} {e!s}"
+        )
+        return
 
 
-def process_book_from_dir(source_dir=None, library='eBook', bookid=None):
-    # import a book by id from a directory
-    # Assumes the book is the correct file for the id and renames it to match
-    # Adds the id to the database if not already there
-    logger = logging.getLogger(__name__)
-    if not source_dir or not path_isdir(source_dir):
-        logger.warning(f"{source_dir} is not a directory")
-        return False
-    if source_dir.startswith(get_directory(library)):
-        logger.warning('Source directory must not be the same as or inside library')
-        return False
+def _update_downloads_provider_count(provider: str = "manually added"):
+    """
+    Count the number of times that each provider was used for each download.
 
-    TELEMETRY.record_usage_data('Process/Book/FromDir')
-    reject = multibook(source_dir)
-    if reject:
-        logger.debug(f"Not processing {source_dir}, found multiple {reject}")
-        return False
-
-    if library not in ['eBook', 'AudioBook']:
-        logger.error(f"book_from_dir not implemented for {library}")
-        return False
-
+    Args:
+        provider: Optional name of provider of download
+    """
     db = database.DBConnection()
-    # noinspection PyBroadException
-    try:
-        logger.debug(f'Processing {library} directory {source_dir}')
-        book = db.match('SELECT * from books where BookID=?', (bookid,))
-        if not book:
-            logger.warning(f"Bookid [{bookid}] not found in database, trying to add...")
-            if CONFIG['BOOK_API'] == "GoodReads":
-                gr_id = GoodReads(bookid)
-                gr_id.find_book(bookid, None, None, f"Added by book_from_dir {source_dir}")
-            elif CONFIG['BOOK_API'] == "GoogleBooks":
-                gb_id = GoogleBooks(bookid)
-                gb_id.find_book(bookid, None, None, f"Added by book_from_dir {source_dir}")
-            elif CONFIG['BOOK_API'] == "OpenLibrary":
-                ol_id = OpenLibrary(bookid)
-                ol_id.find_book(bookid, None, None, f"Added by book_from_dir {source_dir}")
-            elif CONFIG['BOOK_API'] == "HardCover":
-                hc_id = HardCover(bookid)
-                hc_id.find_book(bookid, None, None, f"Added by book_from_dir {source_dir}")
-            elif CONFIG['BOOK_API'] == "Audible":
-                au_id = Audible(bookid)
-                au_id.find_book(bookid, None, None, f"Added by book_from_dir {source_dir}")
-            # see if it's there now...
-            book = db.match('SELECT * from books where BookID=?', (bookid,))
-        db.close()
-        if not book:
-            logger.debug(f"Unable to add bookid {bookid} to database")
-            return False
-        return process_book(source_dir, bookid, library)
-    except Exception:
-        logger.error(f'Unhandled exception in book_from_dir: {traceback.format_exc()}')
-        db.close()
-        return False
+    entry = dict(db.match("SELECT Count FROM downloads where Provider=?", (provider,)))
+    if entry:
+        counter = int(entry["Count"])
+        db.action(
+            "UPDATE downloads SET Count=? WHERE Provider=?", (counter + 1, provider)
+        )
+    else:
+        db.action(
+            "INSERT into downloads (Count, Provider) VALUES  (?, ?)", (1, provider)
+        )
+    db.close()
 
 
-def process_issues(source_dir=None, title=''):
-    # import magazine issues for a given title from an alternate directory
-    # noinspection PyBroadException
-    logger = logging.getLogger(__name__)
-    loggermatching = logging.getLogger('special.matching')
-    # noinspection PyBroadException
-    try:
-        if not source_dir:
-            logger.warning("Alternate Directory not configured")
-            if 'IMPORTISSUES' in threading.current_thread().name:
-                threading.current_thread().name = 'WEBSERVER'
-            return False
-        if not path_isdir(source_dir):
-            logger.warning(f"{source_dir} is not a directory")
-            if 'IMPORTISSUES' in threading.current_thread().name:
-                threading.current_thread().name = 'WEBSERVER'
-            return False
+def _transfer_matching_files(
+    sourcedir: str, targetdir: str, fname_prefix: str, copy=False
+):
+    """
+    Selectively transfer files matching a filename prefix from source to target directory.
 
-        TELEMETRY.record_usage_data('Process/Issues')
-        logger.debug(f'Looking for {title} issues in {source_dir}')
-        # first, recursively process any items in subdirectories
-        flist = listdir(source_dir)
-        for fname in flist:
-            subdir = os.path.join(source_dir, fname)
-            if path_isdir(subdir):
-                process_issues(subdir, title)
+    Only transfers files that:
+    - Start with the given filename prefix
+    - Are valid media file types
 
-        dic = {'.': ' ', '-': ' ', '/': ' ', '+': ' ', '_': ' ', '(': '', ')': '', '[': ' ', ']': ' ', '#': '# '}
-        db = database.DBConnection()
-        try:
-            res = db.match('SELECT Reject,DateType from magazines WHERE Title=?', (title,))
-        finally:
-            db.close()
-        if not res:
-            logger.error(f"{title} not found in database")
-            return False
+    This prevents accidentally moving/copying unrelated files when processing
+    a single file in a directory with multiple downloads.
 
-        rejects = get_list(res['Reject'])
-        title_words = replace_all(title.lower(), dic).split()
+    Args:
+        sourcedir: Source directory containing files
+        targetdir: Target directory to transfer to
+        fname_prefix: Filename prefix to match (e.g., "Book Title")
+        copy: If True, copy files; if False, move files
 
-        # import any files in this directory that match the title, are a magazine file, and have a parseable date
-        for f in listdir(source_dir):
-            _, extn = os.path.splitext(f)
-            extn = extn.lstrip('.')
-            if not extn or extn.lower() not in get_list(CONFIG['MAG_TYPE']):
-                continue
-
-            loggermatching.debug(f'Trying to match {f}')
-            filename_words = replace_all(f.lower(), dic).split()
-            found_title = True
-            for word in title_words:
-                if word not in filename_words:
-                    loggermatching.debug(f'[{word}] not found in {f}')
-                    found_title = False
-                    break
-
-            if found_title:
-                for item in rejects:
-                    if item in filename_words:
-                        loggermatching.debug(f'Rejecting {f}, contains {item}')
-                        found_title = False
-                        break
-
-            if found_title:
-                if '*' in rejects:  # strict rejection mode, no extraneous words
-                    nouns = get_list(CONFIG['ISSUE_NOUNS'])
-                    nouns.extend(get_list(CONFIG['VOLUME_NOUNS']))
-                    nouns.extend(get_list(CONFIG['MAG_NOUNS']))
-                    nouns.extend(get_list(CONFIG['MAG_TYPE']))
-                    valid = True
-                    for word in filename_words:
-                        if word not in title_words and word not in nouns:
-                            cleanword = unaccented(word).lower()
-                            valid = False
-                            for month in range(1, 13):
-                                if (word in lazylibrarian.MONTHNAMES[0][month] or
-                                        cleanword in lazylibrarian.MONTHNAMES[1][month]):
-                                    valid = True
-                                    break
-                            if not valid:
-                                logger.debug(f"Rejecting {f}, strict, contains {word}")
-                                break
-                    if not valid:
-                        found_title = False
-
-            if found_title:
-                dateparts = get_dateparts(f, res['DateType'])
-                issuenum_type = dateparts['style']
-                issuedate = lazylibrarian.searchmag.get_default_date(dateparts)
-                if issuenum_type:
-                    if process_mag_from_file(os.path.join(source_dir, f), title, issuedate):
-                        logger.debug(f'Processed {title} issue {issuedate}')
-                    else:
-                        logger.warning(f'Failed to process {f}')
-                else:
-                    loggermatching.debug(f'Unrecognised date style for {f}')
-        if 'IMPORTISSUES' in threading.current_thread().name:
-            threading.current_thread().name = 'WEBSERVER'
-        return True
-
-    except Exception:
-        logger.error(f'Unhandled exception in process_issues: {traceback.format_exc()}')
-        if 'IMPORTISSUES' in threading.current_thread().name:
-            threading.current_thread().name = 'WEBSERVER'
-        return False
-
-
-def process_alternate(source_dir=None, library='eBook'):
-    # import a book/audiobook from an alternate directory
-    # noinspection PyBroadException
-    logger = logging.getLogger(__name__)
-    # noinspection PyBroadException
-    try:
-        if not source_dir:
-            logger.warning("Alternate Directory not configured")
-            if 'IMPORTALT' in threading.current_thread().name:
-                threading.current_thread().name = 'WEBSERVER'
-            return False
-        if not path_isdir(source_dir):
-            logger.warning(f"{source_dir} is not a directory")
-            if 'IMPORTALT' in threading.current_thread().name:
-                threading.current_thread().name = 'WEBSERVER'
-            return False
-        if source_dir.startswith(get_directory(library)):
-            logger.warning('Alternate directory must not be the same as or inside Destination')
-            if 'IMPORTALT' in threading.current_thread().name:
-                threading.current_thread().name = 'WEBSERVER'
-            return False
-
-        TELEMETRY.record_usage_data('Process/Alternate')
-        logger.debug(f'Processing {library} directory {source_dir}')
-        # first, recursively process any books in subdirectories
-        flist = listdir(source_dir)
-        for fname in flist:
-            subdir = os.path.join(source_dir, fname)
-            if path_isdir(subdir):
-                process_alternate(subdir, library=library)
-
-        metadata = {}
-        bookid = ''
-
-        if "LL.(" in source_dir:
-            bookid = source_dir.split("LL.(")[1].split(")")[0]
-            db = database.DBConnection()
-            res = db.match("SELECT BookName,AuthorName from books,authors WHERE books.AuthorID = authors.AuthorID "
-                           "AND BookID=?", (bookid,))
-            if res:
-                metadata = {"title": res['BookName'], "creator": res['AuthorName']}
-                logger.debug(f"Importing {library} bookid {bookid} for {res['AuthorName']} {res['BookName']}")
-            else:
-                logger.warning(f"Failed to find LL bookid {bookid} in database")
-            db.close()
-
-        if library == 'eBook':
-            # only import one book from each alternate (sub)directory, this is because
-            # the importer may delete the directory after importing a book,
-            # depending on lazylibrarian.CONFIG['DESTINATION_COPY'] setting
-            # also if multiple books in a folder and only a "metadata.opf"
-            # or "cover.jpg" which book is it for?
-            reject = multibook(source_dir)
-            if reject:
-                logger.debug(f"Not processing {source_dir}, found multiple {reject}")
-                if 'IMPORTALT' in threading.current_thread().name:
-                    threading.current_thread().name = 'WEBSERVER'
-                return False
-
-            new_book = book_file(source_dir, booktype='ebook', config=CONFIG)
-            if not new_book:
-                # check if an archive in this directory
-                for f in listdir(source_dir):
-                    if not is_valid_type(f, extensions=CONFIG.get_all_types_list()):
-                        # Is file an archive, if so look inside and extract to new dir
-                        res = unpack_archive(os.path.join(source_dir, f), source_dir, f)
-                        if res:
-                            source_dir = res
-                            break
-                new_book = book_file(source_dir, booktype='ebook', config=CONFIG)
-            if not new_book:
-                logger.warning(f"No book file found in {source_dir}")
-                if 'IMPORTALT' in threading.current_thread().name:
-                    threading.current_thread().name = 'WEBSERVER'
-                return False
-
-            if not metadata:
-                # if we haven't already got metadata from an LL.num
-                # see if there is a metadata file in this folder with the info we need
-                # try book_name.opf first, or fall back to any filename.opf
-                metafile = f"{os.path.splitext(new_book)[0]}.opf"
-                if not path_isfile(metafile):
-                    metafile = opf_file(source_dir)
-                if metafile and path_isfile(metafile):
-                    try:
-                        metadata = get_book_info(metafile)
-                    except Exception as e:
-                        logger.warning(f'Failed to read metadata from {metafile}, {type(e).__name__} {str(e)}')
-                else:
-                    logger.debug(f'No metadata file found for {new_book}')
-
-            if 'title' not in metadata or 'creator' not in metadata:
-                # if not got both, try to get metadata from the book file
-                extn = os.path.splitext(new_book)[1]
-                if extn.lower() in [".epub", ".mobi"]:
-                    try:
-                        metadata = get_book_info(new_book)
-                    except Exception as e:
-                        logger.warning(f'No metadata found in {new_book}, {type(e).__name__} {str(e)}')
-        else:
-            new_book = book_file(source_dir, booktype='audiobook', config=CONFIG)
-            if not new_book:
-                logger.warning(f"No audiobook file found in {source_dir}")
-                if 'IMPORTALT' in threading.current_thread().name:
-                    threading.current_thread().name = 'WEBSERVER'
-                return False
-            if not metadata:
-                id3r = id3read(new_book)
-                author = id3r.get('author')
-                book = id3r.get('title')
-                # use album instead of title if it is set
-                if 'album' in id3r and id3r.get('album'):
-                    book = id3r['album']
-
-                if author and book:
-                    metadata['creator'] = author
-                    metadata['title'] = book
-                    metadata['narrator'] = id3r.get('narrator')
-
-        if 'title' in metadata and 'creator' in metadata:
-            authorname = metadata['creator']
-            bookname = metadata['title']
-            db = database.DBConnection()
-            try:
-                authorid = ''
-                # noinspection PyUnusedLocal
-                results = None  # pycharm incorrectly thinks this isn't needed
-                authmatch = db.match('SELECT * FROM authors where AuthorName=?', (authorname,))
-
-                if not authmatch:
-                    # try goodreads/openlibrary preferred authorname
-                    if CONFIG['BOOK_API'] in ['OpenLibrary', 'GoogleBooks']:
-                        logger.debug(f"Checking OpenLibrary for [{authorname}]")
-                        ol = OpenLibrary(authorname)
-                        try:
-                            author_gr = ol.find_author_id()
-                        except Exception as e:
-                            author_gr = {}
-                            logger.warning(f"No author id for [{authorname}] {type(e).__name__}")
-                    elif CONFIG['BOOK_API'] in ['HardCover']:
-                        logger.debug(f"Checking HardCover for [{authorname}]")
-                        hc = HardCover(authorname)
-                        try:
-                            author_gr = hc.find_author_id()
-                        except Exception as e:
-                            author_gr = {}
-                            logger.warning(f"No author id for [{authorname}] {type(e).__name__}")
-                    elif CONFIG['BOOK_API'] in ['Audible']:
-                        logger.debug(f"Checking Audible for [{authorname}]")
-                        au = Audible(authorname)
-                        try:
-                            author_gr = au.find_author_id()
-                        except Exception as e:
-                            author_gr = {}
-                            logger.warning(f"No author id for [{authorname}] {type(e).__name__}")
-                    else:
-                        logger.debug(f"Checking GoodReads for [{authorname}]")
-                        gr = GoodReads(authorname)
-                        try:
-                            author_gr = gr.find_author_id()
-                        except Exception as e:
-                            author_gr = {}
-                            logger.warning(f"No author id for [{authorname}] {type(e).__name__}")
-                    if author_gr:
-                        grauthorname = author_gr['authorname']
-                        authorid = author_gr['authorid']
-                        logger.debug(f"Found [{grauthorname}] for [{authorname}]")
-                        authorname = grauthorname
-                        authmatch = db.match('SELECT * FROM authors where AuthorID=?', (authorid,))
-
-                if authmatch:
-                    logger.debug(f"Author {authorname} found in database")
-                    authorid = authmatch['authorid']
-                    asin = authmatch['asin']
-                else:
-                    logger.debug(f"Author {authorname} not found, adding to database")
-                    if authorid:
-                        ret_id, asin = add_author_to_db(authorid=authorid, authorname=authorname, addbooks=CONFIG.get_bool('NEWAUTHOR_BOOKS'),
-                                                  reason=f"process_alternate: {bookname}")
-                        if ret_id and ret_id != authorid:
-                            logger.debug(f"Authorid mismatch {authorid}/{ret_id}")
-                            authorid = ret_id
-                    else:
-                        aname, authorid, asin, _ = add_author_name_to_db(author=authorname,
-                                                                   reason=f"process_alternate: {bookname}",
-                                                                   title=bookname)
-                        if aname and aname != authorname:
-                            authorname = aname
-                        if not aname:
-                            authorid = ''
-
-                if authorid:
-                    bookid, _ = find_book_in_db(authorname, bookname, ignored=False, library=library,
-                                                reason=f"process_alternate: {bookname}")
-
-                if authorid and not bookid:
-                    # new book, or new author where we didn't want to load their back catalog
-                    searchterm = (f"{unaccented(bookname, only_ascii=False)} <ll> "
-                                  f"{unaccented(authorname, only_ascii=False)}")
-                    match = {}
-                    results = search_for(searchterm)
-                    for result in results:
-                        if result['book_fuzz'] >= CONFIG.get_int('MATCH_RATIO') \
-                                and (result['authorid'] == authorid or result['authorid'] == asin):
-                            match = result
-                            break
-                    if not match:  # no match on full searchterm, try splitting out subtitle and series
-                        newtitle, _, _ = split_title(authorname, bookname)
-                        if newtitle != bookname:
-                            bookname = newtitle
-                            searchterm = (f"{unaccented(bookname, only_ascii=False)} <ll> "
-                                          f"{unaccented(authorname, only_ascii=False)}")
-                            results = search_for(searchterm)
-                            for result in results:
-                                if result['book_fuzz'] >= CONFIG.get_int('MATCH_RATIO') \
-                                        and (result['authorid'] == authorid or result['authorid'] == asin):
-                                    match = result
-                                    break
-                    if match:
-                        logger.info(
-                            f"Found ({round(match['book_fuzz'], 2)}%) {match['authorname']}: {match['bookname']} for "
-                            f"{authorname}: {bookname}")
-                        import_book(match['bookid'], ebook="Skipped", audio="Skipped", wait=True,
-                                    reason="Added from alternate dir")
-                        imported = db.match('select * from books where BookID=?', (match['bookid'],))
-                        if imported:
-                            bookid = match['bookid']
-                            update_totals(authorid)
-                db.close()
-
-            except Exception as e:
-                db.close()
-                logger.error(f'Exception in process_alternate: {e}')
-                return False
-
-            if not bookid:
-                author, book, forced_bookid = get_book_meta(source_dir, "postprocess")
-                if process_book_from_dir(source_dir=source_dir, library=library, bookid=forced_bookid):
-                    return True
-
-            if not bookid:
-                msg = f"{library} {bookname} by {authorname} not found in database"
-                if not results:
-                    msg += ', No results returned'
-                    logger.warning(msg)
-                else:
-                    msg += ', No match found'
-                    logger.warning(msg)
-                    msg = (f"Closest match ({round(results[0]['author_fuzz'], 2)}% "
-                           f"{round(results[0]['book_fuzz'], 2)}%) "
-                           f"{results[0]['authorname']}: {results[0]['bookname']}")
-                    if results[0]['authorid'] != authorid and results[0]['authorid'] != asin:
-                        msg += ' wrong authorid'
-                    logger.warning(msg)
-                if 'IMPORTALT' in threading.current_thread().name:
-                    threading.current_thread().name = 'WEBSERVER'
-                return False
-
-            db = database.DBConnection()
-            if library == 'eBook':
-                res = db.match("SELECT Status from books WHERE BookID=?", (bookid,))
-                if res and res['Status'] == 'Ignored':
-                    logger.warning(
-                        f"{library} {bookname} by {authorname} is marked Ignored in database, importing anyway")
-            else:
-                res = db.match("SELECT AudioStatus,Narrator from books WHERE BookID=?", (bookid,))
-                if metadata.get('narrator', '') and res and not res['Narrator']:
-                    db.action("update books set narrator=? where bookid=?", (metadata['narrator'], bookid))
-                if res and res['AudioStatus'] == 'Ignored':
-                    logger.warning(
-                        f"{library} {bookname} by {authorname} is marked Ignored in database, importing anyway")
-            db.close()
-            return process_book(source_dir, bookid, library)
-
-        else:
-            logger.warning(f'{library} {new_book} has no metadata')
-            res = check_residual(source_dir)
-            if not res:
-                logger.warning(f'{source_dir} has no book with LL.number')
-                if 'IMPORTALT' in threading.current_thread().name:
-                    threading.current_thread().name = 'WEBSERVER'
-                return False
-
-    except Exception:
-        logger.error(f'Unhandled exception in process_alternate: {traceback.format_exc()}')
-        if 'IMPORTALT' in threading.current_thread().name:
-            threading.current_thread().name = 'WEBSERVER'
-        return False
-
-
-def move_into_subdir(sourcedir, targetdir, fname, move='move'):
-    # move the book and any related files too, other book formats, or opf, jpg with same title
-    # (files begin with fname) from sourcedir to new targetdir
-    # can't move metadata.opf or cover.jpg or similar as can't be sure they are ours
-    # return how many files you moved
+    Returns:
+        Count of files transferred
+    """
     logger = logging.getLogger(__name__)
     cnt = 0
     list_dir = listdir(sourcedir)
     valid_extensions = CONFIG.get_all_types_list()
-    for ourfile in list_dir:
-        if ourfile.startswith(fname):  # or is_valid_booktype(ourfile, booktype="audiobook"):
-            if is_valid_type(ourfile, extensions=valid_extensions):
-                try:
-                    srcfile = os.path.join(sourcedir, ourfile)
-                    dstfile = os.path.join(targetdir, ourfile)
-                    if CONFIG.get_bool('DESTINATION_COPY') or move == 'copy':
-                        dstfile = safe_copy(srcfile, dstfile)
-                        setperm(dstfile)
-                        logger.debug(f"copy_into_subdir {ourfile}")
-                        cnt += 1
-                    else:
-                        dstfile = safe_move(srcfile, dstfile)
-                        setperm(dstfile)
-                        logger.debug(f"move_into_subdir {ourfile}")
-                        cnt += 1
-                except Exception as why:
-                    logger.warning(
-                        f"Failed to copy/move file {ourfile} to [{targetdir}], {type(why).__name__} {str(why)}")
-                    continue
+    logger.debug(f"Source: {sourcedir}")
+    logger.debug(f"Contents {list_dir}")
+    logger.debug(f"Valid extensions {valid_extensions}")
+    logger.debug(f"Destination: {targetdir}")
+    for _ourfile in list_dir:
+        ourfile = str(_ourfile)
+        logger.debug(f"Checking if {ourfile} matches {fname_prefix}")
+        # Only transfer files that start with our book's name and are valid media files
+        if ourfile.startswith(fname_prefix) and is_valid_type(ourfile, extensions=valid_extensions):
+            try:
+                srcfile = os.path.join(sourcedir, ourfile)
+                dstfile = os.path.join(targetdir, ourfile)
+                logger.debug(f"Trying to {'copy' if copy else 'move'} {srcfile} to {dstfile}")
+
+                if copy:
+                    dstfile = safe_copy(srcfile, dstfile)
+                    setperm(dstfile)
+                    logger.debug(f"Copied {ourfile} to subdirectory")
+                else:
+                    dstfile = safe_move(srcfile, dstfile)
+                    setperm(dstfile)
+                    logger.debug(f"Moved {ourfile} to subdirectory")
+                cnt += 1
+            except Exception as why:
+                logger.warning(
+                    f"Failed to transfer file {ourfile} to [{targetdir}], "
+                    f"{type(why).__name__} {why!s}"
+                )
+                continue
+    if copy:
+        logger.debug(f"Copied {cnt} to subdirectory")
+    else:
+        logger.debug(f"Moved {cnt} to subdirectory")
     return cnt
 
 
-def unpack_multipart(source_dir, download_dir, title):
-    """ unpack multipart zip/rar files into one directory
-        returns new directory in download_dir with book in it, or empty string
+def _extract_aux_type(book: dict) -> str:
+    """
+    A simple helper function to ensure the value is valid possibility for the AuxInfo column
+    """
+    book_type = book["AuxInfo"]
+    if book_type not in ["AudioBook", "eBook", "comic"]:
+        book_type = "eBook" if not book_type else "Magazine"
+    return book_type
+
+
+def _update_download_status(
+    book_state: BookState, db, logger: logging.Logger, dlresult=None
+):
+    """
+    Update the status of a completed download based on its current state.
+
+    Args:
+        book_state: The book/download record
+        db: Database connection
+        logger: Logger instance
+        dlresult: Optional result message for the download
+
+    Returns:
+        str: The new status ('Seeding', 'Processed', or None if not updated)
+    """
+    if not isinstance(book_state.progress, int) or book_state.progress != 100:
+        return None
+
+    # Determine if this should be marked as Seeding
+    is_torrent = book_state.mode_type in ["torrent", "magnet", "torznab"]
+    should_keep_seeding = (
+        is_torrent and CONFIG.get_bool("KEEP_SEEDING") and not book_state.finished
+    )
+
+    if should_keep_seeding:
+        # Mark as Seeding - download complete but still active in client
+        cmd = "UPDATE wanted SET Status='Seeding' WHERE NZBurl=? and Status IN ('Snatched', 'Processed')"
+        db.action(cmd, (book_state.download_url,))
+        logger.info(
+            f"STATUS: {book_state.download_title} [{book_state.status} -> Seeding] "
+            f"Download complete, continuing to seed"
+        )
+        return "Seeding"
+    # Mark as Processed - download complete
+    if not dlresult:
+        dlresult = "Download complete"
+    cmd = "UPDATE wanted SET Status='Processed', DLResult=? WHERE NZBurl=? and Status='Snatched'"
+    db.action(cmd, (dlresult, book_state.download_url))
+    logger.info(
+        f"STATUS: {book_state.download_title} [{book_state.status} -> Processed] {dlresult}"
+    )
+
+    # Optionally delete from client if configured
+    if book_state.finished and CONFIG.get_bool("DEL_COMPLETED"):
+        logger.debug(
+            f"Deleting {book_state.download_title} from {book_state.source} (DEL_COMPLETED=True)"
+        )
+        delete_task(book_state.source, book_state.download_id, False)
+    return "Processed"
+
+
+def _get_ready_from_snatched(db, snatched_list: list[dict]):
+    """
+    Filter snatched books to find those ready for processing.
+
+    Filters out books that:
+    - Have rejected content (file size, banned extensions, etc.)
+    - Are still downloading (progress 0-99%)
+    - Have incomplete torrents
+
+    Updates download names if they changed in the client (common with torrents).
+
+    Args:
+        db: Database connection
+        snatched_list: List of books with Status='Snatched'
+
+    Returns:
+        List of book rows ready to process (download complete and content valid)
     """
     logger = logging.getLogger(__name__)
-    # loggerpostprocess = logging.getLogger('special.postprocess')
-    TELEMETRY.record_usage_data('Process/MultiPart')
-    # noinspection PyBroadException
-    try:
-        targetdir = os.path.join(download_dir, f"{title}.unpack")
-        if not make_dirs(targetdir, new=True):
-            logger.error(f"Failed to create target dir {targetdir}")
-            return ''
-        for f in listdir(source_dir):
-            archivename = os.path.join(source_dir, f)
-            xtn = os.path.splitext(archivename)[1].lower()
-            if xtn not in ['.epub', '.cbz'] and zipfile.is_zipfile(archivename):
-                try:
-                    z = zipfile.ZipFile(archivename)
-                    for item in z.namelist():
-                        if not item.endswith('/'):
-                            # not if it's a directory
-                            logger.debug(f'Extracting {item} to {targetdir}')
-                            if os.path.__name__ == 'ntpath':
-                                dst = os.path.join(targetdir, item.replace('/', '\\'))
-                            else:
-                                dst = os.path.join(targetdir, item)
-                            with open(syspath(dst), "wb") as d:
-                                d.write(z.read(item))
-                except Exception as e:
-                    logger.error(f"Failed to unzip {archivename}: {e}")
-                    return ''
-        for f in listdir(targetdir):
-            if f.endswith('.rar'):
-                resultdir = unpack_archive(os.path.join(targetdir, f), targetdir, title, targetdir=targetdir)
-                if resultdir != targetdir:
-                    for d in listdir(resultdir):
-                        shutil.move(os.path.join(resultdir, d), os.path.join(targetdir, d))
-                break
-        return targetdir
-    except Exception:
-        logger.error(f'Unhandled exception in unpack_multipart: {traceback.format_exc()}')
-        return ''
+
+    books_to_process = []  # the filtered list of books ready for processing
+    delete_failed = CONFIG.get_bool("DEL_FAILED")
+
+    for book_row in snatched_list:
+        # Get current status from the downloader as the name may have changed
+        # once magnet resolved, or download started or completed.
+        # This is common with torrent downloaders. Usenet doesn't change the name.
+        book_id = book_row["BookID"]
+        book_type_str = BookType.from_string(
+            _extract_aux_type(book_row)
+        ).value  # normalize aux info type
+        title = unaccented(book_row["NZBtitle"], only_ascii=False)
+        source = book_row["Source"]
+        download_id = book_row["DownloadID"]
+        download_url = book_row["NZBurl"]
+        download_name = get_download_name(title, source, download_id)
+
+        if download_name and download_name != title:
+            if source == "SABNZBD":
+                logger.warning(
+                    f"{source} unexpected change [{title}] to [{download_name}]"
+                )
+            logger.debug(f"{source} Changing [{title}] to [{download_name}]")
+            # should we check against reject word list again as the name has changed?
+            db.action(
+                "UPDATE wanted SET NZBtitle=? WHERE NZBurl=?",
+                (download_name, download_url),
+            )
+            title = download_name
+
+        rejected = check_contents(source, download_id, book_type_str, title)
+        if rejected:
+            logger.debug(f"Rejected: {title} BookID: {book_id} DownloadID: {download_id}")
+
+            # change status to "Failed", and ask downloader to delete task and files
+            # Only reset book status to wanted if still snatched in case another download task succeeded
+            if book_id != "unknown":
+                cmd = ""
+                if book_type_str == BookType.EBOOK.value:
+                    cmd = "UPDATE books SET status='Wanted' WHERE status='Snatched' and BookID=?"
+                elif book_type_str == BookType.AUDIOBOOK.value:
+                    cmd = "UPDATE books SET audiostatus='Wanted' WHERE audiostatus='Snatched' and BookID=?"
+                if cmd:
+                    db.action(cmd, (book_id,))
+                # use downloadid as identifier as bookid is not unique for magazine issues
+                db.action(
+                    "UPDATE wanted SET Status='Failed',DLResult=? WHERE DownloadID=?",
+                    (rejected, download_id),
+                )
+                logger.info(
+                    f"STATUS: {title} [Snatched -> Failed] Content rejected: {rejected}"
+                )
+                if delete_failed:
+                    delete_task(source, download_id, True)
+            continue
+
+        # Check if download is complete before processing download directories
+        progress, finished = get_download_progress(source, download_id)
+        # progress can be: -1 (not found/removed - may be seeding complete), 0-99 (in progress), 100+ (complete)
+        # finished is True only when downloader confirms completion
+        # Process if: progress >= 100 (complete/seeding), finished == True, or progress == -1
+        # (torrent removed after seeding)
+        # Skip only if: 0 <= progress < 100 and not finished (actively downloading)
+        if 0 <= progress < 100 and not finished:
+            logger.debug(
+                f"Download not yet complete for {title} (progress: {progress}%), skipping"
+            )
+            continue
+
+        # If we reach this point, this book can be processed
+        logger.debug(
+            f"Download for '{title}' of type {book_type_str} ready to process."
+        )
+        books_to_process.append(book_row)
+
+    return books_to_process
 
 
-def unpack_archive(archivename, download_dir, title, targetdir=''):
-    """ See if archivename is an archive containing a book
-        returns new directory in download_dir with book in it, or empty string
+def _normalize_title(title: str) -> str:
+    # remove accents and convert not-ascii apostrophes
+    new_title = str(unaccented(title, only_ascii=False))
+    # torrent names might have words_separated_by_underscores
+    new_title = new_title.split(" LL.(")[0].replace("_", " ")
+    year_len: Final[int] = 4
+    # Strip known file extensions and special suffixes from the end
+    # This handles cases like "Book Name.2013" or "folder.unpack" or "Book.epub"
+    # but preserves periods in names like "J.R.R. Tolkien" or "Dr. Seuss"
+    if '.' in new_title:
+        # Get the part after the last period
+        last_dot_index = new_title.rfind(".")
+        suffix = new_title[last_dot_index + 1:].lower()
+
+        # Strip if it matches known patterns:
+        # 1. Known file extensions
+        known_extensions = CONFIG.get_all_types_list() if CONFIG else []
+        # 2. Special suffixes
+        special_suffixes = ['unpack']
+        # 3. 4-digit years
+        is_year = suffix.isdigit() and len(suffix) == year_len
+
+        if suffix in known_extensions or suffix in special_suffixes or is_year:
+            new_title = new_title[:last_dot_index]
+
+    # strip noise characters
+    return sanitize(new_title).strip()
+
+
+def _is_recognised_extension(ext: str) -> bool:
     """
-    logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
-    archivename = make_unicode(archivename)
-    if not path_isfile(archivename):  # regular files only
-        return ''
+    Decide whether a trailing ``.xxx`` is a real file extension rather than
+    part of the name (e.g. an author initial like ``Rhett C.``).
 
-    # noinspection PyBroadException
-    try:
-        xtn = os.path.splitext(archivename)[1].lower()
-        if xtn not in ['.epub', '.cbz'] and zipfile.is_zipfile(archivename):
-            TELEMETRY.record_usage_data('Process/Archive/Zip')
-            loggerpostprocess.debug(f'{archivename} is a zip file')
-            try:
-                z = zipfile.ZipFile(archivename)
-            except Exception as e:
-                logger.error(f"Failed to unzip {archivename}: {e}")
-                return ''
-            if not targetdir:
-                targetdir = os.path.join(download_dir, f"{title}.unpack")
-            if not make_dirs(targetdir, new=True):
-                logger.error(f"Failed to create target dir {targetdir}")
-                return ''
-
-            logger.debug(f"Created target {targetdir}")
-            # Look for any wanted files (inc jpg for cbr/cbz)
-            for item in z.namelist():
-                if is_valid_type(item, extensions=CONFIG.get_all_types_list()) and not item.endswith('/'):
-                    # not if it's a directory
-                    logger.debug(f'Extracting {item} to {targetdir}')
-                    if os.path.__name__ == 'ntpath':
-                        dst = os.path.join(targetdir, item.replace('/', '\\'))
-                    else:
-                        dst = os.path.join(targetdir, item)
-                    dstdir = os.path.dirname(dst)
-                    if not make_dirs(dstdir):
-                        logger.error(f"Failed to create directory {dstdir}")
-                        return ''
-                    with open(syspath(dst), "wb") as f:
-                        f.write(z.read(item))
-
-        elif tarfile.is_tarfile(archivename):
-            TELEMETRY.record_usage_data('Process/Archive/Tar')
-            loggerpostprocess.debug(f'{archivename} is a tar file')
-            try:
-                z = tarfile.TarFile(archivename)
-            except Exception as e:
-                logger.error(f"Failed to untar {archivename}: {e}")
-                return ''
-
-            targetdir = os.path.join(download_dir, f"{title}.unpack")
-            if not make_dirs(targetdir, new=True):
-                logger.error(f"Failed to create target dir {targetdir}")
-                return ''
-
-            logger.debug(f"Created target {targetdir}")
-            for item in z.getnames():
-                if is_valid_type(item, extensions=CONFIG.get_all_types_list()) and not item.endswith('/'):
-                    # not if it's a directory
-                    logger.debug(f'Extracting {item} to {targetdir}')
-                    if os.path.__name__ == 'ntpath':
-                        dst = os.path.join(targetdir, item.replace('/', '\\'))
-                    else:
-                        dst = os.path.join(targetdir, item)
-                    dstdir = os.path.dirname(dst)
-                    if not make_dirs(dstdir):
-                        logger.error(f"Failed to create directory {dstdir}")
-                        return ''
-                    with open(syspath(dst), "wb") as f:
-                        f.write(z.extractfile(item).read())
-
-        elif lazylibrarian.UNRARLIB == 1 and lazylibrarian.RARFILE.is_rarfile(archivename):
-            TELEMETRY.record_usage_data('Process/Archive/RarOne')
-            loggerpostprocess.debug(f'{archivename} is a rar file')
-            try:
-                z = lazylibrarian.RARFILE.RarFile(archivename)
-            except Exception as e:
-                logger.error(f"Failed to unrar {archivename}: {e}")
-                return ''
-
-            targetdir = os.path.join(download_dir, f"{title}.unpack")
-            if not make_dirs(targetdir, new=True):
-                logger.error(f"Failed to create target dir {targetdir}")
-                return ''
-
-            logger.debug(f"Created target {targetdir}")
-            for item in z.namelist():
-                if is_valid_type(item, extensions=CONFIG.get_all_types_list()) and not item.endswith('/'):
-                    # not if it's a directory
-                    logger.debug(f'Extracting {item} to {targetdir}')
-                    if os.path.__name__ == 'ntpath':
-                        dst = os.path.join(targetdir, item.replace('/', '\\'))
-                    else:
-                        dst = os.path.join(targetdir, item)
-                    dstdir = os.path.dirname(dst)
-                    if not make_dirs(dstdir):
-                        logger.error(f"Failed to create directory {dstdir}")
-                        return ''
-                    with open(syspath(dst), "wb") as f:
-                        f.write(z.read(item))
-
-        elif lazylibrarian.UNRARLIB == 2:
-            # noinspection PyBroadException
-            try:
-                z = lazylibrarian.RARFILE(archivename)
-                loggerpostprocess.debug(f'{archivename} is a rar file')
-                TELEMETRY.record_usage_data('Process/Archive/RarTwo')
-            except Exception as e:
-                if archivename.endswith('.rar'):
-                    logger.debug(str(e))
-                z = None  # not a rar archive
-
-            if z:
-                targetdir = os.path.join(download_dir, f"{title}.unpack")
-                if not make_dirs(targetdir, new=True):
-                    logger.error(f"Failed to create target dir {targetdir}")
-                    return ''
-
-                logger.debug(f"Created target {targetdir}")
-                wanted_files = []
-                for item in z.infoiter():
-                    if not item.isdir and is_valid_type(item.filename, extensions=CONFIG.get_all_types_list()):
-                        wanted_files.append(item.filename)
-
-                data = z.read_files("*")
-                for entry in data:
-                    for item in wanted_files:
-                        if entry[0].filename.endswith(item):
-                            logger.debug(f'Extracting {item} to {targetdir}')
-                            if os.path.__name__ == 'ntpath':
-                                dst = os.path.join(targetdir, item.replace('/', '\\'))
-                            else:
-                                dst = os.path.join(targetdir, item)
-                            dstdir = os.path.dirname(dst)
-                            if not make_dirs(dstdir):
-                                logger.error(f"Failed to create directory {dstdir}")
-                            else:
-                                with open(syspath(dst), "wb") as f:
-                                    f.write(entry[1])
-                            break
-        if not targetdir:
-            loggerpostprocess.debug(f"[{archivename}] doesn't look like an archive we can unpack")
-            return ''
-
-        return targetdir
-
-    except Exception:
-        logger.error(f'Unhandled exception in unpack_archive: {traceback.format_exc()}')
-        return ''
+    Recognised means a configured media type, a configured skip extension
+    (part/torrent/nzb/...), or the internal ``unpack`` marker. Comparison is
+    case-insensitive; ``ext`` is given with no leading dot.
+    """
+    ext = ext.strip().lower()
+    if not ext:
+        return False
+    recognised = set(CONFIG.get_all_types_list()) if CONFIG else set()
+    if CONFIG:
+        recognised.update(get_list(CONFIG["SKIPPED_EXT"]))
+    recognised.update(("unpack", "cbr", "cbz"))
+    return ext in recognised
 
 
-def PostProcessor():  # was cron_process_dir
-    if lazylibrarian.STOPTHREADS:
-        logger = logging.getLogger(__name__)
-        logger.debug("STOPTHREADS is set, not starting postprocessor")
-        schedule_job(SchedulerCommand.STOP, target='PostProcessor')
+def _tokenize_file(filepath_or_name: str) -> "tuple[str, str]":
+    """
+    Extract filename stem and extension from a file path.
+
+    Only a *recognised* trailing extension is split off, so interior periods
+    in a name -- author initials such as "Rhett C." or "J.R.R." -- are kept in
+    the stem instead of being mistaken for an extension. Using ``Path.stem``
+    here would turn "Rhett C. Bruno - An Unexpected Hero" into "Rhett C",
+    destroying the title and dropping the fuzzy match below threshold.
+
+    Example:
+        >>> _tokenize_file("/path/to/file.epub")
+        ("file", "epub")
+        >>> _tokenize_file("Rhett C. Bruno - An Unexpected Hero")
+        ("Rhett C. Bruno - An Unexpected Hero", "")
+
+    Args:
+        filepath_or_name: Full path or filename
+
+    Returns:
+        Tuple of (stem, extension) where extension has no leading dot
+    """
+    name = os.path.basename(str(filepath_or_name))
+    stem, dot, ext = name.rpartition(".")
+    if dot and stem and _is_recognised_extension(ext):
+        return stem, ext
+    # No recognised extension: the whole name is the stem
+    return name, ""
+
+
+def _is_valid_media_file(
+    filepath: str, book_type=BookType.EBOOK.value, include_archives=False
+) -> bool:
+    """
+    Check if a file is a valid media type for processing.
+
+    Args:
+        filepath: Path to the file to check
+        book_type: Type of media ("ebook", "audiobook", "magazine", "comic")
+        include_archives: Whether to include comic book archives (cbr, cbz)
+
+    Returns:
+        True if file is a valid media type
+    """
+    if include_archives:
+        return is_valid_type(
+            filepath, extensions=CONFIG.get_all_types_list(), extras="cbr, cbz"
+        )
+    return CONFIG.is_valid_booktype(filepath, booktype=book_type)
+
+
+def _count_zipfiles_in_directory(directory_path: str) -> int:
+    """
+    Count zip files in a directory, excluding epub and cbz files.
+
+    Args:
+        directory_path: Path to directory to scan
+
+    Returns:
+        Number of zip files found (excluding ebook/comic formats)
+    """
+    zipcount = 0
+    for _f in listdir(directory_path):
+        f = enforce_str(_f)  # Ensure string for path operations
+        file_path = os.path.join(directory_path, f)
+        _, extn = _tokenize_file(f)
+        extn = extn.lower()
+
+        # Skip ebook and comic book formats that happen to be zips
+        if extn not in [".epub", ".cbz"] and zipfile.is_zipfile(file_path):
+            zipcount += 1
+    return zipcount
+
+
+def _find_valid_file_in_directory(
+    directory_path, book_type=BookType.EBOOK.value, recurse=False
+) -> str:
+    """
+    Find the first valid media file in a directory.
+
+    Args:
+        directory_path: Path to directory to search
+        book_type: Type of media to look for
+        recurse: Whether to search subdirectories
+
+    Returns:
+        Path to first valid file found, or empty string if none found
+    """
+    if recurse:
+        for _dirpath, _, files in os.walk(directory_path):
+            dirpath = enforce_str(_dirpath)  # Ensure string for path operations
+            for _item in files:
+                item = enforce_str(_item)  # Ensure string for path operations
+                if _is_valid_media_file(
+                    item, book_type=book_type, include_archives=True
+                ):
+                    return os.path.join(dirpath, item)
     else:
-        process_dir()
+        for _f in listdir(directory_path):
+            f = enforce_str(_f)  # Ensure string for path operations
+            if _is_valid_media_file(f, book_type=book_type, include_archives=True):
+                return os.path.join(directory_path, f)
+    return ""
 
 
-def book_type(book):
-    booktype = book['AuxInfo']
-    if booktype not in ['AudioBook', 'eBook', 'comic']:
-        if not booktype:
-            booktype = 'eBook'
+def _extract_best_match_from_collection(
+    candidate_dir,
+    target_title: str,
+    download_dir: str,
+    logger: logging.Logger,
+    fuzzlogger: logging.Logger,
+) -> "tuple[str, bool, str]":
+    """
+    Extract the best matching book from a multi-book collection.
+
+    When a download contains multiple books, find the one that best matches
+    the target title and copy it to an isolated directory for processing.
+
+    Args:
+        candidate_dir: Directory containing multiple books
+        target_title: The title we're trying to match
+        download_dir: Parent download directory for creating .unpack folder
+        logger: Logger instance
+        fuzzlogger: Fuzzy matching logger instance
+
+    Returns:
+        Tuple of (extracted_path, skipped, skip_reason)
+        - extracted_path: Path to the extracted book directory
+        - skipped: Whether extraction was skipped
+        - skip_reason: Reason for skipping, if applicable
+    """
+    match_threshold = CONFIG.get_int("DLOAD_RATIO")
+    best_match = None
+    best_score = 0
+
+    # Find the best matching file
+    for _f in listdir(candidate_dir):
+        f = enforce_str(_f)  # Ensure string for validation
+        if CONFIG.is_valid_booktype(f, booktype=BookType.EBOOK.value):
+            filename_stem, _ = _tokenize_file(f)
+            normalized_fname = _normalize_title(filename_stem)
+
+            match_percent = fuzz.token_set_ratio(target_title, normalized_fname)
+            is_match = match_percent >= match_threshold
+            fuzzlogger.debug(
+                f"{round(match_percent, 2)}% match {target_title} : {normalized_fname}"
+            )
+
+            if is_match and match_percent > best_score:
+                best_match = f
+                best_score = match_percent
+
+    if not best_match:
+        return "", True, "Multiple books found with no good match"
+
+    # Create isolated directory for the best match
+    # use md5 to handle enormously long titles overflowing windows directory name limit
+    target_dir = os.path.join(download_dir, f"{md5_utf8(target_title)[-8:]}.unpack")
+    if not make_dirs(target_dir, new=True):
+        logger.error(f"Failed to create target dir {target_dir}")
+        return "", True, "Failed to create extraction directory"
+
+    logger.debug(
+        f"Best candidate match: {best_match} ({round(best_score, 2)}%) "
+        f"for {target_title} in multi book collection"
+    )
+
+    best_match_stem, _ = _tokenize_file(best_match)
+
+    # Copy all files related to the best match (including .opf, .jpg)
+    for _f in listdir(candidate_dir):
+        f = enforce_str(_f)  # Ensure string for validation and path operations
+        filename_stem, _ = _tokenize_file(f)
+
+        if filename_stem == best_match_stem and (CONFIG.is_valid_booktype(
+            f, booktype=BookType.EBOOK.value
+        ) or _is_metadata_file(f)):
+            source = os.path.join(candidate_dir, f)
+            if path_isdir(source):
+                shutil.copytree(source, target_dir)
+            else:
+                dest = os.path.join(target_dir, f)
+                shutil.copyfile(source, dest)
+
+    return target_dir, False, ""
+
+
+def _validate_candidate_directory(
+    candidate_ptr, logger: logging.Logger
+) -> "tuple[bool, str]":
+    """
+    Validate that a candidate directory is suitable for processing.
+
+    Checks for:
+    - Empty directories
+    - Presence of .bts files (BitTorrent Sync files)
+
+    Args:
+        candidate_ptr: Path to candidate directory
+        logger: Logger instance
+
+    Returns:
+        Tuple of (is_valid, skip_reason)
+    """
+    if not listdir(candidate_ptr):
+        logger.debug(f"Skipping {candidate_ptr}, folder is empty")
+        return False, "Folder is empty"
+
+    if bts_file(candidate_ptr):
+        logger.debug(f"Skipping {candidate_ptr}, found a .bts file")
+        return False, "Folder contains .bts file"
+
+    return True, ""
+
+
+def _extract_archives_in_directory(
+    candidate_ptr,
+    download_dir: str,
+    title: str,
+) -> "tuple[str, bool]":
+    """
+    Extract all archives in a directory and return the path to extracted content.
+
+    Handles both multipart archives and regular archives. Updates the candidate
+    pointer to the extracted location if successful.
+
+    Args:
+        candidate_ptr: Directory containing archives
+        download_dir: Parent download directory
+        title: Title for naming extracted content
+
+    Returns:
+        Tuple of (new_candidate_ptr, content_changed)
+        - new_candidate_ptr: Updated path (same as input if nothing changed)
+        - content_changed: Whether any archives were extracted
+    """
+    # Count zip files to detect multipart archives
+    zipfile_count = _count_zipfiles_in_directory(candidate_ptr)
+
+    if zipfile_count == 0:
+        return candidate_ptr, False
+
+    incoming_candidate = candidate_ptr
+
+    # Handle multipart archives first
+    if zipfile_count > 1:
+        unpacked_path = unpack_multipart(candidate_ptr, download_dir, title)
+        if unpacked_path:
+            candidate_ptr = unpacked_path
+
+    # Extract remaining archives
+    for _dirpath, _, files in os.walk(candidate_ptr):
+        dirpath = enforce_str(_dirpath)  # Ensure string for path operations
+        for item in files:
+            _, extn = _tokenize_file(item)
+            extn = extn.lower()
+
+            # Skip files that are ebooks/comics (they're already in zip format)
+            if item and extn not in [".epub", ".cbr", ".cbz"]:
+                if not os.path.exists(os.path.join(dirpath, item)):
+                    continue
+                res = unpack_archive(os.path.join(dirpath, item), download_dir, title)
+                if res:
+                    candidate_ptr = res
+                    break
+
+    content_changed = candidate_ptr != incoming_candidate
+    return candidate_ptr, content_changed
+
+
+def _calculate_fuzzy_match(title1: str, title2: str, fuzzlogger: logging.Logger=None) -> float:
+    """
+    Calculate fuzzy match percentage between two titles.
+
+    Args:
+        title1: First title to compare
+        title2: Second title to compare
+
+    Returns:
+        Match percentage (0-100)
+    """
+    match_fuzz = fuzz.token_set_ratio(title1, title2)
+
+    if match_fuzz >= CONFIG.get_int('NAME_RATIO'):
+        # if it's a close enough match, check for purely number differences
+        # This is in case we have multiple issues of a magazine in the folder
+        # where the only difference is the date
+        # magazine issue No 1.pdf magazine issue No 2.pdf etc.  where the fuzzy match is too close
+        num1 = []
+        num2 = []
+        set1 = set(title1.split())
+        set2 = set(title2.split())
+        for word in set1:
+            # see if word coerces to an integer or a float
+            word = word.replace('-', '')
+            try:
+                num1.append(float(re.findall(r'\d+\.\d+', word)[0]))
+            except IndexError:
+                with contextlib.suppress(IndexError):
+                    num1.append(int(re.findall(r'\d+', word)[0]))
+        for word in set2:
+            word = word.replace('-', '')
+            try:
+                num2.append(float(re.findall(r'\d+\.\d+', word)[0]))
+            except IndexError:
+                with contextlib.suppress(IndexError):
+                    num2.append(int(re.findall(r'\d+', word)[0]))
+        if fuzzlogger:
+            fuzzlogger.debug(f"[{title1}][{title2}]{num1}:{num2}")
+        if num1 and num2 and num1 != num2:
+            return CONFIG.get_int('NAME_RATIO') - 1  # only difference is a number, not the same
+    return match_fuzz
+
+
+def _find_matching_subdir(
+    directory: str,
+    target_title: str,
+    match_threshold: float,
+    book_type: str,
+    logger: logging.Logger,
+) -> "tuple[str, float]":
+    """
+    Search a directory for a SUBDIRECTORY that matches the target title and contains books.
+
+    Used for collections organized with each book in its own subdirectory.
+    Particularly common for audiobook series downloads.
+
+    Args:
+        directory: Parent directory to search
+        target_title: Normalized title to match against
+        match_threshold: Minimum match percentage to consider valid
+        book_type: Type of media to look for
+        logger: Logger for reporting matching debug messages
+
+    Returns:
+        Tuple of (matched_subdir_path, match_percent)
+        Returns ("", 0) if no matching subdirectory found
+    """
+    best_match_path = ""
+    best_match_percent = 0
+
+    try:
+        items = listdir(directory)
+    except Exception as e:
+        logger.debug(f"Error listing directory {directory}: {e}")
+        return "", 0
+
+    for _item in items:
+        item = enforce_str(_item)  # Ensure string for path operations
+        item_path = os.path.join(directory, item)
+
+        # Only consider subdirectories
+        if path_isdir(item_path):
+            try:
+                # Check if this subdirectory contains the target book type
+                subdir_files = listdir(item_path)
+                has_book = any(
+                    CONFIG.is_valid_booktype(enforce_str(f), booktype=book_type)
+                    for f in subdir_files
+                )
+
+                if has_book:
+                    # Fuzzy match the subdirectory name against target
+                    # _normalize_title now handles stripping known extensions intelligently
+                    normalized_dirname = _normalize_title(item)
+                    match_percent = _calculate_fuzzy_match(
+                        target_title, normalized_dirname, logger
+                    )
+
+                    logger.debug(
+                        f"{round(match_percent, 2)}% match (subdir) {target_title} : {normalized_dirname}"
+                    )
+
+                    # Track best match
+                    if (
+                        match_percent >= match_threshold
+                        and match_percent > best_match_percent
+                    ):
+                        best_match_path = item_path
+                        best_match_percent = match_percent
+
+            except Exception as e:
+                logger.debug(f"Error checking subdirectory {item}: {e}")
+                continue
+
+    return best_match_path, best_match_percent
+
+
+def _find_matching_file_in_directory(
+    directory: str,
+    target_title: str,
+    match_threshold: float,
+    fuzzlogger: logging.Logger,
+) -> "tuple[str, float]":
+    """
+    Search a directory for a file that matches the target title.
+
+    Args:
+        directory: Directory to search
+        target_title: Normalized title to match against
+        match_threshold: Minimum match percentage to consider valid
+        fuzzlogger: Logger for fuzzy matching debug messages
+
+    Returns:
+        Tuple of (matched_file_path, match_percent)
+        Returns ("", 0) if no match found
+    """
+    for _f in listdir(directory):
+        f = enforce_str(_f)  # Ensure string for path operations
+        if _is_valid_media_file(f, book_type="ebook", include_archives=True):
+            filename_stem, _ = _tokenize_file(f)
+            normalized_filename = _normalize_title(filename_stem)
+            match_percent = _calculate_fuzzy_match(target_title, normalized_filename, fuzzlogger)
+            is_match = match_percent >= match_threshold
+
+            fuzzlogger.debug(
+                f"{round(match_percent, 2)}% match {target_title} : {normalized_filename}"
+            )
+
+            if is_match:
+                return os.path.join(directory, str(f)), match_percent
+
+    return "", 0
+
+
+def _create_and_cache_cover(
+    dest_file: str, media_type: BookType, pagenum=1
+) -> str | None:
+    """
+    Create and cache a cover image for comics/magazines.
+
+    Args:
+        dest_file: Path to the media file
+        media_type: "comic" or "magazine"
+        pagenum: Page number to use for cover (default: 1)
+
+    Returns:
+        Cached cover path (e.g., "cache/comic/abc123.jpg") or None
+    """
+    coverfile = create_mag_cover(dest_file, pagenum=pagenum, refresh=True)
+
+    if not coverfile:
+        return None
+
+    # need cache folder as "magazine" not "BookType.MAGAZINE"
+    sub_cache = media_type.value
+    myhash = uuid.uuid4().hex
+    hashname = os.path.join(DIRS.CACHEDIR, sub_cache, f"{myhash}.jpg")
+    shutil.copyfile(coverfile, hashname)
+    setperm(hashname)
+    createthumbs(hashname)
+
+    return f"cache/{sub_cache}/{myhash}.jpg"
+
+
+def _update_issue_database(
+    db,
+    media_type: BookType,
+    book_id: str,
+    issue_id: str,
+    dest_file: str,
+    coverfile: str,
+    older: int,
+    aux_info="",
+) -> None:
+    """
+    Update database for comic/magazine issues.
+
+    Args:
+        db: Database connection
+        media_type: "comic" or "magazine"
+        book_id: Comic/Magazine ID
+        issue_id: Issue identifier
+        dest_file: Path to processed file
+        coverfile: Path to cached cover
+        older: Whether this is an older issue than current
+        aux_info: Additional info (used for magazines)
+    """
+    if media_type == BookType.COMIC:
+        # Update comics table
+        control_value_dict = {"ComicID": book_id}
+        if older:
+            new_value_dict = {
+                "LastAcquired": today(),
+                "IssueStatus": CONFIG["FOUND_STATUS"],
+            }
         else:
-            booktype = 'Magazine'
-    return booktype
+            new_value_dict = {
+                "LatestIssue": issue_id,
+                "LastAcquired": today(),
+                "LatestCover": coverfile,
+                "IssueStatus": CONFIG["FOUND_STATUS"],
+            }
+        db.upsert("comics", new_value_dict, control_value_dict)
+
+        # Update comicissues table
+        control_value_dict = {"ComicID": book_id, "IssueID": issue_id}
+        new_value_dict = {
+            "IssueAcquired": today(),
+            "IssueFile": dest_file,
+            "Cover": coverfile,
+        }
+        db.upsert("comicissues", new_value_dict, control_value_dict)
+
+    elif media_type == BookType.MAGAZINE:
+        # Create issue ID
+        issueid = create_id(f"{book_id} {aux_info}")
+
+        # Update issues table
+        control_value_dict = {"Title": book_id, "IssueDate": aux_info}
+        new_value_dict = {
+            "IssueAcquired": today(),
+            "IssueFile": dest_file,
+            "IssueID": issueid,
+            "Cover": coverfile,
+        }
+        db.upsert("issues", new_value_dict, control_value_dict)
+
+        # Update magazines table
+        control_value_dict = {"Title": book_id}
+        if older:
+            new_value_dict = {
+                "LastAcquired": today(),
+                "IssueStatus": CONFIG["FOUND_STATUS"],
+            }
+        else:
+            new_value_dict = {
+                "LastAcquired": today(),
+                "IssueStatus": CONFIG["FOUND_STATUS"],
+                "IssueDate": aux_info,
+                "LatestCover": coverfile,
+            }
+        db.upsert("magazines", new_value_dict, control_value_dict)
 
 
+def _should_delete_processed_files(book_path, download_dir) -> "tuple[bool, str]":
+    """
+    Determine if processed files should be deleted based on configuration.
+
+    Args:
+        book_path: Path to the processed files
+        download_dir: Root download directory
+
+    Returns:
+        Tuple of (should_delete, deletion_path)
+        - should_delete: Whether files should be deleted
+        - deletion_path: The path that should be deleted (may differ from book_path)
+    """
+    # Always delete unpacked files
+    if ".unpack" in book_path:
+        book_path = f"{book_path.split('.unpack')[0]}.unpack"
+        return True, book_path
+
+    # Don't delete if DESTINATION_COPY is enabled (keep source files)
+    if CONFIG.get_bool("DESTINATION_COPY"):
+        return False, book_path
+
+    # Don't delete if path is the download root directory
+    resolved_root = os.path.realpath(os.path.normpath(download_dir))
+    resolved_path = os.path.realpath(os.path.normpath(book_path))
+    if resolved_path == resolved_root:
+        return False, book_path
+
+    # Reject paths outside the download root
+    deletion_path = resolved_path
+    if not deletion_path.startswith(resolved_root + os.sep):
+        if ".unpack" not in book_path:
+            return False, book_path
+        return True, book_path
+
+    # Walk up subdirectories to find the top-level folder to delete
+    if ".unpack" not in deletion_path:
+        while os.path.dirname(deletion_path) != resolved_root:
+            parent = os.path.dirname(deletion_path)
+            if parent == deletion_path:
+                break
+            deletion_path = parent
+
+    return True, deletion_path
+
+
+def _cleanup_successful_download(book_path, download_dir, book_state, logger) -> None:
+    """
+    Clean up files after successful processing.
+
+    Args:
+        book_path: Path to processed files
+        download_dir: Root download directory
+        book_state: BookState instance with download info
+        logger: Logger instance
+    """
+    should_delete, deletion_path = _should_delete_processed_files(
+        book_path, download_dir
+    )
+
+    logger.debug(f"To Delete: {deletion_path} {should_delete}")
+
+    if should_delete:
+        try:
+            shutil.rmtree(deletion_path, ignore_errors=True)
+            logger.debug(
+                f"Deleted {deletion_path} for {book_state.download_title}, "
+                f"{book_state.mode_type} from {book_state.source}"
+            )
+        except Exception as why:
+            logger.warning(
+                f"Unable to remove {deletion_path}, {type(why).__name__} {why!s}"
+            )
+    elif CONFIG.get_bool("DESTINATION_COPY"):
+        logger.debug(f"Not removing {deletion_path} as Keep Files is set")
+    else:
+        logger.debug(f"Not removing {deletion_path} as in download root")
+
+
+def _send_download_notifications(
+    book_state: BookState, book_type: str, global_name: str, notification_id: str
+) -> None:
+    """
+    Send all notifications for a successful download.
+
+    Args:
+        book_state: BookState instance with download info
+        book_type: Type of media
+        global_name: Formatted name for the downloaded item
+        notification_id: Book/Issue ID for notifications
+    """
+    dispname = book_state.get_display_name(CONFIG)
+
+    custom_notify_download(f"{book_state.book_id} {book_type}")
+    notify_download(
+        f"{book_type} {global_name} from {dispname} at {now()}",
+        notification_id,
+    )
+    mailing_list(book_type, global_name, notification_id)
+    _update_downloads_provider_count(book_state.download_provider)
+
+
+def _handle_failed_processing(
+    book_state: BookState,
+    book_path: str,
+    metadata: BookMetadata,
+    dest_file: str,
+    db,
+    logger: logging.Logger,
+) -> None:
+    """
+    Handle cleanup and notifications for failed processing.
+
+    Args:
+        book_state: BookState instance with download info
+        book_path: Path to processed files
+        metadata: BookMetadata object with book information
+        dest_file: Error message or destination file path
+        db: Database connection
+        logger: Logger instance
+    """
+    global_name = metadata.global_name
+    book_type_enum = metadata.book_type_enum
+    book_type_str = metadata.book_type
+    logger.error(
+        f"Postprocessing for {global_name!r} has failed: {dest_file!r}"
+    )
+
+    # Mark failure in BookState
+    book_state.mark_failed("destination", dest_file)
+
+    # Send failure notifications
+    dispname = book_state.get_display_name(CONFIG)
+    custom_notify_snatch(f"{book_state.book_id} {book_type_str}", fail=True)
+    notify_snatch(
+        f"{book_type_str} {global_name} from {dispname} at {now()}",
+        fail=True,
+    )
+
+    # Update database status to Failed
+    control_value_dict = {
+        "NZBurl": book_state.download_url,
+        "Status": "Snatched",
+    }
+    new_value_dict = {
+        "Status": "Failed",
+        "DLResult": enforce_str(make_unicode(dest_file)),
+        "NZBDate": now(),
+    }
+    db.upsert("wanted", new_value_dict, control_value_dict)
+
+    # Reset book status to Wanted so we can try a different version
+    if book_type_enum == BookType.EBOOK:
+        db.action(
+            "UPDATE books SET status='Wanted' WHERE BookID=?",
+            (book_state.book_id,),
+        )
+    elif book_type_enum == BookType.AUDIOBOOK:
+        db.action(
+            "UPDATE books SET audiostatus='Wanted' WHERE BookID=?",
+            (book_state.book_id,),
+        )
+
+    # Handle failed download cleanup
+    _cleanup_failed_download(book_path, logger)
+
+
+def _cleanup_failed_download(book_path, logger) -> None:
+    """
+    Clean up files from a failed download.
+
+    Either deletes the files or moves them to a .fail directory based on config.
+
+    Args:
+        book_path: Path to the failed download files
+        logger: Logger instance
+    """
+    if CONFIG.get_bool("DEL_DOWNLOADFAILED"):
+        logger.debug(f"Deleting {book_path}")
+        shutil.rmtree(book_path, ignore_errors=True)
+    else:
+        # Move to .fail directory for manual inspection
+        fail_path = f"{book_path}.fail"
+        logger.debug(f"Making sure {fail_path} is clean")
+        shutil.rmtree(fail_path, ignore_errors=True)
+
+        try:
+            _ = safe_move(book_path, fail_path)
+            logger.warning(f"Residual files remain in {fail_path}")
+        except Exception as why:
+            logger.error(
+                f"Unable to rename {book_path!r}, {type(why).__name__} {why!s}"
+            )
+
+            # Diagnose permission issues
+            if not os.access(syspath(book_path), os.R_OK):
+                logger.error(f"{book_path!r} is not readable")
+            if not os.access(syspath(book_path), os.W_OK):
+                logger.error(f"{book_path!r} is not writeable")
+            if not os.access(syspath(book_path), os.X_OK):
+                logger.error(f"{book_path!r} is not executable")
+
+            # Test parent directory writability
+            parent = os.path.dirname(book_path)
+            try:
+                test_file = os.path.join(parent, "ll_temp")
+                with open(syspath(test_file), "w", encoding="utf-8") as f:
+                    f.write("test")
+                remove_file(test_file)
+            except Exception as why:
+                logger.error(f"Parent Directory {parent} is not writeable: {why}")
+
+            logger.warning(f"Residual files remain in {book_path}")
+
+
+def _try_match_candidate_file(
+    candidate_file,
+    book_state: BookState,
+    download_dir: str,
+    match_threshold: float,
+    logger: logging.Logger,
+    fuzzlogger: logging.Logger,
+) -> "tuple[bool, float]":
+    """
+    Try to match a candidate file/folder against the target book.
+
+    Performs fuzzy matching on filename, and if no match but it's a directory,
+    drills down to search for matches:
+    1. First tries matching subdirectories (for series/collection folders)
+    2. Then tries matching files at root level (for flat collections)
+
+    This supports:
+    - Audiobook series with each book in subdirectory
+    - Ebook series with each book in subdirectory
+    - Flat ebook/audiobook collections (files at root)
+
+    Args:
+        candidate_file: Filename in download directory
+        book_state: BookState being matched
+        download_dir: Download directory path
+        match_threshold: Minimum match percentage
+        logger: Logger for general logging
+        fuzzlogger: Logger for fuzzy matching
+
+    Returns:
+        Tuple of (is_match, match_percent)
+    """
+    book_state.update_candidate(os.path.join(download_dir, candidate_file))
+
+    fuzzlogger.debug(f"Checking candidate {candidate_file}")
+    filename_stem, extn = _tokenize_file(candidate_file)
+
+    skipped_extensions = get_list(CONFIG["SKIPPED_EXT"])
+    if extn in skipped_extensions:
+        logger.debug(f"Skipping {candidate_file}, extension not considered")
+        return False, 0
+
+    # Fuzzy match the candidate filename
+    normalized_candidate = _normalize_title(filename_stem)
+    match_percent = _calculate_fuzzy_match(
+        book_state.download_title, normalized_candidate, fuzzlogger
+    )
+    is_match = match_percent >= match_threshold
+
+    fuzzlogger.debug(
+        f"{round(match_percent, 2)}% match {book_state.download_title} : {normalized_candidate}"
+    )
+
+    # Drill down inside a directory to find the right book. Even when the
+    # folder name already matches the download/series title, the wanted book
+    # may be one item inside a multi-book collection, so always look for a more
+    # specific subdirectory match on the book title and prefer it when found.
+    if path_isdir(book_state.candidate_ptr or ""):
+        logger.debug(f"{candidate_file} is a directory, checking contents")
+
+        book_type_str = book_state.get_book_type_str()
+        if not book_type_str:
+            return is_match, match_percent
+
+        # Use actual book title for drill-down if available, otherwise use download title
+        # This is critical for collections where download name != individual book name
+        search_title = (
+            book_state.book_title
+            if book_state.book_title
+            else book_state.download_title
+        )
+
+        # _normalize_title now handles stripping known extensions intelligently
+        search_title = _normalize_title(search_title)
+
+        # Try 1: Match subdirectories (for collections organized in folders).
+        # This is common for audiobook series and some ebook collections. A
+        # specific subdir match overrides a broader folder-name match so a
+        # series download resolves to the individual wanted book.
+        matched_subdir, subdir_match_percent = _find_matching_subdir(
+            book_state.candidate_ptr or "",
+            search_title,
+            match_threshold,
+            book_type_str,
+            fuzzlogger,
+        )
+
+        if matched_subdir:
+            logger.debug(
+                f"Found matching subdirectory: {os.path.basename(matched_subdir)}"
+            )
+            book_state.update_candidate(matched_subdir)
+            is_match = True
+            match_percent = subdir_match_percent
+        elif not is_match:
+            # Try 2: Match files at root level (for flat collections with files
+            # in one directory). Only needed when the folder name itself did not
+            # match; a single matched book folder is processed as-is.
+            matched_file, file_match_percent = _find_matching_file_in_directory(
+                book_state.candidate_ptr or "",
+                search_title,
+                match_threshold,
+                fuzzlogger,
+            )
+
+            if matched_file:
+                logger.debug(f"Found matching file: {os.path.basename(matched_file)}")
+                book_state.update_candidate(matched_file)
+                is_match = True
+                match_percent = file_match_percent
+
+    return is_match, match_percent
+
+
+def _process_matched_directory(
+    book_state: BookState,
+    download_dir: str,
+    match_percent: float,
+    logger: logging.Logger,
+    fuzzlogger: logging.Logger,
+) -> "tuple[bool, str]":
+    """
+    Process a matched file or directory to extract and validate the media file.
+
+    Handles:
+    - Single files in download root (isolates to .unpack subdirectory)
+    - Finding valid files in directories
+    - Extracting archives if no valid files found
+    - Handling multi-book collections
+    - Final validation
+
+    For single files in download root, selectively transfers ONLY files matching
+    the book's filename to an isolated .unpack subdirectory to protect other files.
+
+    Args:
+        book_state: BookState with candidate_ptr pointing to matched file/directory
+        download_dir: Download directory path
+        match_percent: Initial match percentage
+        logger: Logger instance
+        fuzzlogger: Fuzzy match logger
+
+    Returns:
+        Tuple of (is_valid, skip_reason)
+    """
+    candidate_ptr = book_state.candidate_ptr or ""
+    # Direct downloads place files in download root
+    # if candidate_ptr is download_dir, handle as single file in download root
+    logger.debug(f"candidate_ptr: {candidate_ptr}")
+    logger.debug(f"download_dir: {download_dir}")
+    logger.debug(f"download_title: {book_state.download_title}")
+
+    def _norm(p):
+        return os.path.normcase(os.path.normpath(p)) if p else ''
+
+    all_download_dirs = {_norm(d)
+                         for d in get_list(CONFIG.get_str('DOWNLOAD_DIR'), ',') if d.strip()}
+    all_download_dirs.add(_norm(get_directory('Download')))
+    all_download_dirs.discard('')
+
+    if candidate_ptr and _norm(candidate_ptr) in all_download_dirs:
+        download_dir = candidate_ptr
+        candidate_ptr = os.path.join(candidate_ptr, book_state.download_title)
+        book_state.update_candidate(candidate_ptr)
+
+    if path_isfile(candidate_ptr):
+        # It's a single file - check if it's in download root
+        file_dir = os.path.dirname(candidate_ptr)
+
+        if file_dir == download_dir.rstrip(os.sep):
+            # Single file in download root - need to isolate it to protect other files
+            logger.debug(f"Single file in download root: {candidate_ptr}")
+
+            fname = os.path.basename(candidate_ptr)
+            fname_prefix = os.path.splitext(fname)[0]
+
+            # Remove trailing noise characters
+            while fname_prefix and fname_prefix[-1] in "_.  ":
+                fname_prefix = fname_prefix[:-1]
+
+            # Determine if we should copy or move or link
+            if CONFIG.get_bool("DESTINATION_COPY") or (
+                book_state.is_torrent() and CONFIG.get_bool("KEEP_SEEDING")
+            ):
+                copy_files = True
+            else:
+                copy_files = False
+
+            # Create isolated .unpack directory
+            targetdir = os.path.join(download_dir, f"{md5_utf8(fname_prefix)[-8:]}.unpack")
+            try:
+                os.makedirs(targetdir, exist_ok=True)
+            except Exception as e:
+                return False, f"Failed to create isolation directory {targetdir}: {e}"
+
+            # Selectively transfer ONLY files matching this book's name
+            cnt = _transfer_matching_files(
+                file_dir, targetdir, fname_prefix, copy=copy_files
+            )
+
+            if cnt:
+                # Successfully isolated - update candidate to the folder
+                book_state.update_candidate(targetdir)
+                logger.debug(f"Isolated {cnt} file(s) to {targetdir}")
+                return True, ""  # Success - file isolated to .unpack folder
+            # No files transferred - cleanup empty directory
+            try:
+                logger.debug(f"No files moved to {targetdir}, removing it")
+                os.rmdir(targetdir)
+            except OSError:
+                contextlib.suppress(OSError)
+            return False, "Failed to isolate file to subdirectory"
+
+        # File not in root - update candidate_ptr to parent directory
+        # process_destination expects a directory, not a file
+        parent_dir = os.path.dirname(book_state.candidate_ptr or "")
+        book_state.update_candidate(parent_dir)
+        logger.debug(f"Updated candidate from file to parent directory: {parent_dir}")
+        return True, ""
+
+    if not path_isdir(book_state.candidate_ptr):
+        return False, f"Folder {book_state.candidate_ptr} is not found"
+
+    logger.debug(
+        f"Found folder ({round(match_percent, 2)}%) [{book_state.candidate_ptr}] "
+        f"for {book_state.get_book_type_str()} {book_state.download_title}"
+    )
+
+    # First pass: Look for valid files
+    valid_file_path = _find_valid_file_in_directory(
+        book_state.candidate_ptr, book_type=book_state.get_book_type_str()
+    )
+
+    if valid_file_path:
+        book_state.update_candidate(os.path.dirname(valid_file_path))
+    else:
+        # No valid file, try extracting archives
+        new_candidate, archives_extracted = _extract_archives_in_directory(
+            book_state.candidate_ptr, download_dir, book_state.download_title
+        )
+        book_state.update_candidate(new_candidate)
+
+        # If we extracted archives, search again
+        if archives_extracted:
+            valid_file_path = _find_valid_file_in_directory(
+                book_state.candidate_ptr,
+                book_type=book_state.get_book_type_str(),
+                recurse=True,
+            )
+
+            if not valid_file_path:
+                logger.debug("No valid file after extraction")
+                return False, "No valid file found after extraction"
+        elif book_state.get_book_type_enum() == BookType.AUDIOBOOK:
+            # No archives, but a multi-part audiobook is often placed in a subfolder
+            # (e.g. "<Title> (year)/"). Recurse before giving up so the post-processor
+            # can still locate the parts. Scoped to audiobooks only: the recursive find
+            # returns the first valid-extension file it walks into, with no sample
+            # filtering or name matching, so eBooks keep the original bail and let the
+            # archive/collection best-match logic handle nested layouts.
+            valid_file_path = _find_valid_file_in_directory(
+                book_state.candidate_ptr,
+                book_type=book_state.get_book_type_str(),
+                recurse=True,
+            )
+            if valid_file_path:
+                book_state.update_candidate(os.path.dirname(valid_file_path))
+            else:
+                return False, "No valid file or archives found"
+        else:
+            return False, "No valid file or archives found"
+
+    # Handle multi-book collections for eBooks
+    # If folder contains multiple books, extract ONLY the best matching one
+    book_type_enum = book_state.get_book_type_enum()
+    if book_type_enum == BookType.EBOOK:
+        mult = multibook(book_state.candidate_ptr, recurse=True)
+        if mult:
+            # Use actual book title for better matching in collections
+            search_title = (
+                book_state.book_title
+                if book_state.book_title
+                else book_state.download_title
+            )
+
+            # Found collection - extract best match to isolated directory
+            extracted_path, skipped, skip_reason = _extract_best_match_from_collection(
+                book_state.candidate_ptr,
+                search_title,
+                download_dir,
+                logger,
+                fuzzlogger,
+            )
+            if skipped:
+                return False, skip_reason
+            book_state.update_candidate(extracted_path)
+    else:
+        # For non ebook types, just find the file
+        book_type_str = book_state.get_book_type_str()
+        if book_type_str:
+            candidate = _norm(book_state.candidate_ptr or "")
+            if candidate in all_download_dirs or candidate == _norm(download_dir):
+                return False, f"No {book_type_enum.value} found in matched folder"
+            result = book_file(
+                book_state.candidate_ptr or "",
+                book_type_str,
+                recurse=True,
+                config=CONFIG,
+            )
+            if result:
+                book_state.update_candidate(os.path.dirname(result))
+            else:
+                return False, f"No {book_type_enum.value} found"
+
+    # Final validation
+    is_valid, skip_reason = _validate_candidate_directory(
+        book_state.candidate_ptr, logger
+    )
+    return is_valid, skip_reason
+
+
+def _find_best_match_in_downloads(
+    book_state,
+    all_downloads,
+    match_threshold,
+    logger,
+    fuzzlogger,
+) -> "tuple[float, str]":
+    """
+    Search through all downloads to find the best match for a book.
+
+    This is the core matching loop (Matching Stage|Second Pass i.e., the Fallback Search) that:
+    1. Iterates through all candidates from all directories
+    2. Fuzzy matches each candidate
+    3. Searches inside directories if needed
+    4. Processes matched directories (extract archives, handle collections)
+    5. Tracks all matches and returns the best one
+
+    Args:
+        book_state: BookState to find matches for
+        all_downloads: List of (parent_dir, filename) tuples from all directories
+        match_threshold: Minimum match percentage
+        logger: Logger instance
+        fuzzlogger: Fuzzy match logger
+
+    Returns:
+        Tuple of (best_match_percent, skip_reason)
+        Updates book_state.candidate_ptr to best match location
+    """
+    matches = []
+    if not all_downloads:
+        return 0, "No downloads found"
+
+    book_type = book_state.get_book_type_str()
+    logger.debug(f"Fuzzy searching for {book_type} across all downloads")
+
+    for parent_dir, candidate_file in all_downloads:
+        # Try to match this candidate
+        is_match, match_percent = _try_match_candidate_file(
+            candidate_file,
+            book_state,
+            parent_dir,
+            match_threshold,
+            logger,
+            fuzzlogger,
+        )
+
+        if is_match:
+            # Process matched directory (extract archives, handle collections, validate)
+            is_valid, skip_reason = _process_matched_directory(
+                book_state,
+                parent_dir,
+                match_percent,
+                logger,
+                fuzzlogger,
+            )
+
+            if is_valid:
+                matches.append([match_percent, book_state.candidate_ptr])
+                if match_percent == 100:
+                    # Perfect match, no need to keep searching
+                    break
+            else:
+                book_state.mark_skipped(skip_reason)
+        # Even non-matches get tracked to report closest match
+        elif match_percent > 0:
+            matches.append([match_percent, book_state.candidate_ptr])
+
+    # Find the best match
+    if not matches:
+        return 0, "No matches found"
+
+    highest = max(matches, key=lambda x: x[0])
+    best_match_percent = highest[0]
+    best_candidate_ptr = highest[1]
+
+    book_state.update_candidate(best_candidate_ptr)
+
+    if best_match_percent >= match_threshold:
+        logger.debug(
+            f"Found match ({round(best_match_percent, 2)}%): {best_candidate_ptr} "
+            f"for {book_state} {book_state.download_title}"
+        )
+        return best_match_percent, ""
+    logger.debug(
+        f"Closest match ({round(best_match_percent, 2)}%): {best_candidate_ptr}"
+    )
+    for match in matches:
+        fuzzlogger.debug(f"Match: {round(match[0], 2)}%  {match[1]}")
+    return best_match_percent, "No match above threshold"
+
+
+def _process_book_post(
+    metadata: EbookMetadata,
+    dest_file: str,
+    book_id: str,
+) -> str:
+    """
+    Handle post-processing for ebooks and audiobooks.
+
+    Args:
+        metadata: EbookMetadata object
+        dest_file: Destination file path
+        book_id: Book ID
+
+    Returns:
+        book_name
+    """
+    if metadata.book_name and dest_file:
+        _process_extras(dest_file, metadata.global_name, book_id, metadata.book_type)
+
+    return metadata.book_name
+
+
+def _process_comic_post(
+    metadata: ComicMetadata, dest_file: str, mostrecentissue: str, db
+) -> "tuple[str, str]":
+    """
+    Handle post-processing for comics.
+
+    Args:
+        metadata: ComicMetadata object
+        dest_file: Destination file path
+        mostrecentissue: Most recent issue date for comparison
+        db: Database connection
+
+    Returns:
+        Tuple of (bookname, issueid) for notification purposes
+    """
+    comicid = metadata.comic_id
+    issueid = metadata.issue_id
+
+    if comicid:
+        # Determine if this is an older issue
+        older = int(mostrecentissue) > int(issueid) if mostrecentissue else False
+
+        # Create and cache cover
+        coverfile = _create_and_cache_cover(dest_file, BookType.COMIC, pagenum=1) or ""
+
+        # Update database
+        _update_issue_database(
+            db, BookType.COMIC, comicid, issueid, dest_file, coverfile, older
+        )
+
+    return "", issueid
+
+
+def _process_magazine_post(
+    metadata: MagazineMetadata, dest_file: str, mostrecentissue: str, book_state, db
+) -> "tuple[str, str]":
+    """
+    Handle post-processing for magazines.
+
+    Args:
+        metadata: MagazineMetadata object
+        dest_file: Destination file path
+        mostrecentissue: Most recent issue date for comparison
+        book_state: BookState for aux_info access
+        db: Database connection
+
+    Returns:
+        Tuple of (bookname, issueid) for notification purposes
+    """
+    issueid = metadata.issue_id
+
+    if mostrecentissue:
+        if mostrecentissue.isdigit() and str(book_state.aux_info).isdigit():
+            older = int(mostrecentissue) > int(book_state.aux_info)
+        else:
+            older = mostrecentissue > book_state.aux_info
+    else:
+        older = False
+
+    # Get cover page from metadata
+    if CONFIG.get_bool("SWAP_COVERPAGE"):
+        coverpage = 1
+    else:
+        coverpage = metadata.cover_page if metadata.cover_page else 1
+
+    coverfile = (
+        _create_and_cache_cover(dest_file, BookType.MAGAZINE, pagenum=coverpage) or ""
+    )
+
+    # Update database
+    _update_issue_database(
+        db,
+        BookType.MAGAZINE,
+        book_state.book_id,
+        book_state.aux_info,
+        dest_file,
+        coverfile,
+        older,
+        book_state.aux_info,
+    )
+
+    # Auto-add if enabled
+    if CONFIG["IMP_AUTOADDMAG"]:
+        dest_path = os.path.dirname(dest_file)
+        _process_auto_add(dest_path, book_type_enum=BookType.MAGAZINE)
+
+    return "", issueid
+
+
+def _process_successful_download(
+    book_state: BookState,
+    metadata: BookMetadata,
+    dest_file,
+    book_path,
+    download_dir,
+    mostrecentissue,
+    ignoreclient: bool,
+    db,
+    logger: logging.Logger,
+) -> int:
+    """
+    Handle all post-processing for a successful download.
+
+    This includes:
+    - Processing extras (for books)
+    - Creating covers (for comics/magazines)
+    - Updating database
+    - Deleting from download client
+    - Cleaning up files
+    - Sending notifications
+
+    Args:
+        book_state: BookState instance
+        dest_file: Destination file path
+        book_path: Processing path
+        download_dir: Download directory
+        metadata: BookMetadata object with book information
+        mostrecentissue: Most recent issue (for comics/magazines)
+        ignoreclient: Whether to skip download client interaction
+        db: Database connection
+        logger: Logger instance
+
+    Returns:
+        1 if successfully processed, 0 otherwise
+    """
+    global_name = metadata.global_name
+    book_type = metadata.book_type
+    logger.debug(
+        f"Processed {book_state.mode_type} ({book_path}): {global_name}, {book_state.download_url}"
+    )
+    dest_file = enforce_str(make_unicode(dest_file))
+
+    # Update wanted table status to Processed
+    control_value_dict = {
+        "NZBurl": book_state.download_url,
+        "Status": "Snatched",
+    }
+    new_value_dict = {
+        "Status": "Processed",
+        "NZBDate": now(),
+        "DLResult": dest_file,
+    }
+    db.upsert("wanted", new_value_dict, control_value_dict)
+
+    # Type-specific post-processing
+    if isinstance(metadata, EbookMetadata):
+        bookname = _process_book_post(metadata, dest_file, book_state.book_id)
+        issueid = 0
+    elif isinstance(metadata, ComicMetadata):
+        bookname, issueid = _process_comic_post(
+            metadata, dest_file, mostrecentissue, db
+        )
+    elif isinstance(metadata, MagazineMetadata):
+        bookname, issueid = _process_magazine_post(
+            metadata, dest_file, mostrecentissue, book_state, db
+        )
+    else:
+        # Unknown metadata type (should never happen)
+        bookname = ""
+        issueid = 0
+
+    # Delete from download client if appropriate
+    to_delete = True
+    if ignoreclient is False and to_delete:
+        if book_state.can_delete_from_client():
+            book_state.progress, book_state.finished = get_download_progress(
+                book_state.source, book_state.download_id
+            )
+            logger.debug(
+                f"Progress for {book_state.download_title} {book_state.progress}/{book_state.finished}"
+            )
+
+            if isinstance(book_state.progress, int) and book_state.progress == 100:
+                _update_download_status(book_state, db, logger)
+            elif isinstance(book_state.progress, int) and book_state.progress < 0:
+                logger.debug(
+                    f"{book_state.download_title} not found at {book_state.source}"
+                )
+        elif not book_state.source:
+            logger.warning(f"Unable to remove {book_state.download_title}, no source")
+        elif book_state.source != 'DIRECT':  # direct sources don't have anything to remove
+            logger.warning(
+                f"Unable to remove {book_state.download_title} from {book_state.source}, no DownloadID"
+            )
+
+    # Clean up source files
+    _cleanup_successful_download(book_path, download_dir, book_state, logger)
+
+    logger.info(f"Successfully processed:{global_name}")
+
+    # Send notifications
+    notification_id = book_state.book_id if bookname else str(issueid)
+    _send_download_notifications(book_state, book_type, global_name, notification_id)
+
+    # Mark as successfully processed
+    book_state.mark_processed()
+
+    return 1
+
+
+def _process_book_after_matching(
+    book_state: BookState,
+    parent_dir: str,
+    ignoreclient: bool,
+    db,
+    logger: logging.Logger,
+):
+    """
+    Process a book after candidate location has been found and validated.
+
+    This is the common path used after both targeted and fallback search.
+    Handles metadata retrieval, destination processing, and post-processing.
+
+    Args:
+        book_state: BookState with candidate_ptr set to valid location
+        parent_dir: Parent directory for processing context
+        ignoreclient: Whether to skip download client interaction
+        db: Database connection
+        logger: Logger instance
+
+    Returns:
+        Number of books processed (1 if successful, 0 if failed)
+    """
+    # Retrieve metadata and prepare destination paths
+    if book_state.is_book():  # eBook or Audiobook
+        metadata = prepare_book_metadata(
+            book_state.book_id, book_state.get_book_type_str(), db
+        )
+        if not metadata:
+            logger.warning(f"Unable to retrieve metadata for {book_state.book_id}")
+            book_state.mark_failed(
+                "metadata", f"Book {book_state.book_id} not found in database"
+            )
+            return 0
+        mostrecentissue = ""
+
+    elif book_state.is_magazine():  # Magazine
+        metadata = prepare_magazine_metadata(
+            book_state.book_id, book_state.aux_info, db
+        )
+        if not metadata or not metadata.dest_path:
+            logger.warning(
+                f"Unable to retrieve magazine metadata for {book_state.book_id}"
+            )
+            book_state.mark_failed(
+                "metadata", f"Magazine {book_state.book_id} not found in database"
+            )
+            return 0
+        if not make_dirs(metadata.dest_path):
+            logger.warning(f"Unable to create directory {metadata.dest_path}")
+            book_state.mark_failed(
+                "metadata", f"Cannot create directory {metadata.dest_path}"
+            )
+            return 0
+        mostrecentissue = metadata.most_recent_issue
+
+    else:  # Comic
+        metadata = prepare_comic_metadata(book_state.book_id, db)
+        if not metadata:
+            emsg = f'Nothing in database matching "{book_state.book_id}"'
+            logger.debug(emsg)
+            book_state.mark_failed("metadata", emsg)
+            control_value_dict = {"BookID": book_state.book_id, "Status": "Snatched"}
+            new_value_dict = {"Status": "Failed", "NZBDate": now(), "DLResult": emsg}
+            db.upsert("wanted", new_value_dict, control_value_dict)
+            return 0
+        if not make_dirs(metadata.dest_path):
+            logger.warning(f"Unable to create directory {metadata.dest_path}")
+            book_state.mark_failed(
+                "metadata", f"Cannot create directory {metadata.dest_path}"
+            )
+            return 0
+        mostrecentissue = metadata.most_recent_issue
+        logger.debug(f"Processing {metadata.title} issue {metadata.issue_date}")
+
+    # Process the downloaded files and move them to the target destination
+    success, dest_file, book_path = _process_destination(
+        book_metadata=metadata,
+        book_path=book_state.candidate_ptr or "",
+        logger=logger,
+        mode=book_state.mode_type,
+    )
+
+    if success:
+        # Handle successful processing
+        return _process_successful_download(
+            book_state,
+            metadata,
+            dest_file,
+            book_path,
+            parent_dir,
+            mostrecentissue,
+            ignoreclient,
+            db,
+            logger,
+        )
+    # Handle failed processing
+    _handle_failed_processing(
+        book_state, book_path, metadata, dest_file, db, logger
+    )
+    return 0
+
+
+def _process_snatched_book(
+    book_state,
+    all_downloads,
+    ignoreclient: bool,
+    db,
+    logger,
+    fuzzlogger,
+) -> int:
+    """
+    Process a single snatched book using fallback fuzzy search (Matching Stage|Second pass).
+
+    This is called when targeted search fails or isn't available.
+    Fuzzy matches against all compiled downloads from all directories.
+
+    Args:
+        book_state: BookState instance for tracking the item being processed
+        all_downloads: List of (parent_dir, filename) tuples from all directories
+        ignoreclient: Whether to skip download client interaction
+        db: Database connection
+        logger: Logger instance
+        fuzzlogger: Fuzzy match logger
+
+    Returns:
+        Number of items successfully processed (0 or 1)
+    """
+    match_threshold = CONFIG.get_int("DLOAD_RATIO")
+
+    # Find best matching candidate across all downloads
+    match_percent, skip_reason = _find_best_match_in_downloads(
+        book_state,
+        all_downloads,
+        match_threshold,
+        logger,
+        fuzzlogger,
+    )
+
+    if match_percent < match_threshold:
+        logger.debug(f"No match found for {book_state.download_title}: {skip_reason}")
+        book_state.mark_failed(
+            "matching",
+            f"No match above {match_threshold}% threshold (best: {match_percent}%)",
+        )
+        return 0
+
+    # Match found - derive parent_dir from matched candidate_ptr
+    parent_dir = os.path.dirname(book_state.candidate_ptr.rstrip(os.sep))
+    if not path_isdir(book_state.candidate_ptr):
+        # It's a file, get its parent directory
+        parent_dir = os.path.dirname(book_state.candidate_ptr)
+
+    # Continue with common post-matching processing
+    return _process_book_after_matching(
+        book_state, parent_dir, ignoreclient, db, logger
+    )
+
+
+def _calculate_download_age(snatched_date: str) -> tuple:
+    """
+    Calculate time elapsed since download was snatched.
+
+    Args:
+        snatched_date: NZBdate string in format 'YYYY-MM-DD HH:MM:SS'
+
+    Returns:
+        Tuple of (hours, minutes, total_seconds)
+        Returns (0, 0, 0) if date parsing fails
+    """
+    try:
+        when_snatched = datetime.datetime.strptime(snatched_date, "%Y-%m-%d %H:%M:%S")
+        timenow = datetime.datetime.now()
+        td = timenow - when_snatched
+        diff = td.total_seconds()  # time difference in seconds
+    except ValueError:
+        diff = 0
+
+    hours = int(diff / 3600)
+    mins = int(diff / 60)
+
+    return hours, mins, diff
+
+
+def _handle_seeding_status(
+    book_state: BookState,
+    keep_seeding: bool,
+    wait_for_seeding: bool,
+    db,
+    logger: logging.Logger,
+) -> bool:
+    """
+    Handle downloads in 'Seeding' status.
+
+    Checks if seeding is complete and handles:
+    - Torrents removed from client (progress < 0)
+    - Seeding completion based on config
+    - File cleanup after seeding
+    - Database status updates
+
+    Args:
+        book_state: SimpleNamespace with download state
+        keep_seeding: CONFIG['KEEP_SEEDING'] value
+        wait_for_seeding: CONFIG['SEED_WAIT'] value
+        db: Database connection
+        logger: Logger instance
+
+    Returns:
+        True if item should be skipped (still seeding), False otherwise
+    """
+    logger.debug(
+        f"Progress:{book_state.progress} Finished:{book_state.finished} "
+        f"Waiting:{wait_for_seeding} Keep Seeding: {keep_seeding}"
+    )
+
+    """
+        Is changing to Snatched really necessary? If the download has already been processed
+        while still seeding, and the files are not moved, we will end up processing it twice
+    """
+    # Handle case where torrent not found in client (was removed after seeding or communication issue)
+    if isinstance(book_state.progress, int) and book_state.progress < 0:
+        # -1 signals not found, -2 communication issue, can be retried
+        # Files should still be on disk, but file processing loop has already run
+        # Change status to Snatched if -1, so file matching logic will run next cycle to find and process files
+        msg = f"{book_state.download_title} not found at {book_state.source}, "
+        if book_state.progress == -1:
+            msg += "torrent was removed, changing status to Snatched to process files from download directory"
+            if book_state.book_id != "unknown":
+                cmd = "UPDATE wanted SET status='Snatched' WHERE status='Seeding' and DownloadID=?"
+                db.action(cmd, (book_state.download_id,))
+        else:
+            msg += "communication issue, will retry on next run"
+        logger.info(msg)
+
+        # File matching will process it next cycle
+        return True  # Skip to next item
+
+    # Handle normal seeding completion
+    if book_state.finished or (not keep_seeding and not wait_for_seeding):
+        if book_state.finished:
+            logger.debug(
+                f"{book_state.download_title} finished seeding at {book_state.source}"
+            )
+        else:
+            logger.debug(
+                f"{book_state.download_title} not seeding at {book_state.source}"
+            )
+
+        # asked while the torrent is still there to ask about, because the
+        # answer covers the files on disk further down as well as the task
+        may_delete = may_delete_data(book_state.source, book_state.download_id)
+        # only worth waiting on an answer if the answer would decide something:
+        # with Keep Files set and DEL_COMPLETED off, nothing gets removed either
+        # way and there is no reason to hold the row back
+        deletes_something = CONFIG.get_bool("DEL_COMPLETED") or not CONFIG.get_bool(
+            "DESTINATION_COPY"
+        )
+        if may_delete is None and deletes_something:
+            # the client could not be asked, so leave the row where it is and
+            # come back to it rather than marking it done with its files still
+            # sitting there
+            logger.info(
+                f"{book_state.download_title}: cannot reach {book_state.source} to "
+                f"finish up, leaving it for the next run"
+            )
+            return True  # Skip to next item
+
+        if CONFIG.get_bool("DEL_COMPLETED"):
+            logger.debug(
+                f"Removing seeding completed {book_state.download_title} from {book_state.source}"
+            )
+
+            delfiles = not CONFIG.get_bool("DESTINATION_COPY")
+            delete_task(
+                book_state.source,
+                book_state.download_id,
+                delfiles,
+            )
+
+        if book_state.book_id != "unknown":
+            cmd = "UPDATE wanted SET status='Processed',NZBDate=? WHERE status='Seeding' and DownloadID=?"
+            db.action(cmd, (now(), book_state.download_id))
+            logger.info(
+                f"STATUS: {book_state.download_title} [Seeding -> Processed] Seeding complete"
+            )
+
+        # only delete the files if not in download root dir and DESTINATION_COPY not set
+        # This is for downloaders (rtorrent) that don't let us tell them to delete files
+        # NOTE it will silently fail if the torrent client downloadfolder is not local
+        # e.g. in a docker or on a remote machine
+        book_path = get_download_folder(book_state.source, book_state.download_id)
+        if not may_delete:
+            # either nothing on record says we created this download, or the
+            # torrent has since been moved into a category someone is keeping,
+            # so book_path may well be someone else's download folder
+            logger.debug("Not removing original files as the torrent was not ours")
+        elif CONFIG.get_bool("DESTINATION_COPY"):
+            logger.debug("Not removing original files as Keep Files is set")
+        elif book_path in get_list(CONFIG["DOWNLOAD_DIR"]):
+            logger.debug("Not removing original files as in download root")
+        else:
+            shutil.rmtree(book_path, ignore_errors=True)
+            logger.debug(
+                f"Deleted {book_path} for {book_state.download_title}, {book_state.mode_type} from {book_state.source}"
+            )
+        return True  # Skip to next item
+    logger.debug(
+        f"{book_state.download_title} still seeding at {book_state.source}"
+    )
+    return True  # Skip to next item
+
+
+def _handle_snatched_timeout(
+    book_state, hours: int, mins: int, max_hours: int, logger: logging.Logger
+) -> tuple:
+    """
+    Handle timeout logic for downloads in 'Snatched' status.
+
+    Determines if a snatched download should be aborted based on:
+    - Time since snatched
+    - Download progress
+    - Whether torrent exists in client
+
+    For downloads at 100% that timed out, attempts direct processing.
+
+    Args:
+        book_state: SimpleNamespace with download state
+        hours: Hours since download was snatched
+        mins: Minutes since download was snatched
+        max_hours: CONFIG['TASK_AGE'] maximum age before abort
+        logger: Logger instance
+
+    Returns:
+        Tuple of (should_abort, should_skip_to_next)
+        should_abort: True if download should be aborted
+        should_skip_to_next: True if we should continue to next item (processed successfully)
+    """
+    should_abort = False
+    should_skip = False
+    short_wait = 5
+    longer_wait = 30
+
+    # has it been aborted (wait a short while before checking)
+    if mins > short_wait and isinstance(book_state.progress, int) and book_state.progress < 0:
+        # Torrent/download not found in client
+        # Give slow magnets and client issues more time before aborting
+        if mins < longer_wait:
+            # Less than 30 minutes - could be slow magnet link or temporary client issue
+            logger.debug(
+                f"{book_state.download_title} not found at {book_state.source} but only "
+                f"{mins} {plural(mins, 'minute')} old, waiting for torrent to appear"
+            )
+            should_abort = False
+        else:
+            # Over 30 minutes and never appeared - probably failed to add or was rejected
+            logger.warning(
+                f"{book_state.download_title} not found at {book_state.source} after "
+                f"{mins} {plural(mins, 'minute')}, aborting"
+            )
+            should_abort = True
+
+    if max_hours and hours >= max_hours:
+        # SAB can report 100% (or more) and not finished if missing blocks and needs repair
+        # For torrents, check if download is complete before timing out
+        # This handles edge cases where:
+        # - Torrent reached 100% but files aren't accessible yet (client still moving/verifying)
+        # - Race condition where torrent completes just as timeout expires
+        # - Large torrents that take time to post-process and hit timeout during processing
+        # - Any case where a complete torrent somehow wasn't processed in the normal flow
+        if check_int(book_state.progress, 0) >= 100:
+            # Download is complete - attempt direct processing if it's a book/audiobook
+            logger.info(
+                f"{book_state.download_title} reached timeout but is 100% complete - attempting direct processing"
+            )
+            should_abort = False
+
+            # For downloads at 100%, don't abort - let normal processing retry next cycle
+            logger.debug(
+                f"{book_state.download_title} at 100% will retry on next postprocessor run"
+            )
+
+        elif check_int(book_state.progress, 0) < 95:
+            # Less than 95% after timeout - likely stuck
+            should_abort = True
+
+        elif (
+            hours >= max_hours + 1
+        ):  # Progress is 95-99% so let's give it an extra hour
+            # Still not complete after extended timeout
+            should_abort = True
+
+    return should_abort, should_skip
+
+
+def _handle_aborted_download(
+    book_state: BookState, hours: int, db, logger: logging.Logger
+) -> None:
+    """
+    Handle downloads marked as 'Aborted'.
+
+    Updates database, sends notifications, and optionally deletes
+    the failed download task from the download client.
+
+    Args:
+        book_state: SimpleNamespace with download state
+        hours: Hours since download was snatched (for error message)
+        db: Database connection
+        logger: Logger instance
+    """
+    dlresult = ""
+    if book_state.source and book_state.source != "DIRECT":
+        if book_state.status == "Snatched":
+            progress = f"{book_state.progress}"
+            if progress.isdigit():  # could be "Unknown" or -1
+                progress += "%"
+            dlresult = (
+                f"{book_state.download_title} was sent to {book_state.source} {hours} hours ago. "
+                f"Progress: {progress}"
+            )
+            if check_int(book_state.progress, 0) == 100:  # Fixed typo from chech_int
+                dlresult += " Please check download directory is correct"
+        else:
+            dlresult = f"{book_state.download_title} was aborted by {book_state.source}"
+
+    custom_notify_snatch(f"{book_state.book_id} {book_state.source}", fail=True)
+    notify_snatch(
+        f"{book_state.download_title} from {book_state.source} at {now()}", fail=True
+    )
+
+    # change status to "Failed", and ask downloader to delete task and files
+    # Only reset book status to wanted if still snatched in case another download task succeeded
+    if book_state.book_id != "unknown":
+        cmd = ""
+        book_type_enum = book_state.get_book_type_enum()
+        if book_type_enum == BookType.EBOOK:
+            cmd = (
+                "UPDATE books SET status='Wanted' WHERE status='Snatched' and BookID=?"
+            )
+        elif book_type_enum == BookType.AUDIOBOOK:
+            cmd = "UPDATE books SET audiostatus='Wanted' WHERE audiostatus='Snatched' and BookID=?"
+        if cmd:
+            db.action(cmd, (book_state.book_id,))
+
+        # use url and status for identifier because magazine id isn't unique
+        if book_state.status == "Snatched":
+            q = "UPDATE wanted SET Status='Failed',DLResult=? WHERE NZBurl=? and Status='Snatched'"
+            db.action(q, (dlresult, book_state.download_url))
+        else:  # don't overwrite dlresult reason for the abort
+            q = "UPDATE wanted SET Status='Failed' WHERE NZBurl=? and Status='Aborted'"
+            db.action(q, (book_state.download_url,))
+
+        if CONFIG.get_bool("DEL_FAILED"):
+            logger.warning(f"{dlresult}, deleting failed task")
+            delete_task(book_state.source, book_state.download_id, True)
+
+
+def _check_and_schedule_next_run(db, logger: logging.Logger, reset: bool) -> None:
+    """
+    Determine if postprocessor should run again.
+
+    Checks for remaining snatched/seeding items and schedules
+    the PostProcessor job accordingly (STOP, RESTART, or continue).
+
+    Args:
+        db: Database connection
+        logger: Logger instance
+        reset: Whether to force restart
+    """
+
+    # Check if postprocessor needs to run again
+    snatched = db.select("SELECT * from wanted WHERE Status='Snatched'")
+    seeding = db.select("SELECT * from wanted WHERE Status='Seeding'")
+
+    if not len(snatched) and not len(seeding):
+        logger.info("Nothing marked as snatched or seeding. Stopping postprocessor.")
+        schedule_job(SchedulerCommand.STOP, target="PostProcessor")
+    elif len(seeding):
+        logger.info(f"Seeding {len(seeding)}")
+        schedule_job(SchedulerCommand.RESTART, target="PostProcessor")
+    elif reset:
+        schedule_job(SchedulerCommand.RESTART, target="PostProcessor")
+
+
+def _manage_download_status(db, logger: logging.Logger) -> None:
+    """
+    Manage download lifecycle for incomplete/failed downloads.
+
+    Handles three status types:
+    - Seeding: Check completion, handle removed torrents, update status
+    - Snatched: Check timeouts, attempt direct processing if 100% complete
+    - Aborted: Send failure notifications, clean up
+
+    This runs after main processing to handle items that couldn't be processed
+    or are still in progress.
+
+    Args:
+        db: Database connection
+        logger: Logger instance
+    """
+    # Query for items needing status management
+    cmd = "SELECT * from wanted WHERE Status IN ('Snatched', 'Aborted', 'Seeding')"
+    incomplete = db.select(cmd)
+    logger.info(f"Found {len(incomplete)} items for status management")
+
+    # Get config values once
+    keep_seeding = CONFIG.get_bool("KEEP_SEEDING")
+    wait_for_seeding = CONFIG.get_bool("SEED_WAIT")
+    max_hours = CONFIG.get_int("TASK_AGE")
+
+    for book_row in incomplete:
+        book_dict = dict(book_row)
+
+        # Use BookState for consistency with main processing loop
+        book_state = BookState.from_db_row(book_row, CONFIG)
+
+        # Set runtime fields for download status tracking
+        book_state.aborted = False
+        book_state.finished = False
+        book_state.progress = "Unknown"
+        book_state.skipped_reason = book_dict.get("skipped", "")
+
+        logger.debug(
+            f"{book_state.status} {book_state.source} {book_state.download_title}"
+        )
+
+        # Get progress from download client
+        if book_state.status == "Aborted":
+            book_state.aborted = True
+        else:
+            book_state.progress, book_state.finished = get_download_progress(
+                book_state.source, book_state.download_id
+            )
+
+        # Route to appropriate handler based on status
+        if book_state.status == "Seeding":
+            should_skip = _handle_seeding_status(
+                book_state, keep_seeding, wait_for_seeding, db, logger
+            )
+            if should_skip:
+                continue
+
+        elif book_state.status == "Snatched":
+            hours, mins, _ = _calculate_download_age(book_state.snatched_date)
+            should_abort, should_skip = _handle_snatched_timeout(
+                book_state, hours, mins, max_hours, logger
+            )
+
+            if should_skip:
+                continue  # Successfully processed, move to next
+
+            if should_abort:
+                book_state.aborted = True
+
+        # Handle aborted downloads
+        if book_state.aborted:
+            hours, mins, _ = _calculate_download_age(book_state.snatched_date)
+            _handle_aborted_download(book_state, hours, db, logger)
+        elif book_state.status == "Snatched":
+            # Log progress for items still downloading
+            hours, mins, _ = _calculate_download_age(book_state.snatched_date)
+            if mins:
+                provider = book_state.source
+                if book_state.source == "DIRECT":
+                    provider = book_state.download_provider
+                logger.debug(
+                    f"{book_state.download_title} was sent to {provider} {mins} {plural(mins, 'minute')} ago."
+                    f" Progress {book_state.progress} {book_state.skipped_reason}"
+                    f" Status {book_state.status}"
+                )
+
+
+def _search_in_known_location(
+    book_state: BookState,
+    ignoreclient: bool,
+    db,
+    logger: logging.Logger,
+    fuzzlogger: logging.Logger,
+):
+    """
+    Search for book in client-provided download_folder (ratching Stage:First Pass e.g., the Targeted Search).
+
+    Trusts client location even if outside configured directories.
+    Uses book_title for drill-down matching in collections.
+
+    Args:
+        book_state: BookState with download_folder populated
+        ignoreclient: Whether to skip download client interaction
+        db: Database connection
+        logger: Logger instance
+        fuzzlogger: Fuzzy logger
+
+    Returns:
+        Number of books processed (1 if successful, 0 if failed)
+    """
+    logger.info(f"Download folder: {book_state.download_folder}")
+    logger.info(f"Book title: {book_state.book_title}")
+
+    # Validate folder exists
+    if not path_exists(book_state.download_folder):
+        logger.warning(f"FAIL: Download folder not found: {book_state.download_folder}")
+        return 0
+
+    # Check if folder has content
+    try:
+        contents = listdir(book_state.download_folder)
+        if not contents:
+            logger.warning("FAIL: Download folder is empty")
+            return 0
+        logger.info(f"Folder has {len(contents)} items")
+    except Exception as e:
+        logger.error(f"ERROR: Cannot access folder: {e}")
+        return 0
+
+    # Set candidate_ptr to the known folder
+    book_state.update_candidate(book_state.download_folder)
+    logger.debug(f"Candidate folder set to: {book_state.candidate_ptr}")
+
+    # Get parent directory for processing context
+    parent_dir = os.path.dirname(book_state.download_folder.rstrip(os.sep))
+    logger.debug(f"Parent directory: {parent_dir}")
+
+    # Process the known folder (drill-down uses book_title, extraction, validation)
+    is_valid, skip_reason = _process_matched_directory(
+        book_state,
+        parent_dir,
+        100.0,  # 100% - we trust the client
+        logger,
+        fuzzlogger,
+    )
+
+    if not is_valid:
+        logger.warning(f"FAIL: Validation failed: {skip_reason}")
+        book_state.mark_failed("validation", skip_reason)
+        return 0
+
+    logger.debug("Validation passed, continuing to metadata and processing")
+
+    # Continue with metadata and processing
+    result = _process_book_after_matching(
+        book_state, parent_dir, ignoreclient, db, logger
+    )
+
+    return result
+
+
+def _compile_all_downloads(dirlist, logger):
+    """
+    Compile all downloads from configured directories into a single list.
+
+    Handles OSError gracefully by skipping inaccessible directories.
+
+    Args:
+        dirlist: List of download directories to scan
+        logger: Logger instance
+
+    Returns:
+        List of (parent_dir, filename) tuples
+    """
+    all_downloads = []
+
+    for download_dir in dirlist:
+        try:
+            downloads = listdir(download_dir)
+            all_downloads.extend([(download_dir, f) for f in downloads])
+            logger.debug(f"Found {len(downloads)} items in {download_dir}")
+        except OSError as why:  # noqa: PERF203
+            logger.error(
+                f"Could not access [{download_dir}]: {why.strerror} - skipping"
+            )
+            continue
+
+    logger.info(
+        f"Compiled {len(all_downloads)} total items from {len(dirlist)} download {plural(len(dirlist), 'directory')}"
+    )
+    return all_downloads
+
+
+# noinspection PyBroadException
 def process_dir(reset=False, startdir=None, ignoreclient=False, downloadid=None):
+    """
+    Main postprocessor entry point with book-centric workflow.
+
+    Pass 1: Process completed snatched downloads
+        - Handles deliberately downloaded books (from search/snatch)
+        - Fuzzy matches download_title against filesystem to find location
+        - Uses book_title for drill-down matching in collections
+        - Handles single books AND collections (extracts best match)
+        - Processes all media types: ebook, audiobook, magazine, comic
+        - Extracts archives, handles multipart, searches obfuscated folders
+        - Moves/copies to library, sends notifications
+
+    Pass 2: Process unsnatched books with LL.(bookid) naming
+        - Scans for folders/files with "LL.(bookid)" pattern
+        - These are manually added or leftover books NOT in wanted table
+        - Imports to library if not already present
+
+    Pass 3: Handle download status management
+        - Seeding: Check completion, handle removed torrents
+        - Snatched: Check timeouts (100% complete downloads retry next cycle)
+        - Aborted: Send notifications, clean up
+
+    Args:
+        reset: Force postprocessor to restart after completion
+        startdir: Specific directory to process (overrides config)
+        ignoreclient: Skip download client interaction
+        downloadid: Process specific download ID only
+    """
     logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
-    loggerfuzz = logging.getLogger('special.fuzz')
-    status = {'status': 'failed'}
+    postprocesslogger = logging.getLogger("special.postprocess")
+    fuzzlogger = logging.getLogger("special.fuzz")
+
+    # Thread safety check - prevent concurrent execution
     count = 0
-    for threadname in [n.name for n in [t for t in threading.enumerate()]]:
-        if threadname == 'POSTPROCESSOR':
+    logger.debug("Attempt to run POSTPROCESS")
+    for name in [t.name for t in threading.enumerate()]:
+        if name == "POSTPROCESS":
             count += 1
 
-    threadname = thread_name()
-    if threadname == 'POSTPROCESSOR':
+    incoming_threadname = thread_name()
+    if incoming_threadname == "POSTPROCESS":
         count -= 1
-    if count:
-        logger.debug("POSTPROCESSOR is already running")
-        status['status'] = 'running'
-        return status
 
+    if count:
+        logger.debug("POSTPROCESS is already running")
+        return  # Exit early if already running
+
+    logger.debug("No concurrent POSTPROCESS threads detected")
+
+    # Set thread name for this execution
     thread_name("POSTPROCESS")
+
     db = database.DBConnection()
     try:
-        ppcount = 0
+        logger.debug(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
-        skipped_extensions = get_list(CONFIG['SKIPPED_EXT'])
-        if startdir:
-            templist = [startdir]
+
+        # Now we will get a list of wanted books that are snatched and ready for processing
+        if downloadid:
+            snatched_books = db.select(
+                "SELECT * from wanted WHERE DownloadID=? AND Status='Snatched'",
+                (downloadid,),
+            )
         else:
-            templist = get_list(CONFIG['DOWNLOAD_DIR'], ',')
+            snatched_books = db.select("SELECT * from wanted WHERE Status='Snatched'")
+
+        postprocesslogger.debug(
+            f'Found {len(snatched_books)} {plural(len(snatched_books), "file")} marked "Snatched"'
+        )
+
+        # ======================================================================
+        #  Filtering Stage: Get snatched books that are ready for processing
+        #    by removing books still downloading, rejected content, etc.
+        # ======================================================================
+        books_to_process = []
+        if len(snatched_books):
+            TELEMETRY.record_usage_data("Process/Snatched")
+            books_to_process = _get_ready_from_snatched(db, snatched_books)
+
+        postprocesslogger.info(
+            f"Found {len(books_to_process)} {plural(len(books_to_process), 'book')} ready to process"
+        )
+
+        # Build the list of directories that will will use to process downloaded assets
+        # At least one valid directory must be present or we will stop
+        startdir_file = None
+        if startdir:
+            if path_isfile(startdir):
+                startdir_file = startdir
+                templist = [os.path.dirname(startdir)]
+            else:
+                templist = [startdir]
+        else:
+            templist = get_list(CONFIG["DOWNLOAD_DIR"], ",")
             if len(templist) and get_directory("Download") != templist[0]:
-                templist.insert(0, get_directory("Download"))
-        dirlist = []
+                templist.insert(0, str(get_directory("Download")))
+
+        download_dirlist = []
         for item in templist:
             if path_isdir(item):
-                dirlist.append(item)
+                download_dirlist.append(item)
             else:
-                logger.debug(f"[{item}] is not a directory")
+                postprocesslogger.debug(f"[{item}] is not a directory")
 
-        if not dirlist:
-            logger.error("No download directories are configured")
-        if downloadid:
-            snatched = db.select("SELECT * from wanted WHERE DownloadID=? AND Status='Snatched'", (downloadid,))
+        # Collect all entries within our download directories in a list to analyze against our
+        # downloaded items. If there are no available download directories or entries in the download
+        # folders, we will still process the books because there is a chance that that a book is downloading
+        # to a location outside of our configured directories (e.g., the download started before a config change)
+        all_downloads = None
+        if download_dirlist:
+            if startdir_file:
+                all_downloads = [
+                    (os.path.dirname(startdir_file), os.path.basename(startdir_file))
+                ]
+                postprocesslogger.debug(
+                    f"Using single file startdir: {startdir_file}"
+                )
+            else:
+                # Compile all downloads from all directories once
+                postprocesslogger.debug(
+                    f"Compiling downloads from directories: {download_dirlist}"
+                )
+                all_downloads = _compile_all_downloads(download_dirlist, logger)
+                if not all_downloads:
+                    postprocesslogger.warning(
+                        "No downloads found in any configured directory"
+                    )
         else:
-            snatched = db.select("SELECT * from wanted WHERE Status='Snatched'")
-        logger.debug(f"Found {len(snatched)} {plural(len(snatched), 'file')} marked \"Snatched\"")
-        if len(snatched):
-            TELEMETRY.record_usage_data('Process/Snatched')
-            for book in snatched:
-                # see if we can get current status from the downloader as the name
-                # may have been changed once magnet resolved, or download started or completed
-                # depending on torrent downloader. Usenet doesn't change the name. We like usenet.
-                matchtitle = unaccented(book['NZBtitle'], only_ascii=False)
-                dlname = get_download_name(matchtitle, book['Source'], book['DownloadID'])
+            postprocesslogger.warning("No download directories are configured.")
 
-                if dlname and dlname != matchtitle:
-                    if book['Source'] == 'SABNZBD':
-                        logger.warning(f"{book['Source']} unexpected change [{matchtitle}] to [{dlname}]")
-                    logger.debug(f"{book['Source']} Changing [{matchtitle}] to [{dlname}]")
-                    # should we check against reject word list again as the name has changed?
-                    db.action('UPDATE wanted SET NZBtitle=? WHERE NZBurl=?', (dlname, book['NZBurl']))
-                    matchtitle = dlname
+        # This is where our processing of books will occur. This is a multipass process for locating
+        # and performing file operations on the downloaded items
 
-                booktype = book_type(book)
+        # This will provide a little bit of padding between dl completion and processing
+        processing_delay = CONFIG.get_int("PP_DELAY")
 
-                # here we could also check percentage downloaded or eta or status?
-                # If downloader says it hasn't completed, no need to look for it.
-                rejected = check_contents(book['Source'], book['DownloadID'], booktype, matchtitle)
-                if rejected:
-                    # change status to "Failed", and ask downloader to delete task and files
-                    # Only reset book status to wanted if still snatched in case another download task succeeded
-                    if book['BookID'] != 'unknown':
-                        cmd = ""
-                        if booktype == 'eBook':
-                            cmd = "UPDATE books SET status='Wanted' WHERE status='Snatched' and BookID=?"
-                        elif booktype == 'AudioBook':
-                            cmd = "UPDATE books SET audiostatus='Wanted' WHERE audiostatus='Snatched' and BookID=?"
-                        if cmd:
-                            db.action(cmd, (book['BookID'],))
-                        db.action("UPDATE wanted SET Status='Failed',DLResult=? WHERE BookID=?",
-                                  (rejected, book['BookID']))
-                        if CONFIG.get_bool('DEL_FAILED'):
-                            delete_task(book['Source'], book['DownloadID'], True)
+        ppcount = 0
+
+        for book_row in books_to_process:
+            # Create BookState from database row
+            book_state = BookState.from_db_row(book_row, CONFIG)
+
+            # Check processing delay (once per book, not per directory!)
+            # Legacy-compatible: processes even if Completed==0 (some clients don't set it)
+            if processing_delay:
+                should_delay, elapsed = book_state.should_delay_processing(
+                    processing_delay
+                )
+                if should_delay:
+                    postprocesslogger.warning(
+                        f"Ignoring {book_state.download_title} as completion was only {elapsed} "
+                        f"{plural(elapsed, 'second')} ago, delay is {processing_delay}"
+                    )
+                    continue
+                # Only log completion time if we have a valid timestamp
+                if book_state.is_completed():
+                    postprocesslogger.debug(
+                        f"{book_state.download_title} was completed {elapsed} {plural(elapsed, 'second')} ago"
+                    )
                 else:
-                    _ = get_download_progress(book['Source'], book['DownloadID'])  # set completion time
-                    dlfolder = get_download_folder(book['Source'], book['DownloadID'])
-                    if dlfolder:
-                        match = False
-                        for download_dir in dirlist:
-                            if dlfolder.startswith(download_dir):
-                                match = True
-                                break
-                        if not match:
-                            logger.debug(f"{book['Source']} is downloading to [{dlfolder}]")
+                    postprocesslogger.debug(
+                        f"{book_state.download_title} has no completion timestamp (client doesn't support it)"
+                    )
 
-        for download_dir in dirlist:
-            try:
-                downloads = listdir(download_dir)
-            except OSError as why:
-                logger.error(f'Could not access directory [{download_dir}] {why.strerror}')
-                thread_name("WEBSERVER")
-                return status
+            # Enrich with download_folder (general + name) and book_title
+            book_state.enrich_with_download_info(db)
 
-            logger.debug(f"Found {len(downloads)} {plural(len(downloads), 'file')} in {download_dir}")
+            postprocesslogger.debug(
+                f"Enrichment result: download_folder='{book_state.download_folder}', "
+                f"book_title='{book_state.book_title[:50] if book_state.book_title else '(empty)'}'"
+            )
 
-            # any books left to look for...
+            # ========================================================
+            #  Downloaded Processing Stage | Targeted Location Pass
+            # ========================================================
+            if book_state.download_folder:
+                postprocesslogger.debug(
+                    f"Targeted Location Pass: Processing search for {book_state.download_title}"
+                )
+                result = _search_in_known_location(
+                    book_state, ignoreclient, db, postprocesslogger, fuzzlogger
+                )
+                if result > 0:
+                    ppcount += result
+                    postprocesslogger.info(
+                        f"Matching Stage - First Pass SUCCESS: {book_state.download_title}"
+                    )
+                    continue  # Successfully processed, move to next book
 
-            if downloadid:
-                snatched = db.select("SELECT * from wanted WHERE DownloadID=? AND Status='Snatched'", (downloadid,))
+                postprocesslogger.debug(
+                    f"Matching Stage - First Pass unsuccessful for {book_state.download_title}, trying Pass 2"
+                )
             else:
-                snatched = db.select("SELECT * from wanted WHERE Status='Snatched'")
-            if len(snatched):
-                for book in snatched:
-                    # check if we need to wait awhile before processing, might be copying/unpacking/moving
-                    delay = CONFIG.get_int('PP_DELAY')
-                    if delay:
-                        completion = time.time() - check_int(book['Completed'], 0)
-                        completion = int(-(-completion // 1))  # round up to int
-                        if completion < delay:
-                            logger.warning(
-                                f"Ignoring {book['NZBtitle']} as completion was {completion} "
-                                f"{plural(completion, 'second')} ago")
-                            continue
-                        elif check_int(book['Completed'], 0):
-                            logger.debug(
-                                f"{book['NZBtitle']} was completed {completion} {plural(completion, 'second')} ago")
+                postprocesslogger.debug(
+                    f"Matching Stage - First Pass skipped because no targeted download folder "
+                    f"specified for {book_state.download_title}, trying Pass 2"
+                )
 
-                    book = dict(book)  # so we can modify values later
-                    booktype = book_type(book)
-                    # remove accents and convert not-ascii apostrophes
-                    matchtitle = unaccented(book['NZBtitle'], only_ascii=False)
-                    # torrent names might have words_separated_by_underscores
-                    matchtitle = matchtitle.split(' LL.(')[0].replace('_', ' ')
-                    # strip noise characters
-                    matchtitle = sanitize(matchtitle).strip()
-                    matches = []
-                    logger.debug(f'Looking for {booktype} {matchtitle} in {download_dir}')
-
-                    for fname in downloads:
-                        # skip if failed before or incomplete torrents, or incomplete btsync etc
-                        loggerpostprocess.debug(f"Checking extn on {fname}")
-                        extn = os.path.splitext(fname)[1]
-                        if not extn or extn.strip('.') not in skipped_extensions:
-                            # This is to get round differences in torrent filenames.
-                            # Usenet is ok, but Torrents aren't always returned with the name we searched for
-                            # We ask the torrent downloader for the torrent name, but don't always get an answer,
-                            # so we try to do a "best match" on the name, there might be a better way...
-                            matchname = unaccented(fname, only_ascii=False)
-                            matchname = matchname.split(' LL.(')[0].replace('_', ' ')
-                            matchname = sanitize(matchname)
-                            match = fuzz.token_set_ratio(matchtitle, matchname)
-                            pp_path = ''
-                            loggerfuzz.debug(f"{round(match, 2)}% match {matchtitle} : {matchname}")
-                            if match >= CONFIG.get_int('DLOAD_RATIO'):
-                                # matching file or folder name
-                                pp_path = os.path.join(download_dir, fname)
-                            elif path_isdir(os.path.join(download_dir, fname)):
-                                # obfuscated folder might contain our file
-                                for f in listdir(os.path.join(download_dir, fname)):
-                                    if is_valid_type(f, extensions=CONFIG.get_all_types_list(), extras='cbr, cbz'):
-                                        matchname = unaccented(f, only_ascii=False)
-                                        matchname = matchname.split(' LL.(')[0].replace('_', ' ')
-                                        matchname = sanitize(matchname)
-                                        match = fuzz.token_set_ratio(matchtitle, matchname)
-                                        loggerfuzz.debug(f"{round(match, 2)}% match {matchtitle} : {matchname}")
-                                        if match >= CONFIG.get_int('DLOAD_RATIO'):
-                                            # found matching file in this folder
-                                            pp_path = os.path.join(download_dir, fname)
-                                            break
-
-                            if match >= CONFIG.get_int('DLOAD_RATIO'):
-                                loggerpostprocess.debug(f"process_dir found {type(pp_path)} {repr(pp_path)}")
-
-                                if path_isfile(pp_path):
-                                    # Check for single file downloads first. Book/mag file in download root.
-                                    # move the file into its own subdirectory, so we don't move/delete
-                                    # things that aren't ours
-                                    # note that epub are zipfiles so check booktype first
-                                    # and don't unpack cbr/cbz comics'
-                                    if is_valid_type(fname, extensions=CONFIG.get_all_types_list(), extras='cbr, cbz'):
-                                        loggerpostprocess.debug(f'file [{fname}] is a valid book/mag')
-                                        if bts_file(download_dir):
-                                            logger.debug(f"Skipping {download_dir}, found a .bts file")
-                                        else:
-                                            aname = os.path.splitext(fname)[0]
-                                            while aname[-1] in '_. ':
-                                                aname = aname[:-1]
-
-                                            if CONFIG.get_bool('DESTINATION_COPY') or \
-                                                    (book['NZBmode'] in ['torrent', 'magnet', 'torznab'] and
-                                                     CONFIG.get_bool('KEEP_SEEDING')):
-                                                move = 'copy'
-                                            else:
-                                                move = 'move'
-
-                                            targetdir = os.path.join(download_dir, f"{aname}.unpack")
-                                            if make_dirs(targetdir, new=True):
-                                                logger.debug(f"Created target {targetdir}")
-                                                cnt = move_into_subdir(download_dir, targetdir, aname, move=move)
-                                                if cnt:
-                                                    pp_path = targetdir
-                                                else:
-                                                    try:
-                                                        os.rmdir(targetdir)
-                                                    except OSError as why:
-                                                        logger.warning(f"Unable to delete {targetdir}: {why.strerror}")
-                                            else:
-                                                logger.debug(f"Unable to make directory {targetdir}")
-                                    else:
-                                        # Is file an archive, if so look inside and extract to new dir
-                                        res = unpack_archive(pp_path, download_dir, matchtitle)
-                                        if res:
-                                            pp_path = res
-                                        else:
-                                            logger.debug(f'Skipping unhandled file {fname}')
-
-                                if path_isdir(pp_path):
-                                    logger.debug(f'Found folder ({round(match, 2)}%) [{pp_path}] '
-                                                 f'for {booktype} {matchtitle}')
-                                    # some magazines are packed as multipart zip files, each zip contains a rar file
-                                    # and the rar files need assembling into the final magazine
-                                    zipfiles = 0
-                                    for f in listdir(pp_path):
-                                        archivename = os.path.join(pp_path, f)
-                                        xtn = os.path.splitext(archivename)[1].lower()
-                                        if xtn not in ['.epub', '.cbz'] and zipfile.is_zipfile(archivename):
-                                            zipfiles += 1
-                                    if zipfiles > 1:
-                                        new_pp_path = unpack_multipart(pp_path, download_dir, matchtitle)
-                                        # if unpack failed, use current path as maybe not multipart-mag
-                                        if new_pp_path:
-                                            pp_path = new_pp_path
-
-                                    # folder name matches, look in subdirectories for a filename of a valid type
-                                    file_match = False
-                                    for r, _, f in walk(pp_path):
-                                        for item in f:
-                                            if is_valid_type(item, extensions=CONFIG.get_all_types_list(),
-                                                             extras='cbr, cbz'):
-                                                pp_path = os.path.dirname(os.path.join(r, item))
-                                                file_match = True
-                                                break
-                                    if not file_match:
-                                        # maybe it's in an archive...
-                                        for r, _, f in walk(pp_path):
-                                            for item in f:
-                                                xtn = os.path.splitext(item)[1].lower()
-                                                if xtn not in ['.epub', '.cbr', '.cbz']:
-                                                    res = unpack_archive(os.path.join(r, item),
-                                                                         download_dir, matchtitle)
-                                                    if res:
-                                                        pp_path = res
-                                                        break
-                                    skipped = False
-
-                                    if booktype == 'eBook':
-                                        # Might be multiple books in the download, could be a collection?
-                                        # If so, should we process all the books recursively? we can maybe use
-                                        # process_alternate(pp_path) but that currently only does ebooks,
-                                        # not audio or mag, or should we just try to find and extract
-                                        # the one wanted item from the collection?
-                                        # For now, try to find best match and only copy that book
-                                        mult = multibook(pp_path, recurse=True)
-                                        if mult:
-                                            skipped = True
-                                            found_file = None
-                                            found_score = 0
-                                            # find the best match
-                                            for f in listdir(pp_path):
-                                                if CONFIG.is_valid_booktype(f, booktype="book"):
-                                                    # Process filename same as main matching logic
-                                                    processed_fname = unaccented(f, only_ascii=False)
-                                                    processed_fname = processed_fname.split(' LL.(')[0].replace('_',
-                                                                                                                ' ')
-                                                    processed_fname = sanitize(processed_fname)
-                                                    bookmatch = fuzz.token_set_ratio(matchtitle, processed_fname)
-                                                    loggerfuzz.debug(f"{round(bookmatch, 2)}% match {matchtitle} : "
-                                                                     f"{processed_fname}")
-                                                    if bookmatch > found_score:
-                                                        found_file = f
-                                                        found_score = bookmatch
-
-                                            if found_score >= CONFIG.get_int('DLOAD_RATIO'):
-                                                # found a matching book file in this folder
-                                                targetdir = os.path.join(download_dir, f"{matchtitle}.unpack")
-                                                if not make_dirs(targetdir, new=True):
-                                                    logger.error(f"Failed to create target dir {targetdir}")
-                                                else:
-                                                    logger.debug(
-                                                        f"Found {found_file} ({round(found_score, 2)}%) "
-                                                        f"for {matchtitle}")
-                                                    found_file, _ = os.path.splitext(found_file)
-                                                    # copy all valid types of this title, plus opf, jpg
-                                                    for f in listdir(pp_path):
-                                                        base, extn = os.path.splitext(f)
-                                                        if base == found_file:
-                                                            if CONFIG.is_valid_booktype(f, booktype="book") or \
-                                                                    extn in ['.opf', '.jpg']:
-                                                                shutil.copyfile(os.path.join(pp_path, f),
-                                                                                os.path.join(targetdir, f))
-                                                    pp_path = targetdir
-                                                    skipped = False
-                                            if skipped:
-                                                logger.debug(
-                                                    f"Skipping {pp_path}, found multiple {mult} with no good match")
-                                                book['skipped'] = f"Multiple {mult} found"
-                                        else:
-                                            result = book_file(pp_path, 'ebook', recurse=True, config=CONFIG)
-                                            if result:
-                                                pp_path = os.path.dirname(result)
-                                            else:
-                                                logger.debug(f"Skipping {pp_path}, no ebook found")
-                                                book['skipped'] = "No ebook found"
-                                                skipped = True
-                                    elif booktype == 'AudioBook':
-                                        result = book_file(pp_path, 'audiobook', recurse=True, config=CONFIG)
-                                        if result:
-                                            pp_path = os.path.dirname(result)
-                                        else:
-                                            logger.debug(f"Skipping {pp_path}, no audiobook found")
-                                            book['skipped'] = "No audiobook found"
-                                            skipped = True
-                                    elif booktype == 'Magazine':
-                                        result = book_file(pp_path, 'mag', recurse=True, config=CONFIG)
-                                        if result:
-                                            pp_path = os.path.dirname(result)
-                                        else:
-                                            logger.debug(f"Skipping {pp_path}, no magazine found")
-                                            book['skipped'] = "No magazine found"
-                                            skipped = True
-                                    if not listdir(pp_path):
-                                        logger.debug(f"Skipping {pp_path}, folder is empty")
-                                        book['skipped'] = "Folder is empty"
-                                        skipped = True
-                                    elif bts_file(pp_path):
-                                        logger.debug(f"Skipping {pp_path}, found a .bts file")
-                                        book['skipped'] = "Folder contains .bts file"
-                                        skipped = True
-                                    if not skipped:
-                                        matches.append([match, pp_path, book])
-                                        if match == 100:  # no point looking any further
-                                            break
-                            else:
-                                pp_path = os.path.join(download_dir, fname)
-                                matches.append([match, pp_path, book])  # so we can report the closest match
-                        else:
-                            logger.debug(f'Skipping {fname}')
-
-                    match = 0
-                    pp_path = ''
-                    dest_path = ''
-                    bookname = ''
-                    global_name = ''
-                    mostrecentissue = ''
-                    data = None
-                    if matches:
-                        highest = max(matches, key=lambda x: x[0])
-                        match = highest[0]
-                        pp_path = highest[1]
-                        book = highest[2]  # type: dict
-                    if match and match >= CONFIG.get_int('DLOAD_RATIO'):
-                        logger.debug(f"Found match ({round(match, 2)}%): {pp_path} for {booktype} {book['NZBtitle']}")
-                        cmd = ("SELECT AuthorName,BookName,books.gr_id,books.ol_id,books.gb_id,books.hc_id "
-                               "from books,authors WHERE BookID=? and books.AuthorID = authors.AuthorID")
-                        data = db.match(cmd, (book['BookID'],))
-                        if data:  # it's ebook/audiobook
-                            logger.debug(f"Processing {booktype} {book['BookID']}")
-                            bookname = data['BookName']
-                            authorname = data['AuthorName']
-                            gr_id = data['gr_id']
-                            gb_id = data['gb_id']
-                            ol_id = data['ol_id']
-                            hc_id = data['hc_id']
-                            au_id = data['au_id']
-
-                            namevars = name_vars(book['BookID'])
-                            if booktype == 'AudioBook' and get_directory('Audio'):
-                                dest_path = namevars['AudioFolderName']
-                                dest_dir = get_directory('Audio')
-                            else:
-                                dest_path = namevars['FolderName']
-                                dest_dir = get_directory('eBook')
-
-                            dest_path = stripspaces(os.path.join(dest_dir, dest_path))
-                            dest_path = make_utf8bytes(dest_path)[0]
-                            global_name = namevars['BookFile']
-                            global_name = sanitize(global_name)
-                            data = {
-                                'AuthorName': authorname,
-                                'BookName': bookname,
-                                'BookID': book['BookID'],
-                                'gr_id': gr_id,
-                                'gb_id': gb_id,
-                                'ol_id': ol_id,
-                                'hc_id': hc_id,
-                                'au_id': au_id  # Audible ID
-                            }
-
-                        else:
-                            data = db.match('SELECT * from magazines WHERE Title=?', (book['BookID'],))
-                            if data:  # it's a magazine
-                                booktype = 'magazine'
-                                logger.debug(f"Processing magazine {book['BookID']}")
-                                # AuxInfo was added for magazine release date, normally housed in 'magazines'
-                                # but if multiple files are downloading, there will be an error in post-processing
-                                # trying to go to the same directory.
-                                mostrecentissue = data['IssueDate']  # keep for processing issues arriving out of order
-                                mag_name = unaccented(sanitize(book['BookID']), only_ascii=False)
-                                # book auxinfo is a cleaned date, e.g. 2015-01-01
-                                iss_date = book['AuxInfo']
-                                dateparts = get_dateparts(iss_date)
-                                if iss_date == '1970-01-01':
-                                    logger.debug(f"Looks like an invalid or missing date, retrying {book['NZBtitle']}")
-                                    dateparts = get_dateparts(book['NZBtitle'], data['DateType'])
-                                    iss_date = dateparts['dbdate']
-                                    # suppress the "-01" day on monthly magazines
-                                    # if re.match(r'\d+-\d\d-01', str(iss_date)):
-                                    #    iss_date = iss_date[:-3]
-                                    book['AuxInfo'] = iss_date
-                                logger.debug(iss_date)
-                                logger.debug(str(dateparts))
-                                dest_path = format_issue_filename(CONFIG['MAG_DEST_FOLDER'], mag_name, dateparts)
-                                if CONFIG.get_bool('MAG_RELATIVE'):
-                                    dest_dir = get_directory('eBook')
-                                    dest_path = stripspaces(os.path.join(dest_dir, dest_path))
-                                    dest_path = make_utf8bytes(dest_path)[0]
-                                else:
-                                    dest_path = make_utf8bytes(dest_path)[0]
-
-                                if not dest_path or not make_dirs(dest_path):
-                                    logger.warning(f'Unable to create directory {dest_path}')
-
-                                global_name = format_issue_filename(CONFIG['MAG_DEST_FILE'], mag_name, dateparts)
-                                data = {'Title': mag_name, 'IssueDate': iss_date, 'BookID': book['BookID']}
-                            else:
-                                if book['BookID'] and '_' in book['BookID']:
-                                    comicid, issueid = book['BookID'].split('_')
-                                    data = db.match('SELECT * from comics WHERE ComicID=?', (comicid,))
-                                else:
-                                    comicid = ''
-                                    issueid = 0
-                                    data = None
-                                if data:  # it's a comic
-                                    booktype = 'comic'
-                                    logger.debug(f"Processing {data['Title']} issue {issueid}")
-                                    mostrecentissue = data['LatestIssue']
-                                    comic_name = unaccented(sanitize(data['Title']), only_ascii=False)
-                                    dest_path = CONFIG['COMIC_DEST_FOLDER'].replace(
-                                        '$Issue', issueid).replace(
-                                        '$Publisher', data['Publisher']).replace(
-                                        '$Title', comic_name)
-
-                                    global_name = f"{comic_name} {issueid}"
-                                    global_name = unaccented(global_name, only_ascii=False)
-                                    global_name = sanitize(global_name)
-                                    data = {'Title': comic_name, 'IssueDate': issueid, 'BookID': comicid}
-
-                                    if CONFIG.get_bool('COMIC_RELATIVE'):
-                                        dest_dir = get_directory('eBook')
-                                        dest_path = stripspaces(os.path.join(dest_dir, dest_path))
-                                        dest_path = make_utf8bytes(dest_path)[0]
-                                    else:
-                                        dest_path = make_utf8bytes(dest_path)[0]
-
-                                    if not make_dirs(dest_path):
-                                        logger.warning(f'Unable to create directory {dest_path}')
-
-                                else:  # not recognised, maybe deleted
-                                    emsg = f"Nothing in database matching \"{book['BookID']}\""
-                                    logger.debug(emsg)
-                                    control_value_dict = {"BookID": book['BookID'], "Status": "Snatched"}
-                                    new_value_dict = {"Status": "Failed", "NZBDate": now(), "DLResult": emsg}
-                                    db.upsert("wanted", new_value_dict, control_value_dict)
-                                    data = None
-                    else:
-                        logger.debug(f"Snatched {book['NZBmode']} {book['NZBtitle']} is not in download directory")
-                        if match:
-                            logger.debug(f'Closest match ({round(match, 2)}%): {pp_path}')
-                            for match in matches:
-                                loggerfuzz.debug(f'Match: {round(match[0], 2)}%  {match[1]}')
-
-                    if not dest_path:
-                        continue
-
-                    data['NZBmode'] = book['NZBmode']
-                    success, dest_file, pp_path = process_destination(pp_path, dest_path, global_name, data, booktype)
-                    if success:
-                        logger.debug(f"Processed {book['NZBmode']} ({pp_path}): {global_name}, {book['NZBurl']}")
-                        dest_file = make_unicode(dest_file)
-                        # only update the snatched ones in case some already marked failed/processed in history
-                        control_value_dict = {"NZBurl": book['NZBurl'], "Status": "Snatched"}
-                        new_value_dict = {"Status": "Processed", "NZBDate": now(), "DLResult": dest_file}
-                        db.upsert("wanted", new_value_dict, control_value_dict)
-                        status['status'] = 'success'
-                        issueid = 0
-                        if bookname and dest_file:  # it's ebook or audiobook, and we know the location
-                            process_extras(dest_file, global_name, book['BookID'], booktype)
-                        elif booktype == 'comic':
-                            comicid = data.get('BookID', '')
-                            issueid = data.get('IssueDate', 0)
-                            if comicid:
-                                if mostrecentissue:
-                                    older = (int(mostrecentissue) > int(issueid))
-                                else:
-                                    older = False
-
-                                coverfile = create_mag_cover(dest_file, refresh=True)
-                                if coverfile:
-                                    myhash = uuid.uuid4().hex
-                                    hashname = os.path.join(DIRS.CACHEDIR, 'comic', f'{myhash}.jpg')
-                                    shutil.copyfile(coverfile, hashname)
-                                    setperm(hashname)
-                                    coverfile = f'cache/comic/{myhash}.jpg'
-                                    createthumbs(hashname)
-
-                                control_value_dict = {"ComicID": comicid}
-                                if older:  # check this in case processing issues arriving out of order
-                                    new_value_dict = {"LastAcquired": today(),
-                                                      "IssueStatus": CONFIG['FOUND_STATUS']}
-                                else:
-                                    new_value_dict = {"LatestIssue": issueid, "LastAcquired": today(),
-                                                      "LatestCover": coverfile,
-                                                      "IssueStatus": CONFIG['FOUND_STATUS']}
-                                db.upsert("comics", new_value_dict, control_value_dict)
-                                control_value_dict = {"ComicID": comicid, "IssueID": issueid}
-                                new_value_dict = {"IssueAcquired": today(),
-                                                  "IssueFile": dest_file,
-                                                  "Cover": coverfile
-                                                  }
-                                db.upsert("comicissues", new_value_dict, control_value_dict)
-                        elif not bookname:  # magazine
-                            if mostrecentissue:
-                                if mostrecentissue.isdigit() and str(book['AuxInfo']).isdigit():
-                                    older = (int(mostrecentissue) > int(book['AuxInfo']))  # issuenumber
-                                else:
-                                    older = (mostrecentissue > book['AuxInfo'])  # YYYY-MM-DD
-                            else:
-                                older = False
-
-                            maginfo = db.match("SELECT CoverPage,Language,Genre from magazines WHERE Title=?",
-                                               (book['BookID'],))
-                            # create a thumbnail cover for the new issue
-                            if CONFIG.get_bool('SWAP_COVERPAGE'):
-                                coverpage = 1
-                            else:
-                                coverpage = check_int(maginfo['CoverPage'], 1)
-                            coverfile = create_mag_cover(dest_file, pagenum=coverpage, refresh=True)
-                            if coverfile:
-                                myhash = uuid.uuid4().hex
-                                hashname = os.path.join(DIRS.CACHEDIR, 'magazine', f'{myhash}.jpg')
-                                shutil.copyfile(coverfile, hashname)
-                                setperm(hashname)
-                                coverfile = f'cache/magazine/{myhash}.jpg'
-                                createthumbs(hashname)
-
-                            issueid = create_id(f"{book['BookID']} {book['AuxInfo']}")
-                            control_value_dict = {"Title": book['BookID'], "IssueDate": book['AuxInfo']}
-                            new_value_dict = {"IssueAcquired": today(),
-                                              "IssueFile": dest_file,
-                                              "IssueID": issueid,
-                                              "Cover": coverfile
-                                              }
-                            db.upsert("issues", new_value_dict, control_value_dict)
-
-                            control_value_dict = {"Title": book['BookID']}
-                            if older:  # check this in case processing issues arriving out of order
-                                new_value_dict = {"LastAcquired": today(),
-                                                  "IssueStatus": CONFIG['FOUND_STATUS']}
-                            else:
-                                new_value_dict = {"LastAcquired": today(),
-                                                  "IssueStatus": CONFIG['FOUND_STATUS'],
-                                                  "IssueDate": book['AuxInfo'],
-                                                  "LatestCover": coverfile
-                                                  }
-                            db.upsert("magazines", new_value_dict, control_value_dict)
-
-                            if not CONFIG.get_bool('IMP_MAGOPF'):
-                                logger.debug('create_mag_opf is disabled')
-                            else:
-                                _ = create_mag_opf(dest_file, book['BookID'], book['AuxInfo'], issueid,
-                                                   language=maginfo['Language'], genres=maginfo['Genre'],
-                                                   overwrite=True)
-                            if CONFIG['IMP_AUTOADDMAG']:
-                                dest_path = os.path.dirname(dest_file)
-                                process_auto_add(dest_path, booktype='mag')
-
-                        # calibre or ll copied/moved the files we want, now delete source files
-                        logger.debug(f"Copied {pp_path} {ignoreclient} {book['NZBmode']}")
-                        to_delete = True
-                        # Only delete torrents if seeding is complete - examples from radarr
-                        # DELUGE CanBeRemoved = (torrent.IsAutoManaged && torrent.StopAtRatio &&
-                        # torrent.Ratio >= torrent.StopRatio && torrent.State == DelugeTorrentStatus.Paused);
-                        # TRANSMISSION CanBeRemoved = torrent.Status == TransmissionTorrentStatus.Stopped;
-                        # RTORRENT No stop ratio data is present, so do not delete CanBeRemoved = false;
-                        # UTORRENT CanBeRemoved = (!torrent.Status.HasFlag(UTorrentTorrentStatus.Queued) &&
-                        # !torrent.Status.HasFlag(UTorrentTorrentStatus.Started));
-                        # DOWNLOADSTATION CanBeRemoved = DownloadStationTaskStatus.Finished;
-                        # QBITTORRENT CanBeRemoved = (!config.MaxRatioEnabled || config.MaxRatio <= torrent.Ratio) &&
-                        # torrent.State == "pausedUP";
-
-                        if ignoreclient is False and to_delete:
-                            # ask downloader to delete the torrent, but not the files
-                            # we may delete them later, depending on other settings
-                            if not book['Source']:
-                                logger.warning(f"Unable to remove {book['NZBtitle']}, no source")
-                            elif not book['DownloadID'] or book['DownloadID'] == "unknown":
-                                logger.warning(
-                                    f"Unable to remove {book['NZBtitle']} from {book['Source']}, no DownloadID")
-                            elif book['Source'] != 'DIRECT':
-                                progress, finished = get_download_progress(book['Source'], book['DownloadID'])
-                                logger.debug(f"Progress for {book['NZBtitle']} {progress}/{finished}")
-                                if progress == 100 and finished:
-                                    if book['NZBmode'] in ['torrent', 'magnet', 'torznab'] and \
-                                            CONFIG.get_bool('KEEP_SEEDING'):
-                                        cmd = "UPDATE wanted SET Status='Seeding' WHERE NZBurl=? and Status='Processed'"
-                                        db.action(cmd, (book['NZBurl'],))
-                                        logger.debug(f"{book['NZBtitle']} still seeding at {book['Source']}")
-                                    elif CONFIG.get_bool('DEL_COMPLETED'):
-                                        logger.debug(f"Deleting completed {book['NZBtitle']} from {book['Source']}")
-                                        delete_task(book['Source'], book['DownloadID'], False)
-                                elif progress < 0:
-                                    logger.debug(f"{book['NZBtitle']} not found at {book['Source']}")
-
-                        # only delete the files if not in download root dir and DESTINATION_COPY not set
-                        if '.unpack' in pp_path:  # always delete files we unpacked
-                            pp_path = f"{pp_path.split('.unpack')[0]}.unpack"
-                            to_delete = True
-                        elif CONFIG.get_bool('DESTINATION_COPY'):
-                            to_delete = False
-                        if pp_path == download_dir.rstrip(os.sep):
-                            to_delete = False
-                        logger.debug(f"To Delete: {pp_path} {to_delete}")
-                        if to_delete:
-                            # walk up any subdirectories
-                            if pp_path.startswith(download_dir) and '.unpack' not in pp_path:
-                                logger.debug(f"[{pp_path}][{download_dir}]")
-                                while os.path.dirname(pp_path) != download_dir.rstrip(os.sep):
-                                    pp_path = os.path.dirname(pp_path)
-                            try:
-                                shutil.rmtree(pp_path, ignore_errors=True)
-                                logger.debug(
-                                    f"Deleted {pp_path} for {book['NZBtitle']}, {book['NZBmode']} from "
-                                    f"{book['Source']}")
-                            except Exception as why:
-                                logger.warning(f"Unable to remove {pp_path}, {type(why).__name__} {str(why)}")
-                        else:
-                            if CONFIG.get_bool('DESTINATION_COPY'):
-                                logger.debug(f"Not removing {pp_path} as Keep Files is set")
-                            else:
-                                logger.debug(f"Not removing {pp_path} as in download root")
-
-                        logger.info(f'Successfully processed: {global_name}')
-
-                        ppcount += 1
-                        dispname = CONFIG.disp_name(book['NZBprov'])
-                        if CONFIG.get_bool('NOTIFY_WITH_TITLE'):
-                            dispname = f"{dispname}: {book['NZBtitle']}"
-                        if CONFIG.get_bool('NOTIFY_WITH_URL'):
-                            dispname = f"{dispname}: {book['NZBurl']}"
-                        if bookname:
-                            custom_notify_download(f"{book['BookID']} {booktype}")
-                            notify_download(f"{booktype} {global_name} from {dispname} at {now()}", book['BookID'])
-                            mailing_list(booktype, global_name, book['BookID'])
-                        else:
-                            custom_notify_download(f"{book['BookID']} {book['NZBurl']}")
-                            notify_download(f"{booktype} {global_name} from {dispname} at {now()}", issueid)
-                            mailing_list(booktype, global_name, issueid)
-
-                        update_downloads(book['NZBprov'])
-                    else:
-                        logger.error(f'Postprocessing for {repr(global_name)} has failed: {repr(dest_file)}')
-                        dispname = CONFIG.disp_name(book['NZBprov'])
-                        custom_notify_snatch(f"{book['BookID']} {booktype}", fail=True)
-                        notify_snatch(f"{booktype} {global_name} from {dispname} at {now()}", fail=True)
-                        control_value_dict = {"NZBurl": book['NZBurl'], "Status": "Snatched"}
-                        new_value_dict = {"Status": "Failed", "DLResult": make_unicode(dest_file), "NZBDate": now()}
-                        db.upsert("wanted", new_value_dict, control_value_dict)
-                        # if it's a book, reset status, so we try for a different version
-                        # if it's a magazine, user can select a different one from pastissues table
-                        if booktype == 'eBook':
-                            db.action("UPDATE books SET status='Wanted' WHERE BookID=?", (book["BookID"],))
-                        elif booktype == 'AudioBook':
-                            db.action("UPDATE books SET audiostatus='Wanted' WHERE BookID=?", (book["BookID"],))
-
-                        # at this point, as it failed we should move it, or it will get postprocessed
-                        # again (and fail again)
-                        if CONFIG.get_bool('DEL_DOWNLOADFAILED'):
-                            logger.debug(f'Deleting {pp_path}')
-                            shutil.rmtree(pp_path, ignore_errors=True)
-                        else:
-                            shutil.rmtree(f"{pp_path}.fail", ignore_errors=True)
-                            try:
-                                _ = safe_move(pp_path, f"{pp_path}.fail")
-                                logger.warning(f'Residual files remain in {pp_path}.fail')
-                            except Exception as why:
-                                logger.error(f"Unable to rename {repr(pp_path)}, {type(why).__name__} {str(why)}")
-                                if not os.access(syspath(pp_path), os.R_OK):
-                                    logger.error(f"{repr(pp_path)} is not readable")
-                                if not os.access(syspath(pp_path), os.W_OK):
-                                    logger.error(f"{repr(pp_path)} is not writeable")
-                                if not os.access(syspath(pp_path), os.X_OK):
-                                    logger.error(f"{repr(pp_path)} is not executable")
-                                parent = os.path.dirname(pp_path)
-                                try:
-                                    with open(syspath(os.path.join(parent, 'll_temp')), 'w', encoding='utf-8') as f:
-                                        f.write(u'test')
-                                    remove_file(os.path.join(parent, 'll_temp'))
-                                except Exception as why:
-                                    logger.error(f"Parent Directory {parent} is not writeable: {why}")
-                                logger.warning(f'Residual files remain in {pp_path}')
-
-            ppcount += check_residual(download_dir)
-
-        logger.info(f"{ppcount} {plural(ppcount, 'download')} processed.")
-
-        # Now check for any that are still marked snatched, seeding, or any aborted...
-        cmd = "SELECT * from wanted WHERE Status IN ('Snatched', 'Aborted', 'Seeding')"
-        snatched = db.select(cmd)
-        logger.info(f"Found {len(snatched)} unprocessed")
-        for book in snatched:
-            booktype = book_type(book)
-            abort = False
-            hours = 0
-            mins = 0
-            progress = 'Unknown'
-            finished = False
-            loggerpostprocess.debug(f"{book['Status']} {book['Source']} {book['NZBtitle']}")
-            if book['Status'] == "Aborted":
-                abort = True
+            # =======================================================
+            #  Matching Stage | Second Pass: Fuzzy Search
+            #  * Only here if not processed in First Pass
+            # =======================================================
+            postprocesslogger.debug(
+                f"Matching Stage - Second Pass: Fallback search for {book_state.download_title}"
+            )
+            result = _process_snatched_book(
+                book_state,
+                all_downloads,
+                ignoreclient,
+                db,
+                postprocesslogger,
+                fuzzlogger,
+            )
+            if result > 0:
+                ppcount += result
+                postprocesslogger.info(
+                    f"Matching Stage - Second Pass SUCCESS: {book_state.download_title}"
+                )
             else:
-                progress, finished = get_download_progress(book['Source'], book['DownloadID'])
+                postprocesslogger.warning(
+                    f"Matching Stage - Second Pass FAILED: {book_state.download_title}. No matches"
+                )
 
-            if book['Status'] == "Seeding":
-                loggerpostprocess.debug(
-                    f"Progress:{progress} Finished:{finished} Waiting:{CONFIG.get_bool('SEED_WAIT')}")
-                if not CONFIG.get_bool('KEEP_SEEDING') and (finished or progress < 0
-                                                            and not CONFIG.get_bool('SEED_WAIT')):
-                    if finished:
-                        logger.debug(f"{book['NZBtitle']} finished seeding at {book['Source']}")
-                    else:
-                        logger.debug(f"{book['NZBtitle']} not seeding at {book['Source']}")
-                    if CONFIG.get_bool('DEL_COMPLETED'):
-                        logger.debug(f"Removing seeding completed {book['NZBtitle']} from {book['Source']}")
-                        if CONFIG.get_bool('DESTINATION_COPY'):
-                            delfiles = False
-                        else:
-                            delfiles = True
-                        delete_task(book['Source'], book['DownloadID'], delfiles)
-                    if book['BookID'] != 'unknown':
-                        cmd = "UPDATE wanted SET status='Processed',NZBDate=? WHERE status='Seeding' and BookID=?"
-                        db.action(cmd, (now(), book['BookID']))
-                        abort = False
-                    # only delete the files if not in download root dir and DESTINATION_COPY not set
-                    # This is for downloaders (rtorrent) that don't let us tell them to delete files
-                    # NOTE it will silently fail if the torrent client downloadfolder is not local
-                    # e.g. in a docker or on a remote machine
-                    pp_path = get_download_folder(book['Source'], book['DownloadID'])
-                    if CONFIG.get_bool('DESTINATION_COPY'):
-                        logger.debug("Not removing original files as Keep Files is set")
-                    elif pp_path in get_list(CONFIG['DOWNLOAD_DIR']):
-                        logger.debug("Not removing original files as in download root")
-                    else:
-                        shutil.rmtree(pp_path, ignore_errors=True)
-                        logger.debug(
-                            f"Deleted {pp_path} for {book['NZBtitle']}, {book['NZBmode']} from {book['Source']}")
-                else:
-                    logger.debug(f"{book['NZBtitle']} still seeding at {book['Source']}")
+        postprocesslogger.debug("Snatched Processing Stage Complete")
 
-            if book['Status'] == "Snatched":
-                try:
-                    when_snatched = datetime.datetime.strptime(book['NZBdate'], '%Y-%m-%d %H:%M:%S')
-                    timenow = datetime.datetime.now()
-                    td = timenow - when_snatched
-                    diff = td.total_seconds()  # time difference in seconds
-                except ValueError:
-                    diff = 0
-                hours = int(diff / 3600)
-                mins = int(diff / 60)
+        # ==========================================================================
+        #  Supplemental Search: Look for and process books in LL.(bookid) Folders
+        # ==========================================================================
+        postprocesslogger.info("Supplemental Search: Processing LL.(bookid) folders")
+        if all_downloads:
+            ppcount += _process_ll_bookid_folders_from_list(
+                all_downloads, db, postprocesslogger
+            )
 
-                # has it been aborted (wait a short while before checking)
-                if mins > 5 and progress < 0:
-                    abort = True
+        # Mark unprocessed books as Failed to force a retry on next search
+        failed = [0, 0, 0, 0]  # ebook, audio, mag, comic
+        for book_row in books_to_process:
+            book_state = BookState.from_db_row(book_row, CONFIG)
+            if not book_state.was_processed and book_state.has_failed():
+                logger.warning(
+                    f"Marking {book_state.download_title} as Failed: "
+                    f"{book_state.processing_stage} - {book_state.failure_reason}"
+                )
+                control_value_dict = {"DownloadID": book_state.download_id, "Status": "Snatched"}
+                new_value_dict = {
+                    "Status": "Failed",
+                    "NZBDate": now(),
+                    "DLResult": f"{book_state.processing_stage}: {book_state.failure_reason}"
+                }
+                db.upsert("wanted", new_value_dict, control_value_dict)
+                book_type_str = book_state.get_book_type_str()
+                cmd = ''
+                if book_type_str == BookType.EBOOK.value:
+                    cmd = "UPDATE books SET status='Wanted' WHERE status='Snatched' and BookID=?"
+                    failed[0] += 1
+                elif book_type_str == BookType.AUDIOBOOK.value:
+                    cmd = "UPDATE books SET audiostatus='Wanted' WHERE audiostatus='Snatched' and BookID=?"
+                    failed[1] += 1
+                elif book_type_str == BookType.MAGAZINE.value():
+                    failed[2] += 1
+                elif book_type_str == BookType.COMIC.value():
+                    failed[3] += 1
+                if cmd:
+                    db.action(cmd, (book_state.book_id,))
+                if CONFIG.get_bool("DEL_FAILED"):
+                    delete_task(book_state.source, book_state.download_id, True)
+        if any(failed):
+            logger.debug(f"Failed to process {failed[0]} ebook, {failed[1]} audio, {failed[2]} magazine, {failed[3]} comic")
 
-                if CONFIG.get_int('TASK_AGE') and hours >= CONFIG.get_int('TASK_AGE'):
-                    # SAB can report 100% (or more) and not finished if missing blocks and needs repair
-                    if check_int(progress, 0) < 95:
-                        abort = True
-                    # allow a little more time for repair or if nearly finished
-                    elif hours >= CONFIG.get_int('TASK_AGE') + 1:
-                        abort = True
-            if abort:
-                dlresult = ''
-                if book['Source'] and book['Source'] != 'DIRECT':
-                    if book['Status'] == "Snatched":
-                        progress = f"{progress}"
-                        if progress.isdigit():  # could be "Unknown" or -1
-                            progress += '%'
-                        dlresult = (f"{book['NZBtitle']} was  sent to {book['Source']} {hours} hours ago. "
-                                    f"Progress: {progress}")
-                        if progress == 100:
-                            dlresult += ' Please check download directory is correct'
-                    else:
-                        dlresult = f"{book['NZBtitle']} was aborted by {book['Source']}"
+        postprocesslogger.info(f"{ppcount} {plural(ppcount, 'download')} processed.")
 
-                custom_notify_snatch(f"{book['BookID']} {book['Source']}", fail=True)
-                notify_snatch(f"{book['NZBtitle']} from {book['Source']} at {now()}", fail=True)
+        # ═══════════════════════════════════════════════════════════
+        # PASS 3: DOWNLOAD STATUS MANAGEMENT
+        # ═══════════════════════════════════════════════════════════
+        postprocesslogger.info("Third pass: Download status management")
 
-                # change status to "Failed", and ask downloader to delete task and files
-                # Only reset book status to wanted if still snatched in case another download task succeeded
-                if book['BookID'] != 'unknown':
-                    cmd = ""
-                    if booktype == 'eBook':
-                        cmd = "UPDATE books SET status='Wanted' WHERE status='Snatched' and BookID=?"
-                    elif booktype == 'AudioBook':
-                        cmd = "UPDATE books SET audiostatus='Wanted' WHERE audiostatus='Snatched' and BookID=?"
-                    if cmd:
-                        db.action(cmd, (book['BookID'],))
+        _manage_download_status(db, postprocesslogger)
 
-                    # use url and status for identifier because magazine id isn't unique
-                    if book['Status'] == "Snatched":
-                        q = "UPDATE wanted SET Status='Failed',DLResult=? WHERE NZBurl=? and Status='Snatched'"
-                        db.action(q, (dlresult, book['NZBurl']))
-                    else:  # don't overwrite dlresult reason for the abort
-                        q = "UPDATE wanted SET Status='Failed' WHERE NZBurl=? and Status='Aborted'"
-                        db.action(q, (book['NZBurl'],))
-
-                    if CONFIG.get_bool('DEL_FAILED'):
-                        logger.warning(f'{dlresult}, deleting failed task')
-                        delete_task(book['Source'], book['DownloadID'], True)
-            elif mins:
-                book = dict(book)
-                skipped = book.get('skipped', '')
-                source = book.get('Source', 'somewhere??')
-                if source == 'DIRECT':
-                    source = book.get('NZBprov')
-                logger.debug(
-                    f"{book['NZBtitle']} was sent to {source} {mins} {plural(mins, 'minute')} ago."
-                    f" Progress {progress} {skipped}")
-
+        # Cleanup and scheduling
+        logger.debug(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
-        # Check if postprocessor needs to run again
-        snatched = db.select("SELECT * from wanted WHERE Status='Snatched'")
-        seeding = db.select("SELECT * from wanted WHERE Status='Seeding'")
-        from lazylibrarian.scheduling import schedule_job
-        if not len(snatched) and not len(seeding):
-            logger.info('Nothing marked as snatched or seeding. Stopping postprocessor.')
-            schedule_job(SchedulerCommand.STOP, target='PostProcessor')
-            status['status'] = 'idle'
-            status['action'] = 'Stopped'
-        elif len(seeding):
-            logger.info(f'Seeding {len(seeding)}')
-            schedule_job(SchedulerCommand.RESTART, target='PostProcessor')
-            status['status'] = 'seeding'
-            status['action'] = 'Restarted'
-        elif reset:
-            schedule_job(SchedulerCommand.RESTART, target='PostProcessor')
-            status['action'] = 'Restarted'
+        _check_and_schedule_next_run(db, logger, reset)
+
     except Exception:
-        logger.error(f'Unhandled exception in process_dir: {traceback.format_exc()}')
+        logger.error(f"Unhandled exception in process_dir: {traceback.format_exc()}")
+    finally:
+        db.close()
+        # Restore original thread name
+        thread_name(incoming_threadname)
 
-    db.close()
-    logger.debug(f'Returning {status}')
-    thread_name(threadname)
-    return status
 
-
-def check_contents(source, downloadid, booktype, title):
-    """ Check contents list of a download against various reject criteria
-        name, size, filetype, banned words
-        Return empty string if ok, or error message if rejected
-        Error message gets logged and then passed back to history table
+def _process_ll_bookid_folders_from_list(all_downloads, db, logger):
     """
-    logger = logging.getLogger(__name__)
-    rejected = ''
-    banned_extensions = get_list(CONFIG['BANNED_EXT'])
-    if booktype.lower() == 'ebook':
-        maxsize = CONFIG.get_int('REJECT_MAXSIZE')
-        minsize = CONFIG.get_int('REJECT_MINSIZE')
-        filetypes = CONFIG['EBOOK_TYPE']
-        banwords = CONFIG['REJECT_WORDS']
-    elif booktype.lower() == 'audiobook':
-        maxsize = CONFIG.get_int('REJECT_MAXAUDIO')
-        # minsize = lazylibrarian.CONFIG['REJECT_MINAUDIO']
-        minsize = 0  # individual audiobook chapters can be quite small
-        filetypes = CONFIG['AUDIOBOOK_TYPE']
-        banwords = CONFIG['REJECT_AUDIO']
-    elif booktype.lower() == 'magazine':
-        maxsize = CONFIG.get_int('REJECT_MAGSIZE')
-        minsize = CONFIG.get_int('REJECT_MAGMIN')
-        filetypes = CONFIG['MAG_TYPE']
-        banwords = CONFIG['REJECT_MAGS']
-    else:  # comics
-        maxsize = CONFIG.get_int('REJECT_MAXCOMIC')
-        minsize = CONFIG.get_int('REJECT_MINCOMIC')
-        filetypes = CONFIG['COMIC_TYPE']
-        banwords = CONFIG['REJECT_COMIC']
+    Process unsnatched books/audiobooks with LL.(bookid) naming from compiled list.
 
-    if banwords:
-        banlist = get_list(banwords, ',')
-    else:
-        banlist = []
+    Searches through compiled download list for items named "LL.(bookid)".
+    These are books that weren't explicitly snatched but appeared in downloads.
 
-    downloadfiles = get_download_files(source, downloadid)
+    Args:
+        all_downloads: List of (parent_dir, filename) tuples
+        db: Database connection
+        logger: Logger instance
 
-    # Downloaders return varying amounts of info using varying names
-    if not downloadfiles:  # empty
-        if source not in ['DIRECT', 'NZBGET', 'SABNZBD']:  # these don't give us a contents list
-            logger.debug(f"No filenames returned by {source} for {title}")
-    else:
-        logger.debug(f"Checking files in {title}")
-        for entry in downloadfiles:
-            fname = ''
-            fsize = 0
-            if 'path' in entry:  # deluge, rtorrent
-                fname = entry['path']
-            if 'name' in entry:  # transmission, qbittorrent
-                fname = entry['name']
-            if 'filename' in entry:  # utorrent, synology
-                fname = entry['filename']
-            if 'size' in entry:  # deluge, qbittorrent, synology, rtorrent
-                fsize = entry['size']
-            if 'filesize' in entry:  # utorrent
-                fsize = entry['filesize']
-            if 'length' in entry:  # transmission
-                fsize = entry['length']
-            extn = os.path.splitext(fname)[1].lstrip('.').lower()
-            if extn and extn in banned_extensions:
-                rejected = f"{title} extension {extn}"
-                logger.warning(f"{rejected}. Rejecting download")
-                break
-
-            if not rejected and banlist:
-                wordlist = get_list(fname.lower().replace(os.sep, ' ').replace('.', ' '))
-                for word in wordlist:
-                    if word in banlist:
-                        rejected = f"{fname} contains {word}"
-                        logger.warning(f"{rejected}. Rejecting download")
-                        break
-
-            # only check size on right types of file
-            # e.g. don't reject cos jpg is smaller than min file size for a book
-            # need to check if we have a size in K M G or just a number. If K M G could be a float.
-            unit = ''
-            if not rejected and filetypes:
-                if extn in filetypes and fsize:
-                    try:
-                        if 'G' in str(fsize):
-                            fsize = int(float(fsize.split('G')[0].strip()) * 1073741824)
-                        elif 'M' in str(fsize):
-                            fsize = int(float(fsize.split('M')[0].strip()) * 1048576)
-                        elif 'K' in str(fsize):
-                            fsize = int(float(fsize.split('K')[0].strip() * 1024))
-                        fsize = round(check_int(fsize, 0) / 1048576.0, 2)  # float to 2dp in Mb
-                        unit = 'Mb'
-                    except ValueError:
-                        fsize = 0
-                    if fsize:
-                        if maxsize and fsize > maxsize:
-                            rejected = f"{fname} is too large ({fsize}{unit})"
-                            logger.warning(f"{rejected}. Rejecting download")
-                            break
-                        if minsize and fsize < minsize:
-                            rejected = f"{fname} is too small ({fsize}{unit})"
-                            logger.warning(f"{rejected}. Rejecting download")
-                            break
-            if not rejected:
-                logger.debug(f"{fname}: ({fsize}{unit}) is wanted")
-    if not rejected:
-        logger.debug(f"{title} accepted")
-    else:
-        logger.debug(f"{title}: {rejected}")
-    return rejected
-
-
-def check_residual(download_dir):
-    # Import any books in download that weren't marked as snatched, but have a LL.(bookid)
-    # don't process any we've already got as we might not want to delete originals
-    # NOTE: we currently only import ebook OR audiobook from a single folder, not both
-    logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
-    db = database.DBConnection()
+    Returns:
+        Count of books successfully processed
+    """
     ppcount = 0
-    try:
-        skipped_extensions = get_list(CONFIG['SKIPPED_EXT'])
-        downloads = listdir(download_dir)
-        loggerpostprocess.debug(
-            f"Scanning {len(downloads)} {plural(len(downloads), 'entry')} in {download_dir} for LL.(num)")
-        TELEMETRY.record_usage_data('Process/Residual')
-        for entry in downloads:
-            if "LL.(" in entry:
-                _, extn = os.path.splitext(entry)
-                if not extn or extn.strip('.') not in skipped_extensions:
-                    book_id = entry.split("LL.(")[1].split(")")[0]
-                    logger.debug(f"Book with id: {book_id} found in download directory")
-                    pp_path = os.path.join(download_dir, entry)
-                    # At this point we don't know if we want audio or ebook or both since it wasn't snatched
-                    is_audio = (book_file(pp_path, "audiobook", config=CONFIG) != '')
-                    is_ebook = (book_file(pp_path, "ebook", config=CONFIG) != '')
-                    logger.debug(f"Contains ebook={is_ebook} audio={is_audio}")
-                    data = db.match('SELECT BookFile,AudioFile from books WHERE BookID=?', (book_id,))
-                    have_ebook = (data and data['BookFile'] and path_isfile(data['BookFile']))
-                    have_audio = (data and data['AudioFile'] and path_isfile(data['AudioFile']))
-                    logger.debug(f"Already have ebook={have_ebook} audio={have_audio}")
+    skipped_extensions = get_list(CONFIG["SKIPPED_EXT"])
+    TELEMETRY.record_usage_data("Process/Residual")
 
-                    if have_ebook and have_audio:
-                        exists = True
-                    elif have_ebook and not CONFIG.get_bool('AUDIO_TAB'):
-                        exists = True
-                    else:
-                        exists = False
+    logger.debug(f"Scanning {len(all_downloads)} items for LL.(bookid) pattern")
 
-                    if exists:
-                        logger.debug(f'Skipping BookID {book_id}, already exists')
-                    else:
-                        loggerpostprocess.debug(f"Checking type of {pp_path}")
+    for parent_dir, _entry in all_downloads:
+        entry = enforce_str(_entry)
+        if "LL.(" in entry:
+            _, extn = os.path.splitext(entry)
+            if not extn or extn.strip(".") not in skipped_extensions:
+                book_id = entry.split("LL.(")[1].split(")")[0]
+                logger.debug(f"Book with id: {book_id} found in {parent_dir}")
+                book_path = os.path.join(parent_dir, entry)
 
-                        if path_isfile(pp_path):
-                            loggerpostprocess.debug(f"{pp_path} is a file")
-                            pp_path = os.path.join(download_dir)
+                # At this point we don't know if we want audio or ebook or both
+                is_audio = book_file(book_path, "audiobook", config=CONFIG) != ""
+                is_ebook = book_file(book_path, "ebook", config=CONFIG) != ""
+                logger.debug(f"Contains ebook={is_ebook} audio={is_audio}")
 
-                        if path_isdir(pp_path):
-                            loggerpostprocess.debug(f"{pp_path} is a dir")
-                            if process_book(pp_path, book_id):
-                                loggerpostprocess.debug(f"Imported {pp_path}")
-                                ppcount += 1
+                data = db.match(
+                    "SELECT BookFile,AudioFile from books WHERE BookID=?",
+                    (book_id,),
+                )
+                have_ebook = data and data["BookFile"] and path_isfile(data["BookFile"])
+                have_audio = (
+                    data and data["AudioFile"] and path_isfile(data["AudioFile"])
+                )
+                logger.debug(f"Already have ebook={have_ebook} audio={have_audio}")
+
+                if (have_ebook and have_audio) or (
+                    have_ebook and not CONFIG.get_bool("AUDIO_TAB")
+                ):
+                    exists = True
                 else:
-                    loggerpostprocess.debug(f"Skipping extn {entry}")
+                    exists = False
+
+                if exists:
+                    logger.debug(f"Skipping BookID {book_id}, already exists")
+                else:
+                    logger.debug(f"Checking type of {book_path}")
+
+                    if path_isfile(book_path):
+                        logger.debug(f"{book_path} is a file")
+                        # We want to work on the download directory not the individual file
+                        book_path = os.path.normpath(parent_dir)
+
+                    if path_isdir(book_path):
+                        logger.debug(f"{book_path} is a dir")
+                        if process_book(book_path, book_id, logger=logger):
+                            logger.debug(f"Imported {book_path}")
+                            ppcount += 1
             else:
-                loggerpostprocess.debug(f"Skipping (no LL bookid) {entry}")
-        db.close()
-    except Exception as e:
-        logger.error(f"Exception in check_residual: {e}")
-        db.close()
+                logger.debug(f"Skipping extn {entry}")
+        else:
+            logger.debug(f"Skipping (no LL bookid) {entry}")
+
     return ppcount
 
 
-def get_download_name(title, source, downloadid):
-    logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    dlname = None
-    try:
-        logger.debug(f"{title} was sent to {source}")
-        if source == 'TRANSMISSION':
-            dlname = transmission.get_torrent_name(downloadid)
-        elif source == 'QBITTORRENT':
-            dlname = qbittorrent.get_name(downloadid)
-        elif source == 'UTORRENT':
-            dlname = utorrent.name_torrent(downloadid)
-        elif source == 'RTORRENT':
-            dlname = rtorrent.get_name(downloadid)
-        elif source == 'SYNOLOGY_TOR':
-            dlname = synology.get_name(downloadid)
-        elif source == 'DELUGEWEBUI':
-            dlname = deluge.get_torrent_name(downloadid)
-        elif source == 'DELUGERPC':
-            client = DelugeRPCClient(CONFIG['DELUGE_HOST'], int(
-                CONFIG['DELUGE_PORT']),
-                                     CONFIG['DELUGE_USER'], CONFIG['DELUGE_PASS'],
-                                     decode_utf8=True)
-            try:
-                client.connect()
-                result = client.call('core.get_torrent_status', downloadid, {})
-                loggerdlcomms.debug(f"Deluge RPC Status [{str(result)}]")
-                if 'name' in result:
-                    dlname = unaccented(result['name'], only_ascii=False)
-            except Exception as e:
-                logger.error(f'DelugeRPC failed {type(e).__name__} {str(e)}')
-        elif source == 'SABNZBD':
-            data = {}
-            if not lazylibrarian.SAB_VER[0]:
-                _ = sabnzbd.check_link()
-            if lazylibrarian.SAB_VER > (3, 2, 0):
-                # we can filter on nzo_ids
-                res, _ = sabnzbd.sab_nzbd(nzburl='queue', nzo_ids=downloadid)
-            else:
-                db = database.DBConnection()
-                try:
-                    cmd = "SELECT * from wanted WHERE DownloadID=? and Source=?"
-                    data = db.match(cmd, (downloadid, source))
-                finally:
-                    db.close()
-                if data and data['NZBtitle']:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='queue', search=data['NZBtitle'])
-                else:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='queue')
+def process_book(book_path: str, book_id: str, logger=None, library=""):
+    TELEMETRY.record_usage_data("Process/Book")
+    if not logger:
+        logger = logging.getLogger(__name__)
 
-            if res and 'queue' in res:
-                logger.debug(f"SAB queue returned {len(res['queue']['slots'])} for {downloadid}")
-                for item in res['queue']['slots']:
-                    if item['nzo_id'] == downloadid:
-                        dlname = item['filename']
-                        break
-
-            if not dlname:  # not in queue, try history in case completed or error
-                if lazylibrarian.SAB_VER > (3, 2, 0):
-                    res, _ = sabnzbd.sab_nzbd(nzburl='history', nzo_ids=downloadid)
-                elif data and data['NZBtitle']:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='history', search=data['NZBtitle'])
-                else:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='history')
-
-                if res and 'history' in res:
-                    logger.debug(f"SAB history returned {len(res['history']['slots'])} for {downloadid}")
-                    for item in res['history']['slots']:
-                        if item['nzo_id'] == downloadid:
-                            # logger.debug(str(item))
-                            dlname = item['name']
-                            break
-        return dlname
-
-    except Exception as e:
-        logger.error(f"Failed to get filename from {source} for {downloadid}: {type(e).__name__} {str(e)}")
-        return None
-
-
-def get_download_files(source, downloadid):
-    logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    dlfiles = None
-    TELEMETRY.record_usage_data('Get/DownloadFiles')
-    try:
-        if source == 'TRANSMISSION':
-            dlfiles = transmission.get_torrent_files(downloadid)
-        elif source == 'UTORRENT':
-            dlfiles = utorrent.list_torrent(downloadid)
-        elif source == 'RTORRENT':
-            dlfiles = rtorrent.get_files(downloadid)
-        elif source == 'SYNOLOGY_TOR':
-            dlfiles = synology.get_files(downloadid)
-        elif source == 'QBITTORRENT':
-            dlfiles = qbittorrent.get_files(downloadid)
-        elif source == 'DELUGEWEBUI':
-            dlfiles = deluge.get_torrent_files(downloadid)
-        elif source == 'DELUGERPC':
-            client = DelugeRPCClient(CONFIG['DELUGE_HOST'], int(
-                CONFIG['DELUGE_PORT']),
-                                     CONFIG['DELUGE_USER'], CONFIG['DELUGE_PASS'],
-                                     decode_utf8=True)
-            try:
-                client.connect()
-                result = client.call('core.get_torrent_status', downloadid, {})
-                loggerdlcomms.debug(f"Deluge RPC Status [{str(result)}]")
-                if 'files' in result:
-                    dlfiles = result['files']
-            except Exception as e:
-                logger.error(f'DelugeRPC failed {type(e).__name__} {str(e)}')
-        else:
-            loggerdlcomms.debug(f"Unable to get file list from {source} (not implemented)")
-        return dlfiles
-
-    except Exception as e:
-        logger.error(f"Failed to get list of files from {source} for {downloadid}: {type(e).__name__} {str(e)}")
-        return None
-
-
-def get_download_folder(source, downloadid):
-    logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    dlfolder = None
-    # noinspection PyBroadException
-    TELEMETRY.record_usage_data('Get/DownloadFolder')
-    # noinspection PyBroadException
-    try:
-        if source == 'TRANSMISSION':
-            dlfolder = transmission.get_torrent_folder(downloadid)
-        elif source == 'UTORRENT':
-            dlfolder = utorrent.dir_torrent(downloadid)
-        elif source == 'RTORRENT':
-            dlfolder = rtorrent.get_folder(downloadid)
-        elif source == 'SYNOLOGY_TOR':
-            dlfolder = synology.get_folder(downloadid)
-        elif source == 'QBITTORRENT':
-            dlfolder = qbittorrent.get_folder(downloadid)
-        elif source == 'DELUGEWEBUI':
-            dlfolder = deluge.get_torrent_folder(downloadid)
-        elif source == 'DELUGERPC':
-            client = DelugeRPCClient(CONFIG['DELUGE_HOST'], int(
-                CONFIG['DELUGE_PORT']),
-                                     CONFIG['DELUGE_USER'], CONFIG['DELUGE_PASS'],
-                                     decode_utf8=True)
-            try:
-                client.connect()
-                result = client.call('core.get_torrent_status', downloadid, {})
-                loggerdlcomms.debug(f"Deluge RPC Status [{str(result)}]")
-                if 'save_path' in result:
-                    dlfolder = result['save_path']
-            except Exception as e:
-                logger.error(f'DelugeRPC failed {type(e).__name__} {str(e)}')
-
-        elif source == 'SABNZBD':
-            data = {}
-            if not lazylibrarian.SAB_VER[0]:
-                _ = sabnzbd.check_link()
-            if lazylibrarian.SAB_VER > (3, 2, 0):
-                # we can filter on nzo_ids
-                res, _ = sabnzbd.sab_nzbd(nzburl='queue', nzo_ids=downloadid)
-            else:
-                db = database.DBConnection()
-                try:
-                    cmd = "SELECT * from wanted WHERE DownloadID=? and Source=?"
-                    data = db.match(cmd, (downloadid, source))
-                finally:
-                    db.close()
-                if data and data['NZBtitle']:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='queue', search=data['NZBtitle'])
-                else:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='queue')
-            if res and 'queue' in res:
-                logger.debug(f"SAB queue returned {len(res['queue']['slots'])} for {downloadid}")
-                for item in res['queue']['slots']:
-                    if item['nzo_id'] == downloadid:
-                        dlfolder = None  # still in queue, not unpacked
-                        break
-            if not dlfolder:  # not in queue, try history
-                if lazylibrarian.SAB_VER > (3, 2, 0):
-                    res, _ = sabnzbd.sab_nzbd(nzburl='history', nzo_ids=downloadid)
-                elif data and data['NZBtitle']:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='history', search=data['NZBtitle'])
-                else:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='history')
-
-                if res and 'history' in res:
-                    logger.debug(f"SAB history returned {len(res['history']['slots'])} for {downloadid}")
-                    for item in res['history']['slots']:
-                        if item['nzo_id'] == downloadid:
-                            # logger.debug(str(item))
-                            dlfolder = item.get('storage')
-                            break
-
-        elif source == 'NZBGET':
-            res, _ = nzbget.send_nzb(cmd='listgroups')
-            loggerdlcomms.debug(str(res))
-            if res:
-                for item in res:
-                    if item['NZBID'] == check_int(downloadid, 0):
-                        dlfolder = item.get('DestDir')
-                        break
-            if not dlfolder:  # not in queue, try history
-                res, _ = nzbget.send_nzb(cmd='history')
-                loggerdlcomms.debug(str(res))
-                if res:
-                    for item in res:
-                        if item['NZBID'] == check_int(downloadid, 0):
-                            dlfolder = item.get('DestDir')
-                            break
-        return dlfolder
-
-    except Exception:
-        logger.warning(f"Failed to get folder from {source} for {downloadid}")
-        logger.error(f'Unhandled exception in get_download_folder: {traceback.format_exc()}')
-        return None
-
-
-def get_download_progress(source, downloadid):
-    logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    progress = 0
-    finished = False
-    db = database.DBConnection()
-    # noinspection PyBroadException
-    try:
-        if source == 'TRANSMISSION':
-            progress, errorstring, finished = transmission.get_torrent_progress(downloadid)
-            if errorstring:
-                cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, (errorstring, downloadid, source))
-                progress = -1
-
-        elif source == 'DIRECT':
-            cmd = "SELECT * from wanted WHERE DownloadID=? and Source=?"
-            data = db.match(cmd, (downloadid, source))
-            if data:
-                progress = 100
-                finished = True
-            else:
-                progress = 0
-
-        elif str(source).startswith('IRC'):
-            cmd = "SELECT * from wanted WHERE DownloadID=? and Source=?"
-            data = db.match(cmd, (downloadid, source))
-            if data:
-                progress = 100
-                finished = True
-            else:
-                progress = 0
-
-        elif source == 'SABNZBD':
-            data = {}
-            if not lazylibrarian.SAB_VER[0]:
-                _ = sabnzbd.check_link()
-            if lazylibrarian.SAB_VER > (3, 2, 0):
-                res, _ = sabnzbd.sab_nzbd(nzburl='queue', nzo_ids=downloadid)
-            else:
-                cmd = "SELECT * from wanted WHERE DownloadID=? and Source=?"
-                data = db.match(cmd, (downloadid, source))
-                if data and data['NZBtitle']:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='queue', search=data['NZBtitle'])
-                else:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='queue')
-
-            found = False
-            if not res or 'queue' not in res:
-                progress = 0
-            else:
-                logger.debug(f"SAB queue returned {len(res['queue']['slots'])} for {downloadid}")
-                for item in res['queue']['slots']:
-                    if item['nzo_id'] == downloadid:
-                        found = True
-                        # logger.debug(str(item))
-                        progress = item['percentage']
-                        break
-            if not found:  # not in queue, try history in case completed or error
-                if lazylibrarian.SAB_VER > (3, 2, 0):
-                    res, _ = sabnzbd.sab_nzbd(nzburl='history', nzo_ids=downloadid)
-                elif data and data['NZBtitle']:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='history', search=data['NZBtitle'])
-                else:
-                    res, _ = sabnzbd.sab_nzbd(nzburl='history')
-
-                if not res or 'history' not in res:
-                    progress = 0
-                else:
-                    logger.debug(f"SAB history returned {len(res['history']['slots'])} for {downloadid}")
-                    for item in res['history']['slots']:
-                        if item['nzo_id'] == downloadid:
-                            found = True
-                            # logger.debug(str(item))
-                            # 100% if completed, 99% if still extracting or repairing, -1 if not found or failed
-                            if item['status'] == 'Completed' and not item['fail_message']:
-                                progress = 100
-                                finished = True
-                            elif item['status'] in ['Extracting', 'Fetching']:
-                                progress = 99
-                            elif item['status'] == 'Failed' or item['fail_message']:
-                                cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                                db.action(cmd, (item['fail_message'], downloadid, source))
-                                progress = -1
-                            break
-            if not found:
-                logger.debug(f'{downloadid} not found at {source}')
-                progress = 0
-
-        elif source == 'NZBGET':
-            res, _ = nzbget.send_nzb(cmd='listgroups')
-            loggerdlcomms.debug(str(res))
-            found = False
-            if res:
-                for item in res:
-                    # nzbget NZBIDs are integers
-                    if item['NZBID'] == check_int(downloadid, 0):
-                        found = True
-                        logger.debug(f"NZBID {item['NZBID']} status {item['Status']}")
-                        total = item['FileSizeHi'] << 32 + item['FileSizeLo']
-                        if total:
-                            remaining = item['RemainingSizeHi'] << 32 + item['RemainingSizeLo']
-                            done = total - remaining
-                            progress = int(done * 100 / total)
-                            if progress == 100:
-                                finished = True
-                        break
-            if not found:  # not in queue, try history in case completed or error
-                res, _ = nzbget.send_nzb(cmd='history')
-                loggerdlcomms.debug(str(res))
-                if res:
-                    for item in res:
-                        if item['NZBID'] == check_int(downloadid, 0):
-                            found = True
-                            logger.debug(f"NZBID {item['NZBID']} status {item['Status']}")
-                            # 100% if completed, -1 if not found or failed
-                            if 'SUCCESS' in item['Status']:
-                                progress = 100
-                                finished = True
-                            elif 'WARNING' in item['Status'] or 'FAILURE' in item['Status']:
-                                cmd = ("UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? "
-                                       "and Source=?")
-                                db.action(cmd, (item['Status'], downloadid, source))
-                                progress = -1
-                            break
-            if not found:
-                logger.debug(f'{downloadid} not found at {source}')
-                progress = 0
-
-        elif source == 'QBITTORRENT':
-            progress, status, finished = qbittorrent.get_progress(downloadid)
-            if progress == -1:
-                logger.debug(f'{downloadid} not found at {source}')
-                progress = 0
-            if status == 'error':
-                cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, ("QBITTORRENT returned error", downloadid, source))
-                progress = -1
-
-        elif source == 'UTORRENT':
-            progress, status, finished = utorrent.progress_torrent(downloadid)
-            if progress == -1:
-                logger.debug(f'{downloadid} not found at {source}')
-                progress = 0
-            if status & 16:  # Error
-                cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, (f"UTORRENT returned error status {status}", downloadid, source))
-                progress = -1
-
-        elif source == 'RTORRENT':
-            progress, status = rtorrent.get_progress(downloadid)
-            if progress == -1:
-                logger.debug(f'{downloadid} not found at {source}')
-                progress = 0
-            if status == 'finished':
-                progress = 100
-                finished = True
-            elif status == 'error':
-                cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, ("rTorrent returned error", downloadid, source))
-                progress = -1
-
-        elif source == 'SYNOLOGY_TOR':
-            progress, status, finished = synology.get_progress(downloadid)
-            if status == 'finished':
-                progress = 100
-            elif status == 'error':
-                cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, ("Synology returned error", downloadid, source))
-                progress = -1
-
-        elif source == 'DELUGEWEBUI':
-            progress, message, finished = deluge.get_torrent_progress(downloadid)
-            if message and message != 'OK':
-                cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                db.action(cmd, (message, downloadid, source))
-                progress = -1
-
-        elif source == 'DELUGERPC':
-            client = DelugeRPCClient(CONFIG['DELUGE_HOST'], int(
-                CONFIG['DELUGE_PORT']),
-                                     CONFIG['DELUGE_USER'], CONFIG['DELUGE_PASS'],
-                                     decode_utf8=True)
-            try:
-                client.connect()
-                result = client.call('core.get_torrent_status', downloadid, {})
-                loggerdlcomms.debug(f"Deluge RPC Status [{str(result)}]")
-
-                if 'progress' in result:
-                    progress = result['progress']
-                    try:
-                        finished = result['is_auto_managed'] and result['stop_at_ratio'] and \
-                                   result['state'].lower() == 'paused' and result['ratio'] >= result['stop_ratio']
-                    except (KeyError, AttributeError):
-                        finished = False
-                else:
-                    progress = -1
-                    finished = False
-                if 'message' in result and result['message'] != 'OK':
-                    cmd = "UPDATE wanted SET Status='Aborted',DLResult=? WHERE DownloadID=? and Source=?"
-                    db.action(cmd, (result['message'], downloadid, source))
-                    progress = -1
-            except Exception as e:
-                logger.error(f'DelugeRPC failed {type(e).__name__} {str(e)}')
-                progress = 0
-
-        else:
-            loggerdlcomms.debug(f"Unable to get progress from {source} (not implemented)")
-            progress = 0
-        try:
-            progress = int(progress)
-        except ValueError:
-            logger.debug(f"Progress value error {source} [{progress}] {downloadid}")
-            progress = 0
-
-        if finished:  # store when we noticed it was completed (can ask some downloaders, but not all)
-            res = db.match('SELECT Completed from wanted WHERE DownloadID=? and Source=?', (downloadid, source))
-            if res and not res['Completed']:
-                db.action('UPDATE wanted SET Completed=? WHERE DownloadID=? and Source=?',
-                          (int(time.time()), downloadid, source))
-    except Exception:
-        logger.warning(f"Failed to get download progress from {source} for {downloadid}")
-        logger.error(f'Unhandled exception in get_download_progress: {traceback.format_exc()}')
-        progress = 0
-        finished = False
-
-    db.close()
-    return progress, finished
-
-
-def delete_task(source, download_id, remove_data):
-    logger = logging.getLogger(__name__)
-    try:
-        if source == "BLACKHOLE":
-            logger.warning(f"Download {download_id} has not been processed from blackhole")
-        elif source == "SABNZBD":
-            if CONFIG.get_bool('SAB_DELETE'):
-                sabnzbd.sab_nzbd(download_id, 'delete', remove_data)
-                sabnzbd.sab_nzbd(download_id, 'delhistory', remove_data)
-        elif source == "NZBGET":
-            nzbget.delete_nzb(download_id, remove_data)
-        elif source == "UTORRENT":
-            utorrent.remove_torrent(download_id, remove_data)
-        elif source == "RTORRENT":
-            rtorrent.remove_torrent(download_id, remove_data)
-        elif source == "QBITTORRENT":
-            qbittorrent.remove_torrent(download_id, remove_data)
-        elif source == "TRANSMISSION":
-            transmission.remove_torrent(download_id, remove_data)
-        elif source == "SYNOLOGY_TOR" or source == "SYNOLOGY_NZB":
-            synology.remove_torrent(download_id, remove_data)
-        elif source == "DELUGEWEBUI":
-            deluge.remove_torrent(download_id, remove_data)
-        elif source == "DELUGERPC":
-            client = DelugeRPCClient(CONFIG['DELUGE_HOST'],
-                                     int(CONFIG['DELUGE_PORT']),
-                                     CONFIG['DELUGE_USER'],
-                                     CONFIG['DELUGE_PASS'],
-                                     decode_utf8=True)
-            try:
-                client.connect()
-                client.call('core.remove_torrent', download_id, remove_data)
-            except Exception as e:
-                logger.error(f'DelugeRPC failed {type(e).__name__} {str(e)}')
-        elif source == 'DIRECT' or source.startswith('IRC'):
-            return True
-        else:
-            logger.debug(f"Unknown source [{source}] in delete_task")
-            return False
-        return True
-
-    except Exception as e:
-        logger.warning(f"Failed to delete task {download_id} from {source}: {type(e).__name__} {str(e)}")
-        return False
-
-
-def process_book(pp_path=None, bookid=None, library=None):
-    TELEMETRY.record_usage_data('Process/Book')
-    logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
         # Move a book into LL folder structure given just the folder and bookID, returns True or False
         # Called from "import_alternate" or if we find a "LL.(xxx)" folder that doesn't match a snatched book/mag
-        loggerpostprocess.debug(f"process_book {pp_path}")
-        is_audio = (book_file(pp_path, "audiobook", config=CONFIG) != '')
-        is_ebook = (book_file(pp_path, "ebook", config=CONFIG) != '')
+        logger.debug(f"process_book {book_path}")
+        is_audio = book_file(book_path, "audiobook", config=CONFIG) != ""
+        is_ebook = book_file(book_path, "ebook", config=CONFIG) != ""
 
-        cmd = ("SELECT AuthorName,BookName,BookID,books.Status,AudioStatus from books,authors WHERE BookID=? "
-               "and books.AuthorID = authors.AuthorID")
-        data = db.match(cmd, (bookid,))
+        # Get the details of the book
+        cmd = (
+            "SELECT AuthorName,BookName,BookID,books.Status,AudioStatus from books,authors WHERE BookID=? "
+            "and books.AuthorID = authors.AuthorID"
+        )
+        data = dict(db.match(cmd, (book_id,)))
         if data:
-            authorname = data['AuthorName']
-            bookname = data['BookName']
-            cmd = "SELECT BookID, NZBprov, NZBmode,AuxInfo FROM wanted WHERE BookID=? and Status='Snatched'"
-            # we may have wanted to snatch an ebook and audiobook of the same title/id
-            was_snatched = db.select(cmd, (bookid,))
+            authorname = data["AuthorName"]
+            bookname = data["BookName"]
             want_audio = False
             want_ebook = False
-            booktype = None
-            if data['Status'] in ['Wanted', 'Snatched'] or library == 'eBook':
-                want_ebook = True
-            if data['AudioStatus'] in ['Wanted', 'Snatched'] or library == 'Audio':
-                want_audio = True
-            for item in was_snatched:
-                if item['AuxInfo'] == 'AudioBook':
-                    want_audio = True
-                elif item['AuxInfo'] == 'eBook' or not item['AuxInfo']:
-                    want_ebook = True
-            if not is_audio and not is_ebook:
-                logger.debug(f'Bookid {bookid}, failed to find valid booktype')
-            elif want_audio and is_audio:
-                booktype = "AudioBook"
-            elif want_ebook and is_ebook:
-                booktype = "eBook"
-            elif not was_snatched:
-                loggerpostprocess.debug(
-                    f'Bookid {bookid} was not snatched so cannot check type, contains ebook:{is_ebook} '
-                    f'audio:{is_audio}')
+            book_type_enum = None
 
-                if is_audio and not CONFIG.get_bool('AUDIO_TAB'):
-                    is_audio = False
-                if is_audio:
-                    booktype = "AudioBook"
-                elif is_ebook:
-                    booktype = "eBook"
-            if not booktype:
+            if data["Status"] in ["Wanted", "Snatched"] or library == "eBook":
+                want_ebook = True
+            if data["AudioStatus"] in ["Wanted", "Snatched"] or library == "Audio":
+                want_audio = True
+
+            # we may have wanted to snatch an ebook and audiobook of the same title/id
+            cmd = "SELECT BookID, NZBprov, NZBmode,AuxInfo FROM wanted WHERE BookID=? and Status='Snatched'"
+            was_snatched = db.select(cmd, (book_id,))
+
+            # For each snatched type of a book id, see if
+            # it is an ebook or audiobook
+            for item in was_snatched:
+                book_type_enum = BookType.from_string(
+                    item["AuxInfo"] or "ebook"
+                )  # default to ebook if unknown
+                if book_type_enum == BookType.AUDIOBOOK:
+                    want_audio = True
+                elif book_type_enum == BookType.EBOOK:
+                    want_ebook = True
+
+            if not is_audio and not is_ebook:
+                logger.debug(f"Bookid {book_id}, failed to find valid booktype")
+            elif want_audio and is_audio:
+                book_type_enum = BookType.AUDIOBOOK
+            elif want_ebook and is_ebook:
+                book_type_enum = BookType.EBOOK
+            elif not was_snatched:
                 logger.debug(
-                    f'Bookid {bookid}, failed to find valid booktype, contains ebook:{is_ebook} audio:{is_audio}')
+                    f"Bookid {book_id} was not snatched so cannot check type, contains ebook:{is_ebook} "
+                    f"audio:{is_audio}"
+                )
+
+                # If audiobooks aren't enable, don't look for it
+                if not CONFIG.get_bool("AUDIO_TAB"):
+                    is_audio = False
+
+                if is_audio:
+                    book_type_enum = BookType.AUDIOBOOK
+                elif is_ebook:
+                    book_type_enum = BookType.EBOOK
+
+            if book_type_enum == BookType.AUDIOBOOK:
+                dest_dir = enforce_str(
+                    str(get_directory("Audio"))
+                )  # Ensure string for join
+            elif book_type_enum == BookType.EBOOK:
+                dest_dir = enforce_str(
+                    str(get_directory("eBook"))
+                )  # Ensure string for join
+            else:
+                logger.debug(
+                    f"Bookid {book_id}, failed to find valid booktype, contains ebook:{is_ebook} audio:{is_audio}"
+                )
                 return False
 
-            if booktype == "AudioBook":
-                dest_dir = get_directory('Audio')
-            else:
-                dest_dir = get_directory('eBook')
-
-            # CFG2DO Check that path handling no longer necessary
-            # if os.name == 'nt':
-            #     if '/' in lazylibrarian.CONFIG['EBOOK_DEST_FOLDER']:
-            #         logger.warning('Please check your EBOOK_DEST_FOLDER setting')
-            #         lazylibrarian.CONFIG['EBOOK_DEST_FOLDER'] = lazylibrarian.CONFIG[
-            #             'EBOOK_DEST_FOLDER'].replace('/', '\\')
-            #     if '/' in lazylibrarian.CONFIG['AUDIOBOOK_DEST_FOLDER']:
-            #         logger.warning('Please check your AUDIOBOOK_DEST_FOLDER setting')
-            #         lazylibrarian.CONFIG['AUDIOBOOK_DEST_FOLDER'] = lazylibrarian.CONFIG[
-            #             'AUDIOBOOK_DEST_FOLDER'].replace('/', '\\')
-
-            namevars = name_vars(bookid)
+            namevars = name_vars(book_id)
             # global_name is only used for ebooks to ensure book/cover/opf all have the same basename
             # audiobooks are usually multipart so can't be renamed this way
-            global_name = namevars['BookFile']
-            global_name = sanitize(global_name)
-            if booktype == "AudioBook":
-                dest_path = stripspaces(os.path.join(dest_dir, namevars['AudioFolderName']))
+            global_name = str(namevars["BookFile"])  # Enforce string from dict
+            if book_type_enum == BookType.AUDIOBOOK:
+                audio_folder = str(
+                    namevars["AudioFolderName"]
+                )  # Enforce string from dict
+                dest_path = stripspaces(os.path.join(dest_dir, audio_folder))
             else:
-                dest_path = stripspaces(os.path.join(dest_dir, namevars['FolderName']))
-            dest_path = make_utf8bytes(dest_path)[0]
+                folder_name = str(namevars["FolderName"])  # Enforce string from dict
+                dest_path = stripspaces(os.path.join(dest_dir, folder_name))
 
-            data = {'AuthorName': authorname, 'BookName': bookname, 'BookID': bookid}
-            success, dest_file, pp_path = process_destination(pp_path, dest_path, global_name, data, booktype)
+            # Validate encoding via make_utf8bytes, then decode to string for metadata
+            dest_path = enforce_str(enforce_bytes(dest_path))
+
+            # Create metadata object for manual processing
+            # For manual processing, we have limited metadata available
+            metadata = EbookMetadata(
+                book_id=book_id,
+                book_type_enum=book_type_enum,
+                dest_path=dest_path,
+                global_name=global_name,
+                author_name=authorname,
+                book_name=bookname,
+            )
+
+            success, dest_file, book_path = _process_destination(
+                book_metadata=metadata,
+                book_path=book_path,
+                logger=logger,
+                # No mode for manual processing
+            )
+            book_type_aux = (
+                "AudioBook" if (book_type_enum == BookType.AUDIOBOOK) else "eBook"
+            )
             if success:
                 # update nzbs
-                dest_file = make_unicode(dest_file)
+                dest_file = enforce_str(make_unicode(dest_file))
+                control_value_dict = {"BookID": book_id}
                 if was_snatched:
-                    snatched_from = CONFIG.disp_name(was_snatched[0]['NZBprov'])
-                    loggerpostprocess.debug(f"{global_name} was snatched from {snatched_from}")
-                    control_value_dict = {"BookID": bookid}
-                    new_value_dict = {"Status": "Processed", "NZBDate": now(), "DLResult": dest_file}
+                    snatched_from = CONFIG.disp_name(was_snatched[0]["NZBprov"])
+                    logger.debug(f"{global_name} was snatched from {snatched_from}")
+                    new_value_dict = {
+                        "Status": "Processed",
+                        "NZBDate": now(),
+                        "DLResult": dest_file,
+                    }
                     db.upsert("wanted", new_value_dict, control_value_dict)
                 else:
-                    control_value_dict = {"BookID": bookid}
-                    new_value_dict = {"Status": "Processed", "NZBProv": "Manual", "AuxInfo": booktype,
-                                      "NZBDate": now(), "DLResult": dest_file}
+                    new_value_dict = {
+                        "Status": "Processed",
+                        "NZBProv": "Manual",
+                        "AuxInfo": book_type_aux,
+                        "NZBDate": now(),
+                        "DLResult": dest_file,
+                        "NZBSize": 0,
+                    }
                     if path_isfile(dest_file):
                         new_value_dict["NZBSize"] = os.path.getsize(syspath(dest_file))
-                    else:
-                        new_value_dict["NZBSize"] = 0
+
                     db.upsert("wanted", new_value_dict, control_value_dict)
                     snatched_from = "manually added"
-                    loggerpostprocess.debug(f"{booktype} {global_name} was {snatched_from}")
+                    logger.debug(f"{book_type_aux} {global_name} was {snatched_from}")
 
                 if dest_file:  # do we know the location (not calibre already exists)
-                    process_extras(dest_file, global_name, bookid, booktype)
+                    _process_extras(
+                        dest_file, global_name, book_id, book_type_enum.value
+                    )
 
-                if '.unpack' in pp_path:
-                    pp_path = f"{pp_path.split('.unpack')[0]}.unpack"
+                if ".unpack" in book_path:
+                    book_path = f"{book_path.split('.unpack')[0]}.unpack"
 
-                if '.unpack' in pp_path or not CONFIG.get_bool('DESTINATION_COPY') and pp_path != dest_dir:
-                    if path_isdir(pp_path):
+                if (
+                    ".unpack" in book_path
+                    or (not CONFIG.get_bool("DESTINATION_COPY")
+                        and book_path != dest_dir)
+                ):
+                    if path_isdir(book_path):
                         # calibre might have already deleted it?
-                        logger.debug(f"Deleting {pp_path}")
-                        shutil.rmtree(pp_path, ignore_errors=True)
+                        logger.debug(f"Deleting {book_path}")
+                        shutil.rmtree(book_path, ignore_errors=True)
+                elif CONFIG.get_bool("DESTINATION_COPY"):
+                    logger.debug(f"Not removing {book_path} as Keep Files is set")
                 else:
-                    if CONFIG.get_bool('DESTINATION_COPY'):
-                        logger.debug(f"Not removing {pp_path} as Keep Files is set")
-                    else:
-                        logger.debug(f"Not removing {pp_path} as in download root")
+                    logger.debug(f"Not removing {book_path} as in download root")
 
-                logger.info(f'Successfully processed: {global_name}')
-                custom_notify_download(f"{bookid} {booktype}")
-                if snatched_from == "manually added":
-                    frm = ''
-                else:
-                    frm = 'from '
+                logger.info(f"Successfully processed: {global_name}")
+                custom_notify_download(f"{book_id} {book_type_aux}")
+                frm = "" if snatched_from == "manually added" else "from "
 
-                notify_download(f"{booktype} {global_name} {frm}{snatched_from} at {now()}", bookid)
-                mailing_list(booktype, global_name, bookid)
+                notify_download(
+                    f"{book_type_aux} {global_name} {frm}{snatched_from} at {now()}",
+                    book_id,
+                )
+                mailing_list(book_type_aux, global_name, book_id)
                 if was_snatched:
-                    update_downloads(CONFIG.disp_name(was_snatched[0]['NZBprov']))
+                    _update_downloads_provider_count(
+                        CONFIG.disp_name(was_snatched[0]["NZBprov"])
+                    )
                 else:
-                    update_downloads("manually added")
+                    _update_downloads_provider_count("manually added")
                 return True
-            else:
-                logger.error(f'Postprocessing for {repr(global_name)} has failed: {repr(dest_file)}')
-                shutil.rmtree(f"{pp_path}.fail", ignore_errors=True)
+            logger.error(
+                f"Postprocessing for {global_name!r} has failed: {dest_file!r}. Deleting {book_path}.fail"
+            )
+            shutil.rmtree(f"{book_path}.fail", ignore_errors=True)
+            try:
+                _ = safe_move(book_path, f"{book_path}.fail")
+                logger.warning(f"Residual files remain in {book_path}.fail")
+            except Exception as e:
+                logger.error(
+                    f"Unable to rename {book_path!r}, {type(e).__name__} {e!s}"
+                )
+                if not os.access(syspath(book_path), os.R_OK):
+                    logger.error(f"{book_path!r} is not readable")
+                if not os.access(syspath(book_path), os.W_OK):
+                    logger.error(f"{book_path!r} is not writeable")
+                parent = os.path.dirname(book_path)
                 try:
-                    _ = safe_move(pp_path, f"{pp_path}.fail")
-                    logger.warning(f'Residual files remain in {pp_path}.fail')
-                except Exception as e:
-                    logger.error(f"Unable to rename {repr(pp_path)}, {type(e).__name__} {str(e)}")
-                    if not os.access(syspath(pp_path), os.R_OK):
-                        logger.error(f"{repr(pp_path)} is not readable")
-                    if not os.access(syspath(pp_path), os.W_OK):
-                        logger.error(f"{repr(pp_path)} is not writeable")
-                    parent = os.path.dirname(pp_path)
-                    try:
-                        with open(syspath(os.path.join(parent, 'll_temp')), 'w', encoding='utf-8') as f:
-                            f.write(u'test')
-                        remove_file(os.path.join(parent, 'll_temp'))
-                    except Exception as why:
-                        logger.error(f"Directory {parent} is not writeable: {why}")
-                    logger.warning(f'Residual files remain in {pp_path}')
+                    with open(
+                        syspath(os.path.join(parent, "ll_temp")),
+                        "w",
+                        encoding="utf-8",
+                    ) as f:
+                        f.write("test")
+                    remove_file(os.path.join(parent, "ll_temp"))
+                except Exception as why:
+                    logger.error(f"Directory {parent} is not writeable: {why}")
+                logger.warning(f"Residual files remain in {book_path}")
 
-                was_snatched = db.match("SELECT NZBurl FROM wanted WHERE BookID=? and Status='Snatched'", (bookid,))
-                if was_snatched:
-                    control_value_dict = {"NZBurl": was_snatched['NZBurl']}
-                    new_value_dict = {"Status": "Failed", "NZBDate": now(), "DLResult": dest_file}
-                    db.upsert("wanted", new_value_dict, control_value_dict)
-                # reset status so we try for a different version
-                if booktype == 'AudioBook':
-                    db.action("UPDATE books SET audiostatus='Wanted' WHERE BookID=?", (bookid,))
-                else:
-                    db.action("UPDATE books SET status='Wanted' WHERE BookID=?", (bookid,))
+            was_snatched = dict(
+                db.match(
+                    "SELECT NZBurl FROM wanted WHERE BookID=? and Status='Snatched'",
+                    (book_id,),
+                )
+            )
+            if was_snatched:
+                control_value_dict = {"NZBurl": was_snatched["NZBurl"]}
+                new_value_dict = {
+                    "Status": "Failed",
+                    "NZBDate": now(),
+                    "DLResult": dest_file,
+                }
+                db.upsert("wanted", new_value_dict, control_value_dict)
+            # reset status so we try for a different version
+            if book_type_enum == BookType.AUDIOBOOK:
+                db.action(
+                    "UPDATE books SET audiostatus='Wanted' WHERE BookID=?",
+                    (book_id,),
+                )
+            else:
+                db.action(
+                    "UPDATE books SET status='Wanted' WHERE BookID=?", (book_id,)
+                )
         return False
     except Exception:
-        logger.error(f'Unhandled exception in process_book: {traceback.format_exc()}')
+        logger.error(f"Unhandled exception in process_book: {traceback.format_exc()}")
         return False
     finally:
         db.close()
 
 
-def process_extras(dest_file=None, global_name=None, bookid=None, booktype="eBook"):
+def _process_extras(
+    dest_file=None, global_name=None, bookid=None, book_type: str = BookType.EBOOK.value
+):
     # given bookid, handle author count, calibre autoadd, book image, opf
 
     logger = logging.getLogger(__name__)
     if not bookid:
-        logger.error('No bookid supplied')
+        logger.error("No bookid supplied")
         return
     if not dest_file:
-        logger.error('No dest_file supplied')
+        logger.error("No dest_file supplied")
         return
 
-    TELEMETRY.record_usage_data('Process/Extras')
+    TELEMETRY.record_usage_data("Process/Extras")
     db = database.DBConnection()
     try:
+        booktype_enum = BookType.from_string(book_type)
         control_value_dict = {"BookID": bookid}
-        if booktype == 'AudioBook':
-            new_value_dict = {"AudioFile": dest_file, "AudioStatus": CONFIG['FOUND_STATUS'],
-                              "AudioLibrary": now()}
+        if booktype_enum == BookType.AUDIOBOOK:
+            new_value_dict = {
+                "AudioFile": dest_file,
+                "AudioStatus": CONFIG["FOUND_STATUS"],
+                "AudioLibrary": now(),
+            }
             db.upsert("books", new_value_dict, control_value_dict)
-            if CONFIG['AUDIOBOOK_DEST_FILE']:
+            if CONFIG["AUDIOBOOK_DEST_FILE"]:
                 book_filename = audio_rename(bookid, rename=True, playlist=True)
                 if dest_file != book_filename:
-                    db.action('UPDATE books set AudioFile=? where BookID=?', (book_filename, bookid))
+                    db.action(
+                        "UPDATE books set AudioFile=? where BookID=?",
+                        (book_filename, bookid),
+                    )
         else:
-            new_value_dict = {"Status": CONFIG['FOUND_STATUS'], "BookFile": dest_file, "BookLibrary": now()}
+            new_value_dict = {
+                "Status": CONFIG["FOUND_STATUS"],
+                "BookFile": dest_file,
+                "BookLibrary": now(),
+            }
             db.upsert("books", new_value_dict, control_value_dict)
 
         # update authors book counts
-        match = db.match('SELECT AuthorID FROM books WHERE BookID=?', (bookid,))
+        match = dict(db.match("SELECT AuthorID FROM books WHERE BookID=?", (bookid,)))
         if match:
-            update_totals(match['AuthorID'])
+            update_totals(match["AuthorID"])
 
-        elif booktype != 'eBook':  # only do autoadd/img/opf for ebooks
+        elif booktype_enum != BookType.EBOOK:  # only do autoadd/img/opf for ebooks
             return
 
-        cmd = ("SELECT AuthorName,BookID,BookName,BookDesc,BookIsbn,BookImg,BookDate,BookLang,BookPub,BookRate,"
-               "Narrator from books,authors WHERE BookID=? and books.AuthorID = authors.AuthorID")
-        data = db.match(cmd, (bookid,))
+        cmd = (
+            "SELECT AuthorName,BookID,BookName,BookDesc,BookIsbn,BookImg,BookDate,BookLang,BookPub,BookRate,"
+            "Narrator from books,authors WHERE BookID=? and books.AuthorID = authors.AuthorID"
+        )
+        data = dict(db.match(cmd, (bookid,)))
+        if not data:
+            logger.error(f"No data found for bookid {bookid}")
+            return
     finally:
         db.close()
-    if not data:
-        logger.error(f'No data found for bookid {bookid}')
-        return
 
     dest_path = os.path.dirname(dest_file)
 
     # download and cache image if http link
-    process_img(dest_path, data['BookID'], data['BookImg'], global_name, ImageType.BOOK)
+    process_img(dest_path, data["BookID"], data["BookImg"], global_name, ImageType.BOOK)
 
-    # do we want to create metadata - there may already be one in pp_path, but it was downloaded and might
+    # do we want to create metadata - there may already be one in book_path, but it was downloaded and might
     # not contain our choice of authorname/title/identifier, so if autoadding we ignore it and write our own
-    if not CONFIG.get_bool('IMP_AUTOADD_BOOKONLY'):
+    if not CONFIG.get_bool("IMP_AUTOADD_BOOKONLY"):
         _ = create_opf(dest_path, data, global_name, overwrite=True)
-    else:
+    elif CONFIG.get_bool('IMP_EBOOKOPF'):
         _ = create_opf(dest_path, data, global_name, overwrite=False)
     # if our_opf:
     #     write_meta(dest_path, opf_file)  # write metadata from opf to all ebook types in dest folder
 
     # If you use auto add by Calibre you need the book in a single directory, not nested
     # So take the files you Copied/Moved to Dest_path and copy/move into Calibre auto add folder.
-    if CONFIG['IMP_AUTOADD']:
-        process_auto_add(dest_path)
+    if CONFIG["IMP_AUTOADD"]:
+        _process_auto_add(dest_path)
 
 
-def send_to_calibre(booktype, global_name, folder, data):
+def _find_best_format(
+    path: str, prioritized_list: "list[str]"
+) -> "tuple[str, set[str]]":
+    dir_list = listdir(path)
+    found_set: set[str] = set()
+
+    # Collect all valid extension types in a set
+    for _fname in dir_list:
+        fname = enforce_str(_fname)  # Ensure string for path operations
+        _, extn = _tokenize_file(fname)
+        extn = extn.lower()
+        if extn in prioritized_list:
+            found_set.add(extn)
+
+    best_match = ""
+    # Now pick the best found type based on the order in the prioritized extn list
+    for extn in prioritized_list:
+        if extn in found_set:
+            best_match = extn
+            break
+
+    return best_match, found_set
+
+
+def _is_metadata_file(fname: str) -> bool:
+    """Check if file is a metadata file (.jpg or .opf)"""
+    fname_lower = fname.lower()
+    return fname_lower.endswith((".jpg", ".opf"))
+
+
+def _should_use_calibre(book_type: str) -> bool:
+    """Determine if Calibre should be used for this book type"""
+    if not CONFIG["IMP_CALIBREDB"]:
+        return False
+
+    calibre_settings = {
+        "ebook": "IMP_CALIBRE_EBOOK",
+        "magazine": "IMP_CALIBRE_MAGAZINE",
+        "comic": "IMP_CALIBRE_COMIC",
+    }
+
+    setting = calibre_settings.get(book_type)
+    if setting:
+        return CONFIG.get_bool(setting)
+
+    return False
+
+
+def _prepare_destination_directory(dest_path, logger) -> "tuple[bool, str, bytes]":
     """
-    booktype = ebook audiobook magazine comic
-    global_name = standardised filename used for item/opf/jpg
-    folder = folder containing the file(s)
-    data = various data for the item, varies according to booktype
+    Ensure destination directory exists and is ready for file operations.
 
-    return True,filename,folder (Filename empty if already exists)
-    on fail return False,message,folder
+    Matches original postprocess.py pattern: keeps dest_path as bytes for
+    filesystem operations (encoding-safe across platforms).
+
+    Args:
+        dest_path: Destination directory path
+        logger: Logger instance
+
+    Returns:
+        Tuple of (success, error_message, dest_path_bytes)
+        - success: True if directory is ready, False on error
+        - error_message: Error description if success is False, empty string otherwise
+        - dest_path_bytes: UTF8-encoded destination path as bytes (for filesystem ops)
     """
-    issueid = data.get('IssueDate', '')  # comic issueid
-    authorname = data.get('AuthorName', '')
-    bookname = data.get('BookName', '')
-    bookid = data.get('BookID', '')  # ebook/audiobook/comic
-    title = data.get('Title', '')
-    issuedate = data.get('IssueDate', '')  # magazine issueid
-    coverpage = data.get('cover', '')
-    bestformat = data.get('bestformat', '')
-    mag_genres = data.get('mag_genres')
 
-    logger = logging.getLogger(__name__)
-    try:
-        if not os.path.isdir(folder):
-            return False, f'calibredb import failed, Invalid folder name [{folder}]', folder
-        logger.debug(f'Importing {booktype} {global_name} into calibre library')
-        # calibre may ignore metadata.opf and book_name.opf depending on calibre settings,
-        # and ignores opf data if there is data embedded in the book file,
-        # so we send separate "set_metadata" commands after the import
-        for fname in listdir(folder):
-            extn = os.path.splitext(fname)[1]
-            srcfile = os.path.join(folder, fname)
-            if CONFIG.is_valid_booktype(fname, booktype=booktype) or extn in ['.opf', '.jpg']:
-                if bestformat and not fname.endswith(bestformat) and extn not in ['.opf', '.jpg']:
-                    logger.debug(f"Removing {fname} as not {bestformat}")
-                    remove_file(srcfile)
-                else:
-                    dstfile = os.path.join(folder, global_name.replace('"', '_') + extn)
-                    # calibre does not like quotes in author names
-                    try:
-                        _ = safe_move(srcfile, dstfile)
-                    except Exception as e:
-                        logger.warning(f"Failed to move file: {str(e)}")
-                        return False, str(e), folder
-            else:
-                logger.debug(f'Removing {fname} as not wanted')
-                if path_isfile(srcfile):
-                    remove_file(srcfile)
-                elif path_isdir(srcfile):
-                    shutil.rmtree(srcfile)
-
-        identifier = ''
-        if booktype in ['ebook', 'audiobook']:
-            if bookid.startswith('OL'):
-                identifier = f"OpenLibrary:{bookid}"
-            elif data.get('hc_id') == bookid:
-                identifier = f"hardcover:{bookid}"
-            elif data.get('gr_id') == bookid:
-                identifier = f"goodreads:{bookid}"
-            elif data.get('gb_id') == bookid:
-                identifier = f"google:{bookid}"
-            elif data.get('au_id') == bookid:
-                identifier = f"audible:{bookid}"
-
-        elif booktype == 'comic':
-            if bookid.startswith('CV'):
-                identifier = f"ComicVine:{bookid[2:]}"
-            else:  # bookid.startswith('CX'):
-                identifier = f"Comixology:{bookid[2:]}"
-
-        if booktype == 'magazine':
-            issueid = create_id(f"{title} {issuedate}")
-            identifier = f"lazylibrarian:{issueid}"
-            magfile = book_file(folder, "magazine", config=CONFIG)
-            coverfile = os.path.join(folder, 'cover.jpg')
-            # calibre likes "cover.jpg"
-            jpgfile = f"{os.path.splitext(magfile)[0]}.jpg"
-            if path_isfile(jpgfile):
-                try:
-                    jpgfile = safe_copy(jpgfile, coverfile)
-                except Exception as e:
-                    logger.warning(f"Failed to copy jpeg file: {str(e)}")
-                    return False, str(e), folder
-            elif magfile:
-                if not coverpage:
-                    coverpage = 1  # if not set, default to page 1
-                jpgfile = create_mag_cover(magfile, pagenum=coverpage, refresh=True)
-                if jpgfile:
-                    try:
-                        jpgfile = safe_copy(jpgfile, coverfile)
-                    except Exception as e:
-                        logger.warning(f"Failed to copy jpeg file: {str(e)}")
-                        return False, str(e), folder
-
-            if CONFIG.get_bool('IMP_CALIBRE_MAGTITLE'):
-                authors = title
-                global_name = issuedate
-            else:
-                authors = 'magazines'
-                global_name = format_issue_filename(CONFIG['MAG_DEST_FILE'], title, get_dateparts(issuedate))
-
-            tags = 'Magazine'
-            if CONFIG.get_bool('TEST_TAGS'):
-                if mag_genres:
-                    tags = f"{tags}, {mag_genres}"
-
-            params = [magfile, '--duplicates', '--authors', authors, '--series', title,
-                      '--title', global_name, '--tags', tags]
-            if jpgfile:
-                image = ['--cover', jpgfile]
-                params.extend(image)
-            res, err, rc = calibredb('add', params)
-        else:
-            if CONFIG.get_bool('IMP_CALIBREOVERWRITE'):
-                res, err, rc = calibredb('add', ['-1', '--automerge', 'overwrite'], [folder])
-            else:
-                res, err, rc = calibredb('add', ['-1'], [folder])
-
-        if rc:
-            return False, f"calibredb rc {rc} from {CONFIG['IMP_CALIBREDB']}", folder
-        elif booktype == "ebook" and (' --duplicates' in res or ' --duplicates' in err):
-            logger.warning(
-                f'Calibre failed to import {authorname} {bookname}, already exists, marking book as "Have"')
-            db = database.DBConnection()
-            try:
-                control_value_dict = {"BookID": bookid}
-                new_value_dict = {"Status": "Have"}
-                db.upsert("books", new_value_dict, control_value_dict)
-            finally:
-                db.close()
-            return True, '', folder
-        # Answer should look like "Added book ids : bookID" (string may be translated!)
+    if not path_exists(dest_path):
+        logger.debug(f"{dest_path} does not exist, so it's safe to create it")
+    elif not path_isdir(dest_path):
+        logger.debug(f"{dest_path} exists but is not a directory, deleting it")
         try:
-            calibre_id = res.rsplit(": ", 1)[1].split("\n", 1)[0].split(',')[0].strip()
-        except IndexError:
-            return False, f'Calibre failed to import {authorname} {bookname}, no added bookids', folder
+            remove_file(dest_path)
+        except OSError as why:
+            return False, f"Unable to delete {dest_path}: {why.strerror}", dest_path
 
-        if calibre_id.isdigit():
-            logger.debug(f'Calibre ID: [{calibre_id}]')
-        else:
-            logger.warning(f'Calibre ID looks invalid: [{calibre_id}]')
+    if path_isdir(dest_path):
+        setperm(dest_path)
+    elif not make_dirs(dest_path):
+        return False, f"Unable to create directory {dest_path}", dest_path
 
-        our_opf = False
-        rc = 0
-        if ((booktype == "magazine" and not CONFIG.get_bool('IMP_AUTOADD_MAGONLY')) or
-                (booktype != "magazine" and not CONFIG.get_bool('IMP_AUTOADD_BOOKONLY'))):
-            # we can pass an opf with all the info, and a cover image
-            db = database.DBConnection()
-            if booktype in ['ebook', 'audiobook']:
-                cmd = ("SELECT AuthorName,BookID,BookName,BookDesc,BookIsbn,BookImg,BookDate,BookLang,"
-                       "BookPub,BookRate,Requester,AudioRequester,BookGenre,Narrator from books,authors "
-                       "WHERE BookID=? and books.AuthorID = authors.AuthorID")
-                data = db.match(cmd, (bookid,))
-            elif booktype == 'comic':
-                cmd = ("SELECT Title,comicissues.ComicID,IssueID,IssueAcquired,IssueFile,comicissues.Cover,"
-                       "Publisher,Contributors from comics,comicissues WHERE "
-                       "comics.ComicID = comicissues.ComicID and IssueID=? and comicissues.ComicID=?")
-                data = db.match(cmd, (issueid, bookid))
-                bookid = f"{bookid}_{issueid}"
-            else:
-                data = db.match("SELECT Language,Genre from magazines WHERE Title=? COLLATE NOCASE", (title,))
-            db.close()
+    # Note: encoding detection is handled inside enforce_bytes via make_utf8bytes
+    dest_path = enforce_bytes(dest_path)  # Convert to bytes and enforce type
 
-            if not data:
-                logger.error(f'No data found for bookid {bookid}')
-            else:
-                opfpath = ''
-                if booktype in ['ebook', 'audiobook']:
-                    process_img(folder, bookid, data['BookImg'], global_name, ImageType.BOOK)
-                    opfpath, our_opf = create_opf(folder, data, global_name, True)
-                    # if we send an opf, does calibre update the book-meta as well?
-                elif booktype == 'comic':
-                    if data.get('Cover'):
-                        process_img(folder, bookid, data['Cover'], global_name, ImageType.COMIC)
-                    if not CONFIG.get_bool('IMP_COMICOPF'):
-                        logger.debug('create_comic_opf is disabled')
-                    else:
-                        opfpath, our_opf = create_comic_opf(folder, data, global_name, True)
-                else:
-                    if not CONFIG.get_bool('IMP_MAGOPF'):
-                        logger.debug('create_mag_opf is disabled')
-                    else:
-                        opfpath, our_opf = create_mag_opf(folder, title, issuedate, issueid,
-                                                          language=data['Language'], genres=mag_genres,
-                                                          overwrite=True)
-                # calibre likes "metadata.opf"
-                opffile = os.path.basename(opfpath)
-                if opffile != 'metadata.opf':
-                    try:
-                        opfpath = safe_copy(opfpath, opfpath.replace(opffile, 'metadata.opf'))
-                    except Exception as e:
-                        logger.warning(f"Failed to copy opf file: {str(e)}")
-                        opfpath = ''
-                if opfpath:
-                    _, _, rc = calibredb('set_metadata', None, [calibre_id, opfpath])
-                    if rc:
-                        logger.warning("calibredb unable to set opf")
+    return True, "", dest_path
 
-                tags = ''
-                if CONFIG.get_bool('OPF_TAGS'):
-                    if booktype == 'magazine':
-                        tags = 'Magazine'
-                        if CONFIG.get_bool('TEST_TAGS'):
-                            if mag_genres:
-                                tags = f"{tags}, {mag_genres}"
-                    if booktype == 'ebook':
-                        if CONFIG.get_bool('GENRE_TAGS') and data['BookGenre']:
-                            tags = data['BookGenre']
-                        if CONFIG.get_bool('WISHLIST_TAGS'):
-                            if data['Requester'] is not None:
-                                tag = data['Requester'].replace(" ", ",")
-                                if tag not in tags:
-                                    if tags:
-                                        tags += ', '
-                                    tags += tag
-                            elif data['AudioRequester'] is not None:
-                                tag = data['AudioRequester'].replace(" ", ",")
-                                if tag not in tags:
-                                    if tags:
-                                        tags += ', '
-                                    tags += tag
-                if tags:
-                    _, _, rc = calibredb('set_metadata', ['--field', f'tags:{tags}'], [calibre_id])
-                    if rc:
-                        logger.warning("calibredb unable to set tags")
 
-        if not our_opf and not rc:  # pre-existing opf might not have our preferred authorname/title/identifier
-            if booktype == 'magazine':
-                if CONFIG.get_bool('IMP_CALIBRE_MAGTITLE'):
-                    authorname = title
-                    global_name = issuedate
-                else:
-                    authorname = 'magazines'
-                    global_name = format_issue_filename(CONFIG['MAG_DEST_FILE'], title, get_dateparts(issuedate))
-                _, _, rc = calibredb('set_metadata', ['--field', f'pubdate:{issuedate}'], [calibre_id])
-                if rc:
-                    logger.warning("calibredb unable to set pubdate")
-            _, _, rc = calibredb('set_metadata', ['--field', f'authors:{unaccented(authorname, only_ascii=False)}'],
-                                 [calibre_id])
-            if rc:
-                logger.warning("calibredb unable to set author")
-            _, _, rc = calibredb('set_metadata', ['--field',
-                                                  f'title:{unaccented(global_name, only_ascii=False)}'],
-                                 [calibre_id])
-            if rc:
-                logger.warning("calibredb unable to set title")
+def _should_copy_file(fname: str, best_format: str, book_type: str) -> bool:
+    """
+    Determine if a file should be copied to the destination.
 
-            _, _, rc = calibredb('set_metadata', ['--field', f'identifiers:{identifier}'], [calibre_id])
-            if rc:
-                logger.warning("calibredb unable to set identifier")
+    Args:
+        fname: Filename to check
+        best_format: Best format to keep (empty string if not filtering)
+        book_type: Type of book (ebook, audiobook, comic, magazine)
 
-        if booktype == 'comic':  # for now assume calibredb worked, and didn't move the file
-            return True, data['IssueFile'], folder
+    Returns:
+        True if file should be copied, False otherwise
+    """
+    # If we're filtering for a specific format and this is a valid booktype
+    # but not the best format, skip it
+    if best_format and CONFIG.is_valid_booktype(fname, booktype=book_type) and not fname.endswith(best_format):
+        return False
 
-        # Ask calibre for the author/title, so we can construct the likely location
-        target_dir = ''
-        calibre_authorname = ''
-        dest_dir = get_directory('eBook')
-        res, err, rc = calibredb('list', ['--fields', 'title,authors', '--search', f'id:{calibre_id}'],
-                                 ['--for-machine'])
-        if not rc:
-            try:
-                res = f"{{ {res.split('{')[1].split('}')[0]} }}"
-                res = json.loads(res)
-                if booktype == 'magazine':
-                    dest_dir = CONFIG['MAG_DEST_FOLDER']
-                    if CONFIG.get_bool('MAG_RELATIVE'):
-                        dest_dir = os.path.join(get_directory('eBook'), dest_dir)
-                elif booktype == 'comic':
-                    dest_dir = CONFIG['COMIC_DEST_FOLDER']
-                    if CONFIG.get_bool('COMIC_RELATIVE'):
-                        dest_dir = os.path.join(get_directory('eBook'), dest_dir)
+    # Copy valid book files or metadata files
+    return CONFIG.is_valid_booktype(fname, booktype=book_type) or _is_metadata_file(
+        fname
+    )
 
-                while '$' in dest_dir:
-                    dest_dir = os.path.dirname(dest_dir)
 
-                logger.debug(f"[{dest_dir}][{res['authors']}][{res['title']}][{res['id']}]")
-                target_dir = os.path.join(dest_dir, res['authors'], f"{res['title']} ({res['id']})")
-                logger.debug(f"Calibre target: {target_dir}")
-                calibre_authorname = res['authors']
-                calibre_id = res['id']
-            except Exception as e:
-                logger.debug(f"Unable to read json response; {str(e)}")
-                target_dir = ''
+def _get_dest_filename(
+    fname: str, global_name: str, book_type: str, dest_dir: str
+) -> str:
+    """
+    Generate destination filename based on book type.
 
-            if not target_dir or not path_isdir(target_dir) and calibre_authorname:
-                author_dir = os.path.join(dest_dir, calibre_authorname)
-                if path_isdir(author_dir):  # assumed author directory
-                    our_id = f'({calibre_id})'
-                    entries = listdir(author_dir)
-                    for entry in entries:
-                        if entry.endswith(our_id):
-                            target_dir = os.path.join(author_dir, entry)
+    Args:
+        fname: Source filename
+        global_name: Base name for renamed files
+        book_type: Type of book (ebook, audiobook, comic, magazine)
+        dest_dir: Destination directory
+
+    Returns:
+        Full destination file path
+    """
+    if book_type in [BookType.AUDIOBOOK.value, BookType.COMIC.value]:
+        # For audiobooks and comics, only rename metadata files
+        if _is_metadata_file(fname):
+            return os.path.join(dest_dir, global_name + os.path.splitext(fname)[1])
+        # Keep original filename for audio/comic files
+        return os.path.join(dest_dir, fname)
+    # For ebooks and magazines, rename all files
+    return os.path.join(dest_dir, global_name + os.path.splitext(fname)[1])
+
+
+def _find_preferred_book_file(
+    book_type: str,
+    dest_path: bytes,
+    global_name: bytes,
+    dir_list,
+    udest_path: str,
+    logger,
+) -> str:
+    """
+    Find the preferred file to use as the main book file.
+
+    For ebooks: Find the first format matching the priority order
+    For audiobooks: Find first part of multipart or whole-book file
+    For other types: Return empty string
+
+    Args:
+        book_type: Type of book (ebook, audiobook, etc.)
+        dest_path: Destination path (bytes)
+        global_name: Global filename (bytes)
+        dir_list: List of files in source directory
+        udest_path: Unicode destination path
+        logger: Logger instance
+
+    Returns:
+        Path to preferred file, or empty string if none found
+    """
+    if book_type == BookType.EBOOK.value:
+        book_basename = os.path.join(dest_path, global_name)
+        book_basename_str = enforce_str(
+            make_unicode(book_basename)
+        )  # Ensure string for f-string
+        ebook_extn_list = get_list(CONFIG["EBOOK_TYPE"])
+        for extn in ebook_extn_list:
+            preferred_type = f"{book_basename_str}.{extn}"
+            if path_exists(preferred_type):
+                logger.debug(f"Link to preferred type {extn}, {preferred_type}")
+                return preferred_type
+        return ""
+
+    if book_type == BookType.AUDIOBOOK.value:
+        firstfile = ""
+        tokmatch = ""
+
+        # First, look for a whole-book file (no numbers in filename)
+        for f in dir_list:
+            if not re.findall(r"\d+\b", f) and CONFIG.is_valid_booktype(
+                f, booktype=book_type
+            ):
+                firstfile = os.path.join(udest_path, f)
+                tokmatch = "whole"
+                logger.debug(f"Found whole audiobook file: {f}")
+                break
+
+        # If no whole-book file, find first part by common numbering patterns
+        if not tokmatch:
+            for token in [" 001.", " 01.", " 1.", " 001 ", " 01 ", " 1 ", "001", "01"]:
+                if tokmatch:
+                    break
+                for f in dir_list:
+                    if CONFIG.is_valid_booktype(f, booktype=book_type):
+                        if not firstfile:
+                            firstfile = os.path.join(udest_path, f)
+                            logger.debug(f"Primary link to {f}")
+                        if token in f:
+                            firstfile = os.path.join(udest_path, f)
+                            logger.debug(f"Link to first part [{token}], {f}")
+                            tokmatch = token
                             break
 
-                    if not target_dir or not path_isdir(target_dir):
-                        logger.debug(f'Failed to locate calibre folder with id {our_id} in {author_dir}')
-                else:
-                    logger.debug(f'Failed to locate calibre author folder {author_dir}')
+        return firstfile
 
-        if not target_dir or not path_isdir(target_dir):
-            # calibre does not like accents or quotes in names
-            if authorname.endswith('.'):  # calibre replaces trailing dot with underscore e.g. Jr. becomes Jr_
-                authorname = f"{authorname[:-1]}_"
-            author_dir = os.path.join(dest_dir, unaccented(authorname.replace('"', '_'), only_ascii=False), '')
-            if path_isdir(author_dir):  # assumed author directory
-                our_id = f'({calibre_id})'
-                entries = listdir(author_dir)
-                for entry in entries:
-                    if entry.endswith(our_id):
-                        target_dir = os.path.join(author_dir, entry)
-                        break
+    return ""
 
-                if not target_dir or not path_isdir(target_dir):
-                    return False, f'Failed to locate folder with calibre_id {our_id} in {author_dir}', folder
+
+def _handle_magazine_comic_metadata(
+    book_type: str,
+    book_path: str,
+    book_filename: str,
+    bookid: str,
+    issueid: str,
+    title: str,
+    issuedate: str,
+    mag_genres: str,
+    global_name,
+    udest_path: str,
+    logger,
+):
+    """
+    Create metadata files and .ll_ignore for magazines and comics.
+
+    Args:
+        book_type: Type (comic or magazine)
+        book_path: Path to book files
+        bookid: Book ID
+        issueid: Issue ID (for comics/magazines)
+        title: Magazine title
+        issuedate: Issue date
+        mag_genres: Magazine genres
+        global_name: Global filename
+        udest_path: Unicode destination path
+        logger: Logger instance
+    """
+    # Create .ll_ignore file
+    try:
+        ignorefile = os.path.join(udest_path, ".ll_ignore")
+        with open(syspath(ignorefile), "w") as f:
+            f.write(book_type)
+    except (OSError, TypeError) as e:
+        logger.warning(f"Unable to create/write to ignorefile: {e!s}")
+
+    if book_type == BookType.COMIC.value:
+        cmd = (
+            "SELECT Title,comicissues.ComicID,IssueID,IssueAcquired,IssueFile,comicissues.Cover,"
+            "Publisher,Contributors from comics,comicissues WHERE "
+            "comics.ComicID = comicissues.ComicID and IssueID=? and comicissues.ComicID=?"
+        )
+        db = database.DBConnection()
+        try:
+            data = dict(db.match(cmd, (issueid, bookid)))
+        finally:
+            db.close()
+
+        bookid = f"{bookid}_{issueid}"
+        if data:
+            # process_img and create_comic_opf expect string for global_name
+            process_img(book_path, bookid, data["Cover"], global_name, ImageType.COMIC)
+            if CONFIG.get_bool("IMP_COMICOPF"):
+                _, _ = create_comic_opf(book_path, data, global_name, True)
             else:
-                return False, f'Failed to locate author folder {author_dir}', folder
+                logger.debug("create_comic_opf is disabled")
+        else:
+            logger.debug(f"No data found for {bookid}")
 
-        if booktype == 'ebook':
-            remv = CONFIG.get_bool('FULL_SCAN')
-            logger.debug(f'Scanning directory [{target_dir}]')
-            _ = library_scan(target_dir, remove=remv)
-
-        newbookfile = book_file(target_dir, booktype=booktype, config=CONFIG)
-        # should we be setting permissions on calibres directories and files?
-        if newbookfile:
-            setperm(target_dir)
-            if booktype in ['magazine', 'comic']:
-                try:
-                    ignorefile = os.path.join(target_dir, '.ll_ignore')
-                    with open(syspath(ignorefile), 'w', encoding='utf-8') as f:
-                        f.write(make_unicode(booktype))
-                except IOError as e:
-                    logger.warning(f"Unable to create/write to ignorefile: {str(e)}")
-
-            for fname in listdir(target_dir):
-                setperm(os.path.join(target_dir, fname))
-
-            # clear up any residual non-calibre folder
-            shutil.rmtree(target_dir.rsplit('(', 1)[0].strip(), ignore_errors=True)
-            return True, newbookfile, folder
-        return False, f"Failed to find a valid {booktype} in [{target_dir}]", folder
-    except Exception as e:
-        logger.error(f'Unhandled exception importing to calibre: {traceback.format_exc()}')
-        return False, f'calibredb import failed, {type(e).__name__} {str(e)}', folder
+    elif CONFIG.get_bool("IMP_MAGOPF"):
+        db = database.DBConnection()
+        try:
+            entry = dict(
+                db.match(
+                    "SELECT Language,Genre FROM magazines where Title=? COLLATE NOCASE",
+                    (title,),
+                )
+            )
+            if entry:
+                _, _ = create_mag_opf(
+                    book_filename,
+                    title,
+                    issuedate,
+                    issueid,
+                    language=entry["Language"],
+                    genres=mag_genres,
+                    overwrite=True,
+                )
+        finally:
+            db.close()
+    else:
+        logger.debug("create_mag_opf is disabled")
 
 
-# noinspection PyBroadException
-def process_destination(pp_path=None, dest_path=None, global_name=None, data=None, booktype='', preprocess=True):
-    """ Copy/move book/mag and associated files into target directory
-        Return True, full_path_to_book, pp_path (which may have changed)  or False, error_message"""
+def _process_destination(
+    book_metadata: BookMetadata,
+    book_path: str,
+    logger: logging.Logger,
+    mode: str = "",
+    preprocess: bool = True,
+) -> "tuple[bool, str, str ]":
+    """
+    Copy/move book/mag and associated files into target directory.
 
-    TELEMETRY.record_usage_data('Process/Destination')
-    logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
-    logger.debug(f"{booktype} [{global_name}] {str(data)}")
-    booktype = booktype.lower()
-    pp_path = make_unicode(pp_path)
-    bestformat = ''
-    found_types = []
-    cover = ''
-    issueid = data.get('IssueDate', '')
-    authorname = data.get('AuthorName', '')
-    bookname = data.get('BookName', '')
-    bookid = data.get('BookID', '')
-    title = data.get('Title', '')
-    issuedate = data.get('IssueDate', '')
-    mode = data.get('NZBmode', '')
-    mag_genres = ''
+    Args:
+        book_path: Source path containing the book files
+        book_metadata: BookMetadata object with all book information and destination paths
+        mode: Download mode (torrent, magnet, nzb, etc.) for copy/seeding logic
+        preprocess: Whether to run preprocessing steps
 
-    if booktype == 'ebook' and CONFIG.get_bool('ONE_FORMAT'):
-        booktype_list = get_list(CONFIG['EBOOK_TYPE'])
-        for btype in booktype_list:
-            for fname in listdir(pp_path):
-                extn = os.path.splitext(fname)[1].lstrip('.')
-                if extn and extn.lower() == btype:
-                    found_types.append(btype)
-                    if not bestformat:
-                        bestformat = btype
+    Returns:
+        Tuple of (success, full_path_to_book, book_path)
+        - success: True if successful, False otherwise
+        - full_path_to_book: Path to the processed book file
+        - book_path: Processing path (may have changed to .unpack)
+    """
+    TELEMETRY.record_usage_data("Process/Destination")
 
-    if bestformat:
-        match = bestformat
-        logger.debug(f"One format import, found {','.join(found_types)}, best match {bestformat}")
+    # Extract commonly used fields from metadata
+    book_type = book_metadata.book_type
+    book_id = book_metadata.book_id
+    dest_path = book_metadata.dest_path
+
+    # Convert global_name to bytes for filesystem operations
+    # Create unicode version for use in os.path.join and function calls
+    global_name = enforce_bytes(book_metadata.global_name)
+    uglobal_name = enforce_str(global_name)  # Convert bytes to string for joins
+
+    # Get type-specific fields from metadata
+    fields = book_metadata.get_processing_fields()
+    authorname = fields["authorname"]
+    bookname = fields["bookname"]
+    issueid = fields["issueid"]
+    title = fields["title"]
+    issuedate = fields["issuedate"]
+    mag_genres = fields["mag_genres"]
+    cover = fields["cover"]
+
+    book_path = enforce_str(make_unicode(book_path))
+
+    logger.info(
+        f"DESTINATION PROCESSING - Book type: {book_type}, Source: {book_path}, "
+        f"Destination: {dest_path}, Global name: {uglobal_name}"
+    )
+
+    dir_list = listdir(book_path)
+    best_format = ""
+    found_types = {}
+    single_ebook_type = book_type == BookType.EBOOK.value and CONFIG.get_bool(
+        "ONE_FORMAT"
+    )
+    if single_ebook_type:
+        ebook_extn_list = get_list(CONFIG["EBOOK_TYPE"])
+        best_format, found_types = _find_best_format(book_path, ebook_extn_list)
+
+    match = False
+    if best_format:
+        match = True
+        logger.debug(
+            f"One format import, found {','.join(found_types)}, best match {best_format}"
+        )
     else:  # mag, comic or audiobook or multi-format book
-        match = False
-        for fname in listdir(pp_path):
-            if CONFIG.is_valid_booktype(fname, booktype=booktype):
+        for _fname in dir_list:
+            fname = enforce_str(_fname)
+            if CONFIG.is_valid_booktype(fname, booktype=book_type):
                 match = True
                 break
 
     if not match:
         # no book/mag found in a format we wanted. Leave for the user to delete or convert manually
-        return (False, f'Unable to locate a valid filetype ({booktype}) in {pp_path}, leaving for manual processing',
-                pp_path)
+        return (
+            False,
+            f"Unable to locate a valid filetype ({book_type}) in {book_path}, leaving for manual processing",
+            book_path,
+        )
 
-    if not pp_path.endswith('.unpack') and (CONFIG.get_bool('DESTINATION_COPY') or
-                                            (mode in ['torrent', 'magnet', 'torznab'] and
-                                             CONFIG.get_bool('KEEP_SEEDING'))):
-
-        dest_dir = f"{pp_path}.unpack"
+    _, path_extn = _tokenize_file(book_path)
+    if path_extn != "unpack" and (
+        CONFIG.get_bool("DESTINATION_COPY")
+        or (
+            mode in ["torrent", "magnet", "torznab"] and CONFIG.get_bool("KEEP_SEEDING")
+        )
+    ):
+        dest_dir = f"{book_path}.unpack"
         logger.debug(f"Copying to target {dest_dir}")
-        failed, err = copy_tree(pp_path, f"{pp_path}.unpack")
+        failed, err = copy_tree(book_path, dest_dir)
         if not failed:
-            pp_path = dest_dir
+            book_path = dest_dir
         else:
             msg = f"Failed to copy {failed} files to {dest_dir}, aborted"
             logger.error(msg)
             logger.debug(f"{err}")
-            return False, msg
+            return False, msg, ""
 
     if preprocess:
-        logger.debug(f"preprocess ({booktype}) {pp_path}")
-        if booktype == 'ebook':
-            preprocess_ebook(pp_path)
-        elif 'audio' in booktype:
-            preprocess_audio(pp_path, bookid, authorname, bookname)
-        elif booktype == 'magazine':
-            db = database.DBConnection()
-            try:
-                res = db.match("SELECT CoverPage,Genre from magazines WHERE Title=?", (bookid,))
-            finally:
-                db.close()
-            cover = 0
-            if res:
-                cover = check_int(res['CoverPage'], 0)
-                mag_genres = res['Genre'] if res['Genre'] else ''
-            success, msg = preprocess_magazine(pp_path, cover=cover, tag=CONFIG.get_bool('TAG_PDF'),
-                                               title=bookid, issue=issuedate, genres=mag_genres)
+        logger.debug(f"PreProcess ({book_type}) {book_path}")
+        if book_type == BookType.EBOOK.value:
+            preprocess_ebook(book_path)
+        elif book_type == BookType.AUDIOBOOK.value:
+            preprocess_audio(book_path, book_id, authorname, bookname)
+        elif book_type == BookType.MAGAZINE.value:
+            # Use metadata fields instead of querying database again
+            success, msg = preprocess_magazine(
+                book_path,
+                cover=cover,
+                tag=CONFIG.get_bool("TAG_PDF"),
+                title=book_id,
+                issue=issuedate,
+                genres=mag_genres,
+            )
             if not success:
-                return False, msg, pp_path
+                return False, msg, book_path
 
         # run custom pre-processing, for example remove unwanted formats
         # or force format conversion before sending to calibre
-        if len(CONFIG['EXT_PREPROCESS']):
-            logger.debug(f"Running external PreProcessor: {booktype} {pp_path} {authorname} {bookname}")
-            params = [CONFIG['EXT_PREPROCESS'], booktype, pp_path, authorname, bookname]
+        if len(CONFIG["EXT_PREPROCESS"]):
+            logger.debug(
+                f"Running external PreProcessor: {book_type} {book_path} {authorname} {bookname}"
+            )
+            params = [
+                CONFIG["EXT_PREPROCESS"],
+                book_type,
+                book_path,
+                authorname,
+                bookname,
+            ]
             rc, res, err = run_script(params)
             if rc:
-                return False, f"Preprocessor returned {rc}: res[{res}] err[{err}]", pp_path
-            logger.debug(f"PreProcessor: {res}"), pp_path
+                return (
+                    False,
+                    f"PreProcessor returned {rc}: res[{res}] err[{err}]",
+                    book_path,
+                )
+            logger.debug(f"PreProcessor: {res}", book_path)
 
-        if booktype == 'ebook' and CONFIG.get_bool('ONE_FORMAT'):
-            # bestformat may be different after preprocessing
-            bestformat = ''
-            found_types = []
-            booktype_list = get_list(CONFIG['EBOOK_TYPE'])
-            for btype in booktype_list:
-                for fname in listdir(pp_path):
-                    extn = os.path.splitext(fname)[1].lstrip('.')
-                    if extn and extn.lower() == btype:
-                        found_types.append(btype)
-                        if not bestformat:
-                            bestformat = btype
-            logger.debug(f"After preprocessing, found {','.join(found_types)}, best match {bestformat}")
+        if single_ebook_type:
+            ebook_extn_list = get_list(CONFIG["EBOOK_TYPE"])
+            best_format, found_types = _find_best_format(book_path, ebook_extn_list)
+            logger.debug(
+                f"After PreProcessing, found {','.join(found_types)}, best match {best_format}"
+            )
 
     # If ebook, magazine or comic, do we want calibre to import it for us
-    newbookfile = ''
-    if (CONFIG['IMP_CALIBREDB'] and
-            (booktype == 'ebook' and CONFIG.get_bool('IMP_CALIBRE_EBOOK')) or
-            (booktype == 'magazine' and CONFIG.get_bool('IMP_CALIBRE_MAGAZINE')) or
-            (booktype == 'comic' and CONFIG.get_bool('IMP_CALIBRE_COMIC'))):
-        data['bestformat'] = bestformat
-        data['cover'] = cover
-        data['mag_genres'] = mag_genres
-        return send_to_calibre(booktype, global_name, pp_path, data)
+    newbookfile = ""
+    if _should_use_calibre(book_type):
+        # Build data dict for Calibre from metadata
+        data = book_metadata.get_opf_data()
+        data["bestformat"] = best_format
+        data["cover"] = cover
+        data["mag_genres"] = mag_genres
+        return send_to_calibre(book_type, uglobal_name, book_path, data)
 
     # we are copying the files ourselves
-    loggerpostprocess.debug(f"BookType: {booktype}, calibredb: [{CONFIG['IMP_CALIBREDB']}]")
-    loggerpostprocess.debug(f"Source Path: {repr(pp_path)}")
-    loggerpostprocess.debug(f"Dest Path: {repr(dest_path)}")
-    dest_path, encoding = make_utf8bytes(dest_path)
-    if encoding:
-        loggerpostprocess.debug(f"dest_path was {encoding}")
-    if not path_exists(dest_path):
-        logger.debug(f'{dest_path} does not exist, so it\'s safe to create it')
-    elif not path_isdir(dest_path):
-        logger.debug(f'{dest_path} exists but is not a directory, deleting it')
-        try:
-            remove_file(dest_path)
-        except OSError as why:
-            return False, f'Unable to delete {dest_path}: {why.strerror}', pp_path
-    if path_isdir(dest_path):
-        setperm(dest_path)
-    elif not make_dirs(dest_path):
-        return False, f'Unable to create directory {dest_path}', pp_path
+    success, error_msg, dest_path = _prepare_destination_directory(dest_path, logger)
+    if not success:
+        logger.error(f"FAIL: Cannot prepare destination: {error_msg}")
+        return False, error_msg, book_path
 
-    udest_path = make_unicode(dest_path)  # we can't mix unicode and bytes in log messages or joins
-    global_name, encoding = make_utf8bytes(global_name)
-    if encoding:
-        loggerpostprocess.debug(f"global_name was {encoding}")
+    # dest_path is bytes - create unicode version for string operations
+    udest_path = enforce_str(dest_path)  # Convert bytes to string for os.path.join
+
+    dir_list = listdir(book_path)  # Refresh our directory listing
+    copied_count = 0
 
     # ok, we've got a target directory, try to copy only the files we want, renaming them on the fly.
-    firstfile = ''  # try to keep track of "preferred" ebook type or the first part of multipart audiobooks
-    for fname in listdir(pp_path):
-        if bestformat and CONFIG.is_valid_booktype(fname, booktype=booktype) and not fname.endswith(bestformat):
-            logger.debug(f"Ignoring {fname} as not {bestformat}")
-        else:
-            if CONFIG.is_valid_booktype(fname, booktype=booktype) or \
-                    (fname.lower().endswith(".jpg") or fname.lower().endswith(".opf")):
-                srcfile = os.path.join(pp_path, fname)
-                if booktype in ['audiobook', 'comic']:
-                    if fname.lower().endswith(".jpg") or fname.lower().endswith(".opf"):
-                        destfile = os.path.join(udest_path, make_unicode(global_name) + os.path.splitext(fname)[1])
-                    else:
-                        destfile = os.path.join(udest_path, fname)  # don't rename audio or comic files, just copy
-                else:
-                    destfile = os.path.join(udest_path, make_unicode(global_name) + os.path.splitext(fname)[1])
-                try:
-                    logger.debug(f'Copying {fname} to directory {udest_path}')
-                    destfile = safe_copy(srcfile, destfile)
-                    setperm(destfile)
-                    if CONFIG.is_valid_booktype(make_unicode(destfile), booktype=booktype):
-                        newbookfile = destfile
-                except Exception as why:
-                    # extra debugging to see if we can figure out a windows encoding issue
-                    parent = os.path.dirname(destfile)
-                    try:
-                        with open(syspath(os.path.join(parent, 'll_temp')), 'w', encoding='utf-8') as f:
-                            f.write(u'test')
-                        remove_file(os.path.join(parent, 'll_temp'))
-                    except Exception as w:
-                        logger.error(f"Destination Directory [{parent}] is not writeable: {w}")
-                    return (False, f"Unable to copy file {srcfile} to {destfile}: {type(why).__name__} {str(why)}",
-                            pp_path)
-            else:
-                logger.debug(f'Ignoring unwanted file: {fname}')
+    logger.info(f"COPY FILES STARTING - {book_path} ==> {udest_path}")
+    for _fname in dir_list:
+        fname = enforce_str(_fname)
+        if not _should_copy_file(fname, best_format, book_type):
+            logger.debug(f"Skip: {fname}")
+            continue
 
-    if booktype in ['ebook', 'audiobook']:
-        cmd = ("SELECT AuthorName,BookID,BookName,BookDesc,BookIsbn,BookImg,BookDate,BookLang,BookPub,BookRate,"
-               "Requester,AudioRequester,BookGenre,Narrator from books,authors WHERE BookID=? "
-               "and books.AuthorID = authors.AuthorID")
-        db = database.DBConnection()
+        srcfile = os.path.join(book_path, fname)
+        destfile = _get_dest_filename(fname, uglobal_name, book_type, udest_path)
+
         try:
-            data = db.match(cmd, (bookid,))
-        finally:
-            db.close()
-        process_img(pp_path, bookid, data['BookImg'], make_unicode(global_name), ImageType.BOOK)
-        _ = create_opf(pp_path, data, make_unicode(global_name), True)
+            destfile = safe_copy(srcfile, destfile)
+            setperm(destfile)
+            copied_count += 1
+            logger.info(f"File copied to {destfile}")
+            if destfile and CONFIG.is_valid_booktype(
+                enforce_str(make_unicode(destfile)), booktype=book_type
+            ):
+                newbookfile = destfile
+        except Exception as why:
+            # extra debugging to see if we can figure out a windows encoding issue
+            parent = os.path.dirname(destfile)
+            try:
+                with open(
+                    syspath(os.path.join(parent, "ll_temp")),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    f.write("test")
+                remove_file(os.path.join(parent, "ll_temp"))
+            except Exception as w:
+                logger.error(f"Destination Directory [{parent}] is not writeable: {w}")
+            return (
+                False,
+                f"Unable to copy file {srcfile} to {destfile}: {type(why).__name__} {why!s}",
+                book_path,
+            )
 
-    # for ebooks, prefer the first booktype found in ebook_type list
-    if booktype == 'ebook':
-        book_basename = os.path.join(dest_path, global_name)
-        booktype_list = get_list(CONFIG['EBOOK_TYPE'])
-        for booktype in booktype_list:
-            preferred_type = f"{make_unicode(book_basename)}.{booktype}"
-            if path_exists(preferred_type):
-                logger.debug(f"Link to preferred type {booktype}, {preferred_type}")
-                firstfile = preferred_type
-                break
+    logger.info(f"COPY FILES COMPLETE - Files copied: {copied_count} to {udest_path}")
 
-    # link to the first part of multipart audiobooks unless there is a whole-book file
-    elif booktype == 'audiobook':
-        tokmatch = ''
-        for f in listdir(dest_path):
-            # if no number_period or number_space in filename assume its whole-book
-            if not re.findall(r'\d+\b', f) and CONFIG.is_valid_booktype(f, booktype='audiobook'):
-                firstfile = os.path.join(udest_path, f)
-                tokmatch = 'whole'
-                break
-        for token in [' 001.', ' 01.', ' 1.', ' 001 ', ' 01 ', ' 1 ', '001', '01']:
-            if tokmatch:
-                break
-            for f in listdir(dest_path):
-                if CONFIG.is_valid_booktype(f, booktype='audiobook'):
-                    if not firstfile:
-                        firstfile = os.path.join(udest_path, f)
-                        logger.debug(f"Primary link to {f}")
-                    if token in f:
-                        firstfile = os.path.join(udest_path, f)
-                        logger.debug(f"Link to first part [{token}], {f}")
-                        tokmatch = token
-                        break
+    if book_type in [BookType.EBOOK.value, BookType.AUDIOBOOK.value]:
+        # Use metadata we already have instead of querying database again
+        # Use isinstance for type narrowing (pyright requires this)
+        if isinstance(book_metadata, EbookMetadata):
+            process_img(
+                book_path,
+                book_id,
+                book_metadata.book_img,
+                uglobal_name,
+                ImageType.BOOK,
+            )
+            if CONFIG.get_bool('IMP_EBOOKOPF'):
+                opf_data = book_metadata.get_opf_data()
+                _ = create_opf(book_path, opf_data, uglobal_name, True)
 
-    elif booktype in ['magazine', 'comic']:
-        try:
-            ignorefile = os.path.join(udest_path, '.ll_ignore')
-            with open(syspath(ignorefile), 'w') as f:
-                f.write(make_unicode(booktype))
-        except (IOError, TypeError) as e:
-            logger.warning(f"Unable to create/write to ignorefile: {str(e)}")
+        # try to keep track of "preferred" ebook type or the first part of multipart audiobooks
+        # Find the preferred file to use as the main book file
+        firstfile = _find_preferred_book_file(
+            book_type, dest_path, global_name, dir_list, udest_path, logger
+        )
 
-        if booktype == 'comic':
-            cmd = ("SELECT Title,comicissues.ComicID,IssueID,IssueAcquired,IssueFile,comicissues.Cover,"
-                   "Publisher,Contributors from comics,comicissues WHERE "
-                   "comics.ComicID = comicissues.ComicID and IssueID=? and comicissues.ComicID=?")
-            db = database.DBConnection()
-            data = db.match(cmd, (issueid, bookid))
-            db.close()
-            bookid = f"{bookid}_{issueid}"
-            if data:
-                process_img(pp_path, bookid, data['Cover'], global_name, ImageType.COMIC)
-                if not CONFIG.get_bool('IMP_COMICOPF'):
-                    logger.debug('create_comic_opf is disabled')
-                else:
-                    _, _ = create_comic_opf(pp_path, data, global_name, True)
-            else:
-                logger.debug(f'No data found for {bookid}_{issueid}')
-        else:  # magazine
-            if not CONFIG.get_bool('IMP_MAGOPF'):
-                logger.debug('create_mag_opf is disabled')
-            else:
-                db = database.DBConnection()
-                entry = db.match('SELECT Language,Genre FROM magazines where Title=? COLLATE NOCASE', (title,))
-                if entry:
-                    _, _ = create_mag_opf(pp_path, title, issuedate, issueid,
-                                          language=entry["Language"], genres=mag_genres,
-                                          overwrite=True)
-                db.close()
+        if firstfile:
+            newbookfile = firstfile
+            logger.info(f"Primary book file: {newbookfile}")
 
-    if firstfile:
-        newbookfile = firstfile
-    return True, newbookfile, pp_path
+    # Handle magazine/comic metadata creation
+    elif book_type in [BookType.MAGAZINE.value, BookType.COMIC.value]:
+        _handle_magazine_comic_metadata(
+            book_type,
+            book_path,
+            newbookfile,
+            book_id,
+            issueid,
+            title,
+            issuedate,
+            mag_genres,
+            uglobal_name,  # Use unicode version for process_img
+            udest_path,
+            logger,
+        )
+
+    logger.info(f"DESTINATION PROCESSING COMPLETE - {uglobal_name}")
+    return True, newbookfile, book_path
 
 
-def process_auto_add(src_path=None, booktype='book'):
+def _process_auto_add(src_path: str, book_type_enum: BookType = BookType.EBOOK):
     # Called to copy/move the book files to an auto add directory for the likes of Calibre which can't do nested dirs
     logger = logging.getLogger(__name__)
-    autoadddir = CONFIG['IMP_AUTOADD']
-    savefiles = CONFIG.get_bool('IMP_AUTOADD_COPY')
-    if booktype == 'mag':
-        autoadddir = CONFIG['IMP_AUTOADDMAG']
-        savefiles = CONFIG.get_bool('IMP_AUTOADDMAG_COPY')
+    autoadddir = CONFIG["IMP_AUTOADD"]
+    savefiles = CONFIG.get_bool("IMP_AUTOADD_COPY")
+
+    book_type_str = book_type_enum.value
+    if book_type_enum == BookType.MAGAZINE:
+        autoadddir = CONFIG["IMP_AUTOADDMAG"]
+        savefiles = CONFIG.get_bool("IMP_AUTOADDMAG_COPY")
 
     if not path_exists(autoadddir):
-        logger.error(f'AutoAdd directory for {booktype} [{autoadddir}] is missing or not set - cannot perform autoadd')
+        logger.error(
+            f"AutoAdd directory for {book_type_str} [{autoadddir}] is missing or not set - cannot perform autoadd"
+        )
         return False
-    TELEMETRY.record_usage_data('Process/Autoadd')
+    TELEMETRY.record_usage_data("Process/Autoadd")
     # Now try and copy all the book files into a single dir.
     try:
         names = listdir(src_path)
@@ -3315,439 +4153,73 @@ def process_auto_add(src_path=None, booktype='book'):
         # ignores author/title data in opf file if there is any embedded in book
 
         match = False
-        if booktype == 'book' and CONFIG.get_bool('ONE_FORMAT'):
-            booktype_list = get_list(CONFIG['EBOOK_TYPE'])
-            for booktype in booktype_list:
-                while not match:
-                    for name in names:
-                        extn = os.path.splitext(name)[1].lstrip('.')
-                        if extn and extn.lower() == booktype:
-                            match = booktype
+        if book_type_enum == BookType.EBOOK and CONFIG.get_bool("ONE_FORMAT"):
+            booktype_list = get_list(CONFIG["EBOOK_TYPE"])
+            for bktype in booktype_list:
+                if not match:
+                    for _name in names:
+                        name = enforce_str(_name)
+                        extn = os.path.splitext(name)[1].lstrip(".")
+                        if extn and extn.lower() == bktype:
+                            match = bktype
                             break
         copied = False
-        for name in names:
-            if match and CONFIG.is_valid_booktype(name, booktype=booktype) and not name.endswith(match):
-                logger.debug(f'Skipping {os.path.splitext(name)[1]}')
-            elif booktype == 'book' and CONFIG.get_bool('IMP_AUTOADD_BOOKONLY') and not \
-                    CONFIG.is_valid_booktype(name, booktype="book"):
-                logger.debug(f'Skipping {name}')
-            elif booktype == 'mag' and CONFIG.get_bool('IMP_AUTOADD_MAGONLY') and not \
-                    CONFIG.is_valid_booktype(name, booktype="mag"):
-                logger.debug(f'Skipping {name}')
+        for _name in names:
+            name = enforce_str(_name)
+            valid_type = CONFIG.is_valid_booktype(name, book_type_str)
+            if match and valid_type and not name.endswith(match):
+                logger.debug(f"Skipping book format {os.path.splitext(name)[1]}")
+            elif (
+                book_type_enum == BookType.EBOOK
+                and CONFIG.get_bool("IMP_AUTOADD_BOOKONLY")
+                and not valid_type
+            ):
+                logger.debug(f"Skipping non-book {name}")
+            elif (
+                book_type_enum == BookType.MAGAZINE
+                and CONFIG.get_bool("IMP_AUTOADD_MAGONLY")
+                and not valid_type
+            ):
+                logger.debug(f"Skipping non-mag {name}")
             else:
+                logger.debug(
+                    f"booktype [{book_type_str}] bookonly [{CONFIG.get_bool('IMP_AUTOADD_BOOKONLY')}] "
+                    f"validtype [{valid_type}]"
+                )
                 srcname = os.path.join(src_path, name)
                 dstname = os.path.join(autoadddir, name)
                 try:
                     if savefiles:
-                        logger.debug(f'AutoAdd Copying file [{name}] from [{srcname}] to [{dstname}]')
+                        logger.debug(
+                            f"AutoAdd Copying file [{name}] from [{srcname}] to [{dstname}]"
+                        )
                         dstname = safe_copy(srcname, dstname)
                     else:
-                        logger.debug(f'AutoAdd Moving file [{name}] from [{srcname}] to [{dstname}]')
+                        logger.debug(
+                            f"AutoAdd Moving file [{name}] from [{srcname}] to [{dstname}]"
+                        )
                         dstname = safe_move(srcname, dstname)
                     copied = True
                 except Exception as why:
-                    logger.error(f'AutoAdd - Failed to copy/move file [{name}] {type(why).__name__} [{str(why)}] ')
+                    logger.error(
+                        f"AutoAdd - Failed to copy/move file [{name}] {type(why).__name__} [{why!s}] "
+                    )
                     return False
                 try:
                     os.chmod(syspath(dstname), 0o666)  # make rw for calibre
                 except OSError as why:
-                    logger.warning(f"Could not set permission of {dstname} because [{why.strerror}]")
+                    logger.warning(
+                        f"Could not set permission of {dstname} because [{why.strerror}]"
+                    )
                     # permissions might not be fatal, continue
 
         if copied and not savefiles:  # do we want to keep the library files?
-            logger.debug(f'Removing {src_path}')
+            logger.debug(f"Removing {src_path}")
             shutil.rmtree(src_path)
 
     except OSError as why:
-        logger.error(f'AutoAdd - Failed because [{why.strerror}]')
+        logger.error(f"AutoAdd - Failed because [{why.strerror}]")
         return False
 
-    logger.info(f'Auto Add completed for [{src_path}]')
+    logger.info(f"Auto Add completed for [{src_path}]")
     return True
-
-
-def process_img(dest_path=None, bookid=None, bookimg=None, global_name=None, cache=ImageType.BOOK, overwrite=False):
-    """ cache the bookimg from url or filename, and optionally copy it to bookdir """
-    # if lazylibrarian.CONFIG['IMP_AUTOADD_BOOKONLY']:
-    #     logger.debug('Not creating coverfile, bookonly is set')
-    #     return
-
-    logger = logging.getLogger(__name__)
-    coverfile = jpg_file(dest_path)
-    if not overwrite and coverfile:
-        logger.debug(f'Cover {coverfile} already exists')
-        return
-    if not bookimg:
-        logger.debug(f'No cover to cache for {bookid}')
-        return
-
-    TELEMETRY.record_usage_data('Process/Image')
-    if bookimg.startswith('cache/'):
-        img = bookimg.replace('cache/', '')
-        if os.path.__name__ == 'ntpath':
-            img = img.replace('/', '\\')
-        cachefile = os.path.join(DIRS.CACHEDIR, img)
-    else:
-        link, success, _ = cache_img(cache, bookid, bookimg, False)
-        if not success:
-            logger.error(f'Error caching cover from {bookimg}, {link}')
-            return
-        cachefile = os.path.join(DIRS.DATADIR, link)
-
-    try:
-        coverfile = os.path.join(dest_path, f"{global_name}.jpg")
-        coverfile = safe_copy(cachefile, coverfile)
-        setperm(coverfile)
-    except Exception as e:
-        logger.error(f"Error copying image {bookimg} to {coverfile}, {type(e).__name__} {str(e)}")
-        return
-
-
-def create_comic_opf(pp_path, data, global_name, overwrite=False):
-    """ Needs calibre to be configured to read metadata from file contents, not filename """
-    title = data['Title']
-    issue = data['IssueID']
-    contributors = data.get('Contributors', '')
-    issue_id = f"{data['ComicID']}_{data['IssueID']}"
-    iname = f"{data['Title']}: {data['IssueID']}"
-    publisher = data['Publisher']
-    mtime = os.path.getmtime(data['IssueFile'])
-    iss_acquired = datetime.date.isoformat(datetime.date.fromtimestamp(mtime))
-
-    data = {
-        'AuthorName': title,
-        'BookID': issue_id,
-        'BookName': iname,
-        'FileAs': iname,
-        'BookDesc': '',
-        'BookIsbn': '',
-        'BookDate': iss_acquired,
-        'BookLang': '',
-        'BookImg': f"{global_name}.jpg",
-        'BookPub': publisher,
-        'Series': title,
-        'Series_index': issue
-    }  # type: dict
-    if contributors:
-        data['Contributors'] = contributors
-    # noinspection PyTypeChecker
-    return create_opf(pp_path, data, global_name, overwrite=overwrite)
-
-
-def create_mag_opf(issuefile, title, issue, issue_id, language='en', genres='', overwrite=False):
-    """ Needs calibre to be configured to read metadata from file contents, not filename """
-    logger = logging.getLogger(__name__)
-
-    if CONFIG.get_bool('IMP_CALIBRE_MAGTITLE'):
-        authors = title
-    else:
-        authors = 'magazines'
-
-    logger.debug(
-        f"Creating opf with file:{issuefile} authors:{authors} title:{title} issue:{issue} "
-        f"issueid:{issue_id} language:{language} overwrite:{overwrite}")
-    dest_path, global_name = os.path.split(issuefile)
-    global_name = os.path.splitext(global_name)[0]
-
-    if CONFIG.get_bool('IMP_CALIBRE_MAGISSUE'):
-        iname = issue
-    elif issue and len(issue) == 10 and issue[8:] == '01' and issue[4] == '-' and issue[7] == '-':  # yyyy-mm-01
-        yr = issue[0:4]
-        mn = issue[5:7]
-        lang = 0
-        cnt = 0
-        while cnt < len(lazylibrarian.MONTHNAMES[0][0]):
-            if lazylibrarian.MONTHNAMES[0][0][cnt] == CONFIG['DATE_LANG']:
-                lang = cnt
-                break
-            cnt += 1
-        # monthnames for this month, eg ["January", "Jan", "enero", "ene"]
-        monthname = lazylibrarian.MONTHNAMES[0][int(mn)]
-        month = monthname[lang]  # lang = full name, lang+1 = short name
-        iname = f"{title} - {month} {yr}"  # The Magpi - January 2017
-    elif title in issue:
-        iname = issue  # 0063 - Android Magazine -> 0063
-    else:
-        iname = f"{title} - {issue}"  # Android Magazine - 0063
-
-    mtime = os.path.getmtime(issuefile)
-    iss_acquired = datetime.date.isoformat(datetime.date.fromtimestamp(mtime))
-
-    data = {
-        'AuthorName': authors,
-        'BookID': issue_id,
-        'BookName': iname,
-        'FileAs': authors,
-        'BookDesc': '',
-        'BookIsbn': '',
-        'BookDate': iss_acquired,
-        'BookLang': language,
-        'BookImg': f"{global_name}.jpg",
-        'BookPub': '',
-        'Series': title,
-        'Series_index': issue,
-        'Scheme': 'lazylibrarian',
-        'BookGenre': genres,
-    }  # type: dict
-    # noinspection PyTypeChecker
-    return create_opf(dest_path, data, global_name, overwrite=overwrite)
-
-
-def create_opf(dest_path=None, data=None, global_name=None, overwrite=False):
-    logger = logging.getLogger(__name__)
-    opfpath = os.path.join(dest_path, f"{global_name}.opf")
-    if not overwrite and path_exists(opfpath):
-        logger.debug(f'{opfpath} already exists. Did not create one.')
-        setperm(opfpath)
-        return opfpath, False
-
-    data = dict(data)
-
-    bookid = data['BookID']
-    if bookid.startswith('CV'):
-        scheme = "COMICVINE"
-    elif bookid.startswith('CX'):
-        scheme = "COMIXOLOGY"
-    elif 'Scheme' in data:
-        scheme = data['Scheme']
-    elif bookid.isdigit():
-        # TODO could be goodreads or hardcover, can't be sure
-        scheme = 'goodreads'
-        if CONFIG['BOOK_API'] == "HardCover":
-            scheme = 'HardCover'
-    elif bookid.startswith('OL'):
-        scheme = 'OpenLibrary'
-    elif data.get('au_id') == bookid:
-        scheme = 'Audible'
-    else:
-        scheme = 'GoogleBooks'
-
-    seriesname = ''
-    seriesnum = ''
-    if 'Series_index' not in data:
-        # no series details passed in data dictionary, look them up in db
-        db = database.DBConnection()
-
-        res = {}
-        if 'LT_WorkID' in data and data['LT_WorkID']:
-            cmd = "SELECT SeriesID,SeriesNum from member WHERE workid=?"
-            res = db.match(cmd, (data['LT_WorkID'],))
-        if not res and 'WorkID' in data and data['WorkID']:
-            cmd = "SELECT SeriesID,SeriesNum from member WHERE workid=?"
-            res = db.match(cmd, (data['WorkID'],))
-        if not res:
-            cmd = "SELECT SeriesID,SeriesNum from member WHERE bookid=?"
-            res = db.match(cmd, (bookid,))
-        if res:
-            seriesid = res['SeriesID']
-            serieslist = get_list(res['SeriesNum'])
-            # might be "Book 3.5" or similar, just get the numeric part
-            while serieslist:
-                seriesnum = serieslist.pop()
-                try:
-                    _ = float(seriesnum)
-                    break
-                except ValueError:
-                    seriesnum = ''
-                    pass
-
-            if not seriesnum:
-                # couldn't figure out number, keep everything we got, could be something like "Book Two"
-                serieslist = res['SeriesNum']
-
-            cmd = "SELECT SeriesName from series WHERE seriesid=?"
-            res = db.match(cmd, (seriesid,))
-            if res:
-                seriesname = res['SeriesName']
-                if not seriesnum:
-                    # add what we got to series name and set seriesnum to 1 so user can sort it out manually
-                    seriesname = f"{seriesname} {serieslist}"
-                    seriesnum = 1
-        db.close()
-
-    opfinfo = '<?xml version="1.0"  encoding="UTF-8"?>\n\
-<package version="2.0" xmlns="http://www.idpf.org/2007/opf" >\n\
-    <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">\n\
-        <dc:title>%s</dc:title>\n\
-        <dc:language>%s</dc:language>\n' % (data.get('BookName', ''), data.get('BookLang', ''))
-
-    opfinfo += f'        <dc:identifier opf:scheme="{scheme}">{bookid}</dc:identifier>\n'
-
-    if "Contributors" in data:
-        # what calibre does is split into individuals and add a line for each, e.g.
-        # <dc:creator opf:file-as="Pastoras, Das &amp; Ribic, Esad &amp; Aaron, Jason"
-        # opf:role="aut">Das Pastoras</dc:creator>
-        # <dc:creator opf:file-as="Pastoras, Das &amp; Ribic, Esad &amp; Aaron, Jason"
-        # opf:role="aut">Esad Ribic</dc:creator>
-        # <dc:creator opf:file-as="Pastoras, Das &amp; Ribic, Esad &amp; Aaron, Jason"
-        # opf:role="aut">Jason Aaron</dc:creator>
-        #
-        entries = []
-        names = ''
-        for contributor in get_list(data['Contributors'], ','):
-            if ':' in contributor:
-                role, name = contributor.split(':', 1)
-            else:
-                name = contributor
-                role = 'Unknown'
-            if name and role:
-                entries.append([name.strip(), role.strip()])
-                if names:
-                    names += ' &amp; '
-                names += surname_first(name, postfixes=get_list(CONFIG.get_csv('NAME_POSTFIX')))
-        for entry in entries:
-            opfinfo += f'        <dc:creator opf:file-as="{names}" opf:role="{entry[1]}">{entry[0]}</dc:creator>\n'
-    elif data.get("FileAs", ''):
-        opfinfo += (f"        <dc:creator opf:file-as=\"{data['FileAs']}\" opf:role=\"aut\">"
-                    f"{data['FileAs']}</dc:creator>\n")
-    else:
-        opfinfo += '        <dc:creator opf:file-as="%s" opf:role="aut">%s</dc:creator>\n' % \
-                   (surname_first(data['AuthorName'],
-                                  postfixes=get_list(CONFIG.get_csv('NAME_POSTFIX'))), data['AuthorName'])
-    if data.get('BookIsbn', ''):
-        opfinfo += f"        <dc:identifier opf:scheme=\"ISBN\">{data['BookIsbn']}</dc:identifier>\n"
-
-    if data.get('BookPub', ''):
-        opfinfo += f"        <dc:publisher>{data['BookPub']}</dc:publisher>\n"
-
-    if data.get('BookDate', ''):
-        opfinfo += f"        <dc:date>{data['BookDate']}</dc:date>\n"
-
-    if data.get('BookDesc', ''):
-        opfinfo += f"        <dc:description>{data['BookDesc']}</dc:description>\n"
-
-    if CONFIG.get_bool('GENRE_TAGS') and data.get("BookGenre", ''):
-        for genre in get_list(data['BookGenre'], ','):
-            opfinfo += f'        <dc:subject>{genre}</dc:subject>\n'
-
-    if data.get('BookRate', ''):
-        rate = check_int(data['BookRate'], 0)
-        rate = int(round(rate * 2))  # calibre uses 0-10, goodreads 0-5
-        opfinfo += f'        <meta content="{rate}" name="calibre:rating"/>\n'
-
-    if seriesname:
-        opfinfo += f'        <meta content="{seriesname}" name="calibre:series"/>\n'
-    elif 'Series' in data:
-        opfinfo += f"        <meta content=\"{data['Series']}\" name=\"calibre:series\"/>\n"
-
-    if seriesnum:
-        opfinfo += f'        <meta content="{seriesnum}" name="calibre:series_index"/>\n'
-    elif 'Series_index' in data:
-        opfinfo += f"        <meta content=\"{data['Series_index']}\" name=\"calibre:series_index\"/>\n"
-    if data.get('Narrator', ''):
-        opfinfo += f"        <meta content=\"{data['Narrator']}\" name=\"lazylibrarian:narrator\"/>\n"
-
-    coverfile = jpg_file(dest_path)
-    if coverfile:
-        coverfile = os.path.basename(coverfile)
-    else:
-        coverfile = 'cover.jpg'
-
-    opfinfo += '        <guide>\n\
-                <reference href="%s" type="cover" title="Cover"/>\n\
-            </guide>\n\
-        </metadata>\n\
-    </package>' % coverfile  # file in current directory, not full path
-
-    dic = {'...': '', ' & ': ' ', ' = ': ' ', '$': 's', ' + ': ' ', '*': ''}
-    opfinfo = make_unicode(replace_all(opfinfo, dic))
-    try:
-        with open(syspath(opfpath), 'w', encoding='utf-8') as opf:
-            opf.write(opfinfo)
-        logger.debug(f"Saved metadata to: {opfpath}")
-        setperm(opfpath)
-        return opfpath, True
-    except Exception as e:
-        logger.error(f"Error creating opf {opfpath}, {type(e).__name__} {str(e)}")
-        return '', False
-
-
-def write_meta(book_folder, opf):
-    logger = logging.getLogger(__name__)
-    if not path_exists(opf):
-        logger.error(f"No opf file [{opf}]")
-        return
-
-    ebook_meta = calibre_prg('ebook-meta')
-    if not ebook_meta:
-        logger.debug("No ebook-meta found")
-        return
-
-    flist = listdir(book_folder)
-    for fname in flist:
-        if CONFIG.is_valid_booktype(fname, booktype='ebook'):
-            book = os.path.join(book_folder, fname)
-            params = [ebook_meta, book, "--write_meta", opf]
-            logger.debug(f"Writing metadata to [{fname}]")
-            try:
-                if os.name != 'nt':
-                    _ = subprocess.check_output(params, preexec_fn=lambda: os.nice(10),
-                                                stderr=subprocess.STDOUT)
-                else:
-                    _ = subprocess.check_output(params, stderr=subprocess.STDOUT)
-                logger.debug(f"Metadata written from {opf}")
-            except Exception as e:
-                logger.error(str(e))
-
-
-def send_mag_issue_to_calibre(data):
-    logger = logging.getLogger(__name__)
-    calibre_id = get_calibre_id(data, try_filename=False)
-    logger.debug(f"Calibre ID {calibre_id}")
-    if calibre_id:
-        logger.debug(f"Calibre ID {calibre_id} exists: {data['Title']} {data['IssueDate']}")
-        filename = os.path.basename(data['IssueFile'])
-        pp_path = os.path.dirname(data['IssueFile'])
-        return 'Exists', filename, pp_path
-
-    logger.debug(f"Calibre ID does not exist: {data['Title']}:{data['IssueDate']}:{data['IssueFile']}")
-    global_name = os.path.splitext(os.path.basename(data['IssueFile']))[0]
-    logger.debug(f" Global name = [{global_name}]")
-    sourcedir = os.path.dirname(data['IssueFile'])
-    logger.debug(f" Source Dir = [{sourcedir}]")
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for item in listdir(sourcedir):
-            if item.startswith(global_name):
-                logger.debug(f"Copy file [{item}]")
-                shutil.copyfile(os.path.join(sourcedir, item), os.path.join(temp_dir, item))
-        return send_to_calibre("magazine", global_name, temp_dir, data)
-
-
-def send_comic_issue_to_calibre(data):
-    logger = logging.getLogger(__name__)
-    calibre_id = get_calibre_id(data, try_filename=False)
-    if calibre_id:
-        logger.debug(f"Calibre ID {calibre_id} exists: {data['ComicID']} {data['IssueID']}")
-        filename = os.path.basename(data['IssueFile'])
-        pp_path = os.path.dirname(data['IssueFile'])
-        return 'Exists', filename, pp_path
-
-    logger.debug(f"Calibre ID does not exist: {data['ComicID']}:{data['IssueID']}")
-    global_name = os.path.splitext(os.path.basename(data['IssueFile']))[0]
-    sourcedir = os.path.dirname(data['IssueFile'])
-    with tempfile.TemporaryDirectory() as temp_dir:
-        for item in listdir(sourcedir):
-            if item.startswith(global_name):
-                logger.debug(f"Copy file [{item}]")
-                shutil.copyfile(os.path.join(sourcedir, item), os.path.join(temp_dir, item))
-        return send_to_calibre("comic", global_name, temp_dir, data)
-
-
-def send_ebook_to_calibre(data):
-    logger = logging.getLogger(__name__)
-    calibre_id = get_calibre_id(data, try_filename=False)
-    if calibre_id:
-        logger.debug(f"Calibre ID {calibre_id} exists: {data['AuthorName']} {data['BookName']}")
-        filename = os.path.basename(data['BookFile'])
-        pp_path = os.path.dirname(data['BookFile'])
-        return 'Exists', filename, pp_path
-
-    logger.debug(f"Calibre ID does not exist: {data['AuthorName']} {data['BookName']}")
-    global_name = os.path.splitext(os.path.basename(data['BookFile']))[0]
-    with tempfile.TemporaryDirectory() as temp_dir:
-        sourcedir = os.path.dirname(data['IssueFile'])
-        for item in listdir(sourcedir):
-            if item.startswith(global_name):
-                logger.debug(f"Copy file [{item}]")
-                shutil.copyfile(os.path.join(sourcedir, item), os.path.join(temp_dir, item))
-        return send_to_calibre("ebook", global_name, temp_dir, data)

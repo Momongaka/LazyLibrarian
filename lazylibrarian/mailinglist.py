@@ -10,15 +10,15 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
 import logging
+import os
 
 import lazylibrarian
-from lazylibrarian.config2 import CONFIG
 from lazylibrarian import database
 from lazylibrarian.common import run_script
-from lazylibrarian.filesystem import path_exists, syspath
-from lazylibrarian.formatter import plural, get_list, check_int
+from lazylibrarian.config2 import CONFIG
+from lazylibrarian.filesystem import path_exists, splitext, syspath
+from lazylibrarian.formatter import check_int, get_list, plural
 from lazylibrarian.notifiers import email_notifier
 
 
@@ -120,8 +120,7 @@ def mailing_list(book_type, global_name, book_id):
         if not len(userlist):
             logger.debug(f"{book_type} {global_name} not wanted by any users")
             return
-        else:
-            logger.debug(f"{book_type} {global_name} wanted by {len(userlist)} {plural(len(userlist), 'user')}")
+        logger.debug(f"{book_type} {global_name} wanted by {len(userlist)} {plural(len(userlist), 'user')}")
 
         if not data or not data['filename'] or not path_exists(data['filename']):
             logger.error(f"Unable to locate {booktype} {book_id}")
@@ -153,7 +152,7 @@ def mailing_list(book_type, global_name, book_id):
             if res and res['SendTo']:
                 if booktype == 'ebook':
                     pref = res['BookType']
-                    basename, extn = os.path.splitext(filename)
+                    basename, extn = splitext(filename)
                     prefname = f"{basename}.{pref}"
                     if path_exists(prefname):
                         filename = prefname

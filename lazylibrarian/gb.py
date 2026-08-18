@@ -22,21 +22,37 @@ from urllib.parse import quote, quote_plus, urlencode
 from rapidfuzz import fuzz
 
 import lazylibrarian
-from lazylibrarian import database, ROLE
-from lazylibrarian.bookwork import get_work_series, delete_empty_series, \
-    set_series, get_status, google_book_dict, isbnlang, is_set_or_part
+from lazylibrarian import ROLE, database
+from lazylibrarian.bookwork import (
+    delete_empty_series,
+    get_status,
+    get_work_series,
+    google_book_dict,
+    is_set_or_part,
+    isbnlang,
+    set_series,
+)
 from lazylibrarian.cache import json_request
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.formatter import plural, today, replace_all, unaccented, is_valid_isbn, \
-    get_list, clean_name, make_unicode, make_utf8bytes, strip_quotes, thread_name
+from lazylibrarian.formatter import (
+    clean_name,
+    get_list,
+    is_valid_isbn,
+    make_utf8bytes,
+    plural,
+    replace_all,
+    strip_quotes,
+    thread_name,
+    today,
+    unaccented,
+)
 from lazylibrarian.hc import HardCover
 from lazylibrarian.images import cache_bookimg, get_book_cover
 from lazylibrarian.ol import OpenLibrary
 
 
 class GoogleBooks:
-    def __init__(self, name=None):
-        self.name = make_unicode(name)
+    def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.url = '/'.join([CONFIG['GB_URL'], 'books/v1/volumes?q='])
         self.params = {
@@ -69,10 +85,10 @@ class GoogleBooks:
             title = ''
             authorname = ''
 
-            if ' <ll> ' in searchterm:  # special token separates title from author
-                title, authorname = searchterm.split(' <ll> ')
+            if '<ll>' in searchterm:  # special token separates title from author
+                title, authorname = searchterm.split('<ll>')
 
-            fullterm = searchterm.replace(' <ll> ', ' ')
+            fullterm = searchterm.replace('<ll>', ' ')
             self.logger.debug(f'Now searching Google Books API with searchterm: {fullterm}')
 
             for api_value in api_strings:
@@ -81,10 +97,9 @@ class GoogleBooks:
                     set_url += quote(api_value + searchterm)
                 elif api_value == 'intitle:':
                     searchterm = fullterm
-                    if title:  # just search for title
-                        if ' (' in title:
-                            title = title.split(' (')[0]  # without any series info
-                            searchterm = title
+                    if title and ' (' in title:  # just search for title
+                        title = title.split(' (')[0]  # without any series info
+                        searchterm = title
                     # strip all ascii and non-ascii quotes/apostrophes
                     searchterm = strip_quotes(searchterm)
                     set_url += quote(make_utf8bytes(f"{api_value}\"{searchterm}\"")[0])
@@ -119,8 +134,6 @@ class GoogleBooks:
                             if number_results == 0:
                                 self.logger.warning(f'Found no results for {api_value} with value: {searchterm}')
                                 break
-                            else:
-                                pass
                         except Exception as err:
                             errmsg = str(err)
                             self.logger.warning(
@@ -167,13 +180,13 @@ class GoogleBooks:
                             if title:
                                 if title.endswith(')'):
                                     title = title.rsplit('(', 1)[0]
-                                book_fuzz = fuzz.token_set_ratio(book['name'], title)
+                                book_fuzz = fuzz.token_set_ratio(book['name'].lower(), title.lower())
                                 # lose a point for each extra word in the fuzzy matches so we get the closest match
                                 words = len(get_list(book['name']))
                                 words -= len(get_list(title))
                                 book_fuzz -= abs(words)
                             else:
-                                book_fuzz = fuzz.token_set_ratio(book['name'], fullterm)
+                                book_fuzz = fuzz.token_set_ratio(book['name'].lower(), fullterm.lower())
 
                             isbn_fuzz = 0
                             if is_valid_isbn(fullterm):
@@ -292,8 +305,7 @@ class GoogleBooks:
                     if number_results == 0:
                         self.logger.warning(f'Found no results for {authorname}')
                         break
-                    else:
-                        self.logger.debug(f"Found {number_results} {plural(number_results, 'result')} for {authorname}")
+                    self.logger.debug(f"Found {number_results} {plural(number_results, 'result')} for {authorname}")
 
                     startindex += 40
 
@@ -310,33 +322,30 @@ class GoogleBooks:
 
                         booklang = book['lang']
                         # do we care about language?
-                        if "All" not in valid_langs:
+                        if "All" not in valid_langs and book['isbn'] and booklang == "Unknown" or booklang == "en":
+                            # it seems google lies to us, sometimes tells us books are in english when they are not
+                            googlelang = booklang
+                            match = False
                             if book['isbn']:
-                                # seems google lies to us, sometimes tells us books are in english when they are not
-                                if booklang == "Unknown" or booklang == "en":
-                                    googlelang = booklang
-                                    match = False
-                                    if book['isbn']:
-                                        booklang, cache_hit, thing_hit = isbnlang(book['isbn'])
-                                        if thing_hit:
-                                            lt_lang_hits += 1
-                                        if booklang:
-                                            match = True
-                                    if match:
-                                        # We found a better language match
-                                        if googlelang == "en" and booklang not in ["en-US", "en-GB", "eng"]:
-                                            # these are all english, may need to expand this list
-                                            self.logger.debug(
-                                                f"{book['name']} Google thinks [{googlelang}], we think [{booklang}]")
-                                            gb_lang_change += 1
-                                    else:  # No match anywhere, accept google language
-                                        booklang = googlelang
+                                booklang, cache_hit, thing_hit = isbnlang(book['isbn'])
+                                if thing_hit:
+                                    lt_lang_hits += 1
+                                if booklang:
+                                    match = True
+                            if match:
+                                # We found a better language match
+                                if googlelang == "en" and booklang not in ["en-US", "en-GB", "eng"]:
+                                    # these are all english, may need to expand this list
+                                    self.logger.debug(
+                                        f"{book['name']} Google thinks [{googlelang}], we think [{booklang}]")
+                                    gb_lang_change += 1
+                            else:  # No match anywhere, accept google language
+                                booklang = googlelang
 
                         ignorable = ['future', 'date', 'isbn', 'set', 'word', 'publisher']
                         if CONFIG.get_bool('NO_LANG'):
                             ignorable.append('lang')
                         rejected = []
-                        existing_book = None
                         bookname = book['name']
                         bookid = item['id']
                         if not bookname:
@@ -351,10 +360,9 @@ class GoogleBooks:
                             rejected.append(['lang', f'Invalid language [{booklang}]'])
                             bad_lang += 1
 
-                        if CONFIG.get_bool('NO_FUTURE'):
+                        if CONFIG.get_bool('NO_FUTURE') and book['date'] > today()[:len(book['date'])]:
                             # googlebooks sometimes gives yyyy, sometimes yyyy-mm, sometimes yyyy-mm-dd
-                            if book['date'] > today()[:len(book['date'])]:
-                                rejected.append(['future', f"Future publication date [{book['date']}]"])
+                            rejected.append(['future', f"Future publication date [{book['date']}]"])
 
                         if CONFIG.get_bool('NO_PUBDATE') and not book['date']:
                             rejected.append(['date', 'No publication date'])
@@ -387,13 +395,13 @@ class GoogleBooks:
                             if in_db and in_db[0]:
                                 cmd = "SELECT BookID,gb_id FROM books WHERE BookID=?"
                                 match = db.match(cmd, (in_db[0],))
-                        if match:
-                            if match['BookID'] != bookid:  # we have a different book with this author/title already
-                                self.logger.debug(f'Rejecting bookid {bookid} for [{authorname}][{bookname}]'
-                                                  f' already got {match["BookID"]}')
-                                rejected.append(['dupe', f'Got under different bookid {bookid}'])
-                                if not match['gb_id']:
-                                    db.action("UPDATE books SET gb_id=? WHERE BookID=?", (bookid, match['BookID']))
+                        if match and match['BookID'] != bookid:
+                            # we have a different book with this author/title already
+                            self.logger.debug(f'Rejecting bookid {bookid} for [{authorname}][{bookname}]'
+                                              f' already got {match["BookID"]}')
+                            rejected.append(['dupe', f'Got under different bookid {bookid}'])
+                            if not match['gb_id']:
+                                db.action("UPDATE books SET gb_id=? WHERE BookID=?", (bookid, match['BookID']))
 
                         cmd = ("SELECT AuthorName,BookName,AudioStatus,books.Status,ScanResult,gb_id,BookID "
                                "FROM books,authors WHERE authors.AuthorID = books.AuthorID AND BookID=?")
@@ -435,6 +443,7 @@ class GoogleBooks:
                                     break
 
                             if not CONFIG['IMP_IGNORE']:
+                                reason = str(rejected)
                                 fatal = True
 
                             if not fatal:
@@ -571,7 +580,6 @@ class GoogleBooks:
                                             db.action('INSERT into bookauthors (AuthorID, BookID, Role)'
                                                       ' VALUES (?, ?, ?)',
                                                       (auth_id, bookid, ROLE['CONTRIBUTING']), suppress='UNIQUE')
-                                            lazylibrarian.importer.update_totals(auth_id)
 
                                 serieslist = []
                                 if book['series']:
@@ -605,7 +613,7 @@ class GoogleBooks:
                                 if update_value_dict:
                                     db.upsert("books", update_value_dict, control_value_dict)
 
-                                if not existing_book:
+                                if not existing:
                                     typ = 'Added'
                                     added_count += 1
                                 else:
@@ -619,6 +627,7 @@ class GoogleBooks:
                 pass
 
             delete_empty_series()
+            lazylibrarian.importer.update_totals(authorid)
             self.logger.debug(
                 f"[{authorname}] The Google Books API was hit {api_hits} {plural(api_hits, 'time')}"
                 f" to populate book list")
@@ -678,16 +687,16 @@ class GoogleBooks:
         finally:
             db.close()
 
-    def find_book(self, bookid=None, bookstatus=None, audiostatus=None, reason='gb.find_book'):
+    def add_bookid_to_db(self, bookid=None, bookstatus=None, audiostatus=None, reason='gb.add_bookid'):
         if not CONFIG['GB_API']:
             self.logger.warning('No GoogleBooks API key, check config')
-            return
+            return False
         url = '/'.join([CONFIG['GB_URL'], f"books/v1/volumes/{str(bookid)}?key={CONFIG['GB_API']}"])
         jsonresults, _ = json_request(url)
 
         if not jsonresults:
             self.logger.debug(f'No results found for {bookid}')
-            return
+            return False
 
         if not bookstatus:
             bookstatus = CONFIG['NEWBOOK_STATUS']
@@ -701,28 +710,26 @@ class GoogleBooks:
 
         if not book['author']:
             self.logger.debug(f'Book {bookname} does not contain author field, skipping')
-            return
+            return False
         # warn if language is in ignore list, but user said they wanted this book
         valid_langs = get_list(CONFIG['IMP_PREFLANG'])
         if book['lang'] not in valid_langs and 'All' not in valid_langs:
             msg = f"Book {bookname} googlebooks language does not match preference, {book['lang']}"
             self.logger.warning(msg)
             if reason.startswith("Series:"):
-                return
+                return False
 
-        if CONFIG.get_bool('NO_PUBDATE'):
-            if not book['date'] or book['date'] == '0000':
-                msg = f"Book {bookname} Publication date does not match preference, {book['date']}"
-                self.logger.warning(msg)
-                if reason.startswith("Series:"):
-                    return
+        if CONFIG.get_bool('NO_PUBDATE') and (not book['date'] or book['date'] == '0000'):
+            msg = f"Book {bookname} Publication date does not match preference, {book['date']}"
+            self.logger.warning(msg)
+            if reason.startswith("Series:"):
+                return False
 
-        if CONFIG.get_bool('NO_FUTURE'):
-            if book['date'] > today()[:4]:
-                msg = f"Book {bookname} Future publication date does not match preference, {book['date']}"
-                self.logger.warning(msg)
-                if reason.startswith("Series:"):
-                    return
+        if CONFIG.get_bool('NO_FUTURE') and book['date'] > today()[:4]:
+            msg = f"Book {bookname} Future publication date does not match preference, {book['date']}"
+            self.logger.warning(msg)
+            if reason.startswith("Series:"):
+                return False
 
         if CONFIG.get_bool('NO_SETS'):
             is_set, set_msg = is_set_or_part(bookname)
@@ -730,17 +737,17 @@ class GoogleBooks:
                 msg = f"Book {bookname} {set_msg}"
                 self.logger.warning(msg)
                 if reason.startswith("Series:"):
-                    return
+                    return False
 
         db = database.DBConnection()
         try:
             authorname = book['author']
             if CONFIG['BOOK_API'] == "HardCover":
-                hc = HardCover(f"{authorname}<ll>{bookname}")
-                author = hc.find_author_id()
+                hc = HardCover()
+                author = hc.find_author_id(authorname=authorname, title=bookname)
             else:
-                ol = OpenLibrary(f"{authorname}<ll>{bookname}")
-                author = ol.find_author_id()
+                ol = OpenLibrary()
+                author = ol.find_author_id(authorname=authorname, title=bookname)
             if author:
                 author_id = author['authorid']
                 match = db.match('SELECT AuthorID from authors WHERE AuthorID=?', (author_id,))
@@ -776,12 +783,12 @@ class GoogleBooks:
                             new_value_dict['ol_id'] = author_id
                         authorname = author['authorname']
                         db.upsert("authors", new_value_dict, control_value_dict)
-                        if CONFIG.get_bool('NEWAUTHOR_BOOKS') and newauthor_status != 'Paused':
-                            self.get_author_books(author_id, entrystatus=CONFIG['NEWAUTHOR_STATUS'],
-                                                  reason=reason)
+                        # if CONFIG.get_bool('NEWAUTHOR_BOOKS') and newauthor_status != 'Paused':
+                        #    self.get_author_books(author_id, entrystatus=CONFIG['NEWAUTHOR_STATUS'],
+                        #                          reason=reason)
             else:
                 self.logger.warning(f"No AuthorID for {book['author']}, unable to add book {bookname}")
-                return
+                return False
 
             reason = f"[{thread_name()}] {reason}"
             control_value_dict = {"BookID": bookid}
@@ -805,17 +812,19 @@ class GoogleBooks:
                 "BookAdded": today(),
                 "gb_id": bookid
             }
+            db.upsert("books", new_value_dict, control_value_dict)
 
             if 'nocover' in book['img'] or 'nophoto' in book['img']:
                 # try to get a cover from another source
                 link, _ = get_book_cover(bookid, ignore='googleapis')
                 if link:
-                    new_value_dict["BookImg"] = link
+                    new_value_dict = {"BookImg": link}
+                    db.upsert("books", new_value_dict, control_value_dict)
                 elif book['img'] and book['img'].startswith('http'):
                     link = cache_bookimg(book['img'], bookid, 'gb')
-                    new_value_dict["BookImg"] = link
+                    new_value_dict = {"BookImg": link}
+                    db.upsert("books", new_value_dict, control_value_dict)
 
-            db.upsert("books", new_value_dict, control_value_dict)
             self.logger.info(f"{bookname} by {authorname} added to the books database, {bookstatus}/{audiostatus}")
             serieslist = []
             if book['series']:
@@ -826,6 +835,6 @@ class GoogleBooks:
                     serieslist = newserieslist
                     self.logger.debug(f'Updated series: {bookid} [{serieslist}]')
                 set_series(serieslist, bookid, reason=reason)
-
+            return True
         finally:
             db.close()

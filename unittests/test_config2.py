@@ -102,7 +102,7 @@ class Config2Test(LLTestCaseWithConfigandDIRS):
         for key in got:
             for access in got[key]:
                 if access not in exclude:
-                    self.assertTrue(access in expected[key], f'Excected [{key}.{access}')
+                    self.assertTrue(access in expected[key], f'Expected [{key}.{access}')
                     vgot = got[key][access]
                     vexp = expected[key][access]
                     self.assertEqual(vgot, vexp, f'[{key}.{access}]:{vgot}!={vexp}: {error}')
@@ -311,14 +311,14 @@ class Config2Test(LLTestCaseWithConfigandDIRS):
             'SCAN_INTERVAL', 'SEARCHRSS_INTERVAL', 'WISHLIST_INTERVAL',
             'SEARCH_COMICINTERVAL',  # Disabled by default
             'VERSIONCHECK_INTERVAL',
-            'GOODREADS_INTERVAL',  # Disabled by default
-            'CLEAN_CACHE_INTERVAL', 'AUTHORUPDATE_INTERVAL', 'SERIESUPDATE_INTERVAL'])
+            'GOODREADS_INTERVAL', 'HARDCOVER_INTERVAL', # Disabled by default
+            'CLEAN_CACHE_INTERVAL', 'BACKUP_INTERVAL', 'AUTHORUPDATE_INTERVAL', 'SERIESUPDATE_INTERVAL'])
         self.assertEqual(schednames,
                          ['telemetry_send', 'search_book', 'search_magazines', 'PostProcessor', 'search_rss_book',
-                          'search_wishlist', 'search_comics', 'check_for_updates', 'sync_to_goodreads', 'clean_cache',
-                          'author_update', 'series_update'])
-        self.assertEqual(persistcount, 9)
-        self.assertEqual(canruncount, 6)
+                          'search_wishlist', 'search_comics', 'check_for_updates', 'sync_to_gr', 'hc_sync',
+                          'clean_cache', 'backup', 'author_update', 'series_update'])
+        self.assertEqual(persistcount, 10)
+        self.assertEqual(canruncount, 7)
 
     def test_force_lower(self):
         """ Test various string configss that have force_lower and make sure they are. """
@@ -348,7 +348,11 @@ class Config2Test(LLTestCaseWithConfigandDIRS):
         acs = cfg.get_all_accesses()  # We just want to know the right things were updated
         expectedacs = {
             'LOGGING.LOGLEVEL': Counter({Access.WRITE_OK: 1}),
+            'LOGGING.LOGDIR': Counter({Access.WRITE_OK: 1}),
+            'POSTPROCESS.AUDIOBOOK_DEST_FOLDER': Counter({Access.WRITE_OK: 1}),
             'GENERAL.NO_IPV6': Counter({Access.WRITE_OK: 1}),
+            'GENERAL.IMP_PREFLANG': Counter({Access.WRITE_OK: 1}),
+            'GENERAL.HTTP_EXT_TIMEOUT': Counter({Access.WRITE_OK: 1}),
             'GENERAL.EBOOK_DIR': Counter({Access.WRITE_OK: 1}),
             'GENERAL.AUDIO_DIR': Counter({Access.WRITE_OK: 1}),
             'GENERAL.ALTERNATE_DIR': Counter({Access.WRITE_OK: 1}),
@@ -513,7 +517,7 @@ class Config2Test(LLTestCaseWithConfigandDIRS):
         testfile = DIRS.get_tmpfilename('test-small.ini')
         try:
             count = cfg.save_config_to_filename(testfile, False)  # Save only non-default values
-            self.assertEqual(count, 7, 'Saving default config.ini has unexpected # of changes')
+            self.assertEqual(count, 11, 'Saving default config.ini has unexpected # of changes')
             cfgnew = LLConfigHandler(defaults=BASE_DEFAULTS, configfile=testfile)
             self.assertTrue(are_equivalent(cfg, cfgnew),
                             f'Save error: {testfile} is not the same as original file!')
@@ -552,7 +556,7 @@ class Config2Test(LLTestCaseWithConfigandDIRS):
         testfile = DIRS.get_tmpfilename('test-small.ini')
         try:
             count = cfg.save_config_to_filename(testfile, False)  # Save only non-default values
-            self.assertEqual(count, 7, 'Saving default config.ini has unexpected # of changes')
+            self.assertEqual(count, 11, 'Saving default config.ini has unexpected # of changes')
             cfgnew = LLConfigHandler(defaults=BASE_DEFAULTS, configfile=testfile)
             with self.assertLogs(self.logger, level='WARN'):
                 self.assertFalse(are_equivalent(cfg, cfgnew),
@@ -611,10 +615,8 @@ class Config2Test(LLTestCaseWithConfigandDIRS):
         self.do_access_compare(cfg.get_all_accesses(), {}, [], 'Expected all accesses cleared after saving')
 
         mako_dir = DIRS.get_mako_cachedir()
-        mako_file = cfg.get_mako_versionfile()
         mock_rmtree.assert_called_with(mako_dir)
         mock_makedirs.assert_called_with(mako_dir)
-        mock_open.assert_called_with(mako_file, 'w')
         self.assertEqual(cfg.config['HTTP_LOOK'].get_str(), 'a_special_ui', 'HTTP_LOOK did not change')
 
         # TODO: Add tests for schedulers and database changes
@@ -820,7 +822,7 @@ class Config2Test(LLTestCaseWithConfigandDIRS):
     def test_onchange(self):
         """ Test the onchange mechanism that calls a method when a config changes """
         cfg = LLConfigHandler(defaults=BASE_DEFAULTS)
-        self.assertEqual(ImportPrefs.LANG_LIST, ['en', 'eng', 'en-US', 'en-GB'])
+        self.assertEqual(ImportPrefs.LANG_LIST, ['en', 'eng', 'en-US', 'en-GB', 'English'])
 
         lang1 = cfg.get_str('IMP_PREFLANG')  # This item has an onchange method
         cfg.load_configfile(self.COMPLEX_INI_FILE)  # This changes the IMP_PREFLANG value

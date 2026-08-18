@@ -19,15 +19,15 @@ import subprocess
 import tarfile
 import threading
 import time
-from shutil import rmtree, move
+from shutil import move, rmtree
 
 import requests
 
 import lazylibrarian
-from lazylibrarian import version, database
-from lazylibrarian.common import get_user_agent, proxy_list, docker, dbbackup
+from lazylibrarian import database, version
+from lazylibrarian.common import dbbackup, docker, get_user_agent, proxy_list
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, path_isdir, syspath, listdir, walk
+from lazylibrarian.filesystem import DIRS, listdir, path_isdir, syspath
 from lazylibrarian.formatter import check_int, make_unicode, thread_name
 from lazylibrarian.telemetry import TELEMETRY
 
@@ -162,15 +162,14 @@ def get_current_version() -> str:
             version_string = 'Missing Version file'
             logger.debug(f'Version file [{version_file}] missing.')
             return version_string
-        else:
-            with open(version_file, 'r') as fp:
-                current_version = fp.read().strip(' \n\r')
+        with open(version_file) as fp:
+            current_version = fp.read().strip(' \n\r')
 
-            if current_version:
-                version_string = current_version
-            else:
-                version_string = 'Invalid Version file'
-                return version_string
+        if current_version:
+            version_string = current_version
+        else:
+            version_string = 'Invalid Version file'
+            return version_string
     elif 'package' in CONFIG['INSTALL_TYPE']:
         try:
             v = version.LAZYLIBRARIAN_HASH
@@ -226,6 +225,7 @@ def check_for_updates():
     db = database.DBConnection()
     columns = db.match('PRAGMA table_info(jobs)')
     if columns:
+        logger.debug("Storing start time for VERSIONCHECK")
         db.upsert("jobs", {"Start": time.time()}, {"Name": "VERSIONCHECK"})
     db.close()
 
@@ -245,7 +245,7 @@ def check_for_updates():
         commits, lazylibrarian.COMMIT_LIST = get_commit_difference_from_git()
         CONFIG.set_int('COMMITS_BEHIND', commits)
         if auto_update and commits > 0:
-            for name in [n.name.lower() for n in [t for t in threading.enumerate()]]:
+            for name in [n.name.lower() for n in list(threading.enumerate())]:
                 for word in ['update', 'scan', 'import', 'sync', 'process']:
                     if word in name:
                         suppress = True
@@ -273,6 +273,7 @@ def check_for_updates():
     db = database.DBConnection()
     columns = db.match('PRAGMA table_info(jobs)')
     if columns:
+        logger.debug("Storing finish time for VERSIONCHECK")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": "VERSIONCHECK"})
     db.close()
 
@@ -282,9 +283,10 @@ def get_latest_version():
     # if GIT install return latest on current branch
     # if nonGIT install return latest from master
     created_at = ''
-    if CONFIG['INSTALL_TYPE'] in ['git', 'source', 'package', 'docker']:
+    install_type = CONFIG['INSTALL_TYPE'].split(' ')[0].lower()
+    if install_type in ['git', 'source', 'package', 'docker']:
         latest_version, created_at = get_latest_version_from_git()
-    elif CONFIG['INSTALL_TYPE'] in ['win']:
+    elif install_type == 'win':
         latest_version = 'WINDOWS INSTALL'
     else:
         latest_version = 'UNKNOWN INSTALL'
@@ -324,7 +326,8 @@ def get_latest_version_from_git():
             if not project:
                 project = '9317860'  # default lazylibrarian
 
-            url = f"https://gitlab.com/api/v4/projects/{project}/repository/commits?per_page=1"
+            url = f"https://gitlab.com/api/v4/projects/{project}/repository/branches"
+
             # Get the latest commit available from git
             logger.debug(f'Retrieving latest version information from git command=[{url}]')
 
@@ -351,11 +354,15 @@ def get_latest_version_from_git():
                 else:
                     r = requests.get(url, timeout=timeout, headers=headers, proxies=proxies, verify=False)
 
-                if str(r.status_code).startswith('2'):
+                if r.status_code == 200:
                     try:
-                        latest_version = r.json()[0]['id']
-                        created_at = r.json()[0]['created_at']
-                        logger.debug(f"Branch {branch} Latest Version [{latest_version}] {created_at}")
+                        res = r.json()
+                        for item in res:
+                            if item['name'] == branch:
+                                latest_version = item['commit']['id']
+                                created_at = item['commit']['created_at']
+                                logger.debug(f"Branch {branch} Latest Version [{latest_version}] {created_at}")
+                                break
                     except Exception as err:
                         logger.warning(f'Error {type(err).__name__} reading json response')
                         logger.error(f'{r.json()}')
@@ -374,7 +381,7 @@ def get_latest_version_from_git():
     return latest_version, created_at
 
 
-def get_commit_difference_from_git() -> (int, str):
+def get_commit_difference_from_git() -> tuple[int, str]:
     """ See how many commits behind we are.
     Takes current latest version value and tries to diff it with the latest version in the current branch.
     Returns # of commits behind, and the list of commits as a string """
@@ -457,13 +464,12 @@ def update_version_file(new_version_id):
     version_path = os.path.join(DIRS.CACHEDIR, 'version.txt')
 
     try:
-        with open(syspath(version_path), 'r') as ver_file:
+        with open(syspath(version_path)) as ver_file:
             current_version = ver_file.read().strip(' \n\r')
         if current_version == new_version_id:
             return False
     except Exception as err:
         logger.error(f"Unable to read current version from version.txt: {str(err)}")
-        pass
 
     logger.debug(f"Updating [{version_path}] with value [{new_version_id}]")
     try:
@@ -508,27 +514,27 @@ def update():
             dbbackup_file = ''
             if CONFIG['BACKUP_DB']:
                 dbbackup_file, _ = dbbackup('upgrade')
-            zf = tarfile.open(backup_file, mode='w:gz')
-            prog_folders = ['data', 'init', 'lazylibrarian', 'LazyLibrarian.app', 'lib', 'unittests']
-            for folder in prog_folders:
-                path = os.path.join(DIRS.PROG_DIR, folder)
-                for root, _, files in walk(path):
-                    for item in files:
-                        if not item.endswith('.pyc'):
-                            base = root[len(DIRS.PROG_DIR) + 1:]
-                            zf.add(os.path.join(root, item), arcname=os.path.join(base, item))
-            for item in ['LazyLibrarian.py', 'epubandmobi.py', 'example_custom_notification.py',
-                         'example_custom_notification.sh', 'example_ebook_convert.py', 'example_filetemplate.txt',
-                         'example.genres.json', 'example_html_filetemplate.txt', 'example_logintemplate.txt',
-                         'example.monthnames.json', 'updater.py', 'pyproject.toml']:
-                path = os.path.join(DIRS.PROG_DIR, item)
-                if os.path.exists(path):
-                    zf.add(path, arcname=item)
+            with tarfile.open(backup_file, mode='w:gz') as zf:
+                prog_folders = ['data', 'init', 'lazylibrarian', 'LazyLibrarian.app', 'lib', 'unittests']
+                for folder in prog_folders:
+                    path = os.path.join(DIRS.PROG_DIR, folder)
+                    for root, _, files in os.walk(path):
+                        for item in files:
+                            if not item.endswith('.pyc'):
+                                base = root[len(DIRS.PROG_DIR) + 1:]
+                                zf.add(os.path.join(root, item), arcname=os.path.join(base, item))
+                for item in ['LazyLibrarian.py', 'epubandmobi.py', 'example_custom_notification.py',
+                             'example_custom_notification.sh', 'example_ebook_convert.py', 'example_filetemplate.txt',
+                             'example.genres.json', 'example_html_filetemplate.txt', 'example_logintemplate.txt',
+                             'example.monthnames.json', 'updater.py', 'pyproject.toml']:
+                    path = os.path.join(DIRS.PROG_DIR, item)
+                    if os.path.exists(path):
+                        zf.add(path, arcname=item)
 
             current_version = ''
             version_file = os.path.join(DIRS.CACHEDIR, 'version.txt')
             if os.path.isfile(version_file):
-                with open(version_file, 'r') as fp:
+                with open(version_file) as fp:
                     current_version = fp.read().strip(' \n\r')
                 zf.add(version_file, arcname='version.txt')
             zf.close()
@@ -562,7 +568,7 @@ def update():
                     if os.path.exists(dbbackup_file):
                         os.remove(dbbackup_file)
                     break
-                elif 'Aborting' in line or 'local changes' in line:
+                if 'Aborting' in line or 'local changes' in line:
                     msg = f"Unable to update: {str(output)}"
                     upgradelog.write(f"{time.ctime()} {msg}\n")
                     logger.error(msg)
@@ -570,11 +576,11 @@ def update():
 
             get_latest_version()
             update_version_file(CONFIG['LATEST_VERSION'])
-            upgradelog.write("%s %s\n" % (time.ctime(), f"Updated version file to {CONFIG['LATEST_VERSION']}"))
+            upgradelog.write(f"{time.ctime()} Updated version file to {CONFIG['LATEST_VERSION']}\n")
             CONFIG.set_str('CURRENT_VERSION', CONFIG['LATEST_VERSION'])
             return True
 
-        elif CONFIG['INSTALL_TYPE'] == 'source':
+        if CONFIG['INSTALL_TYPE'] == 'source':
             tar_download_url = (f"https://{lazylibrarian.GITLAB_TOKEN}/{CONFIG['GIT_USER']}/"
                                 f"{CONFIG['GIT_REPO']}/-/archive/{CONFIG['GIT_BRANCH']}/{CONFIG['GIT_REPO']}-"
                                 f"{CONFIG['GIT_BRANCH']}.tar.gz")
@@ -647,7 +653,7 @@ def update():
             logger.debug(f"update_dir_contents [{str(update_dir_contents)}]")
             logger.debug(f"Walking {content_dir}")
             # walk temp folder and move files to main folder
-            for rootdir, _, filenames in walk(content_dir):
+            for rootdir, _, filenames in os.walk(content_dir):
                 rootdir = rootdir[len(content_dir) + 1:]
                 for curfile in filenames:
                     old_path = os.path.join(content_dir, rootdir, curfile)
@@ -671,12 +677,11 @@ def update():
             # Update version.txt and timestamp
             get_latest_version()
             update_version_file(CONFIG['LATEST_VERSION'])
-            upgradelog.write("%s %s\n" % (time.ctime(), f"Updated version file to {CONFIG['LATEST_VERSION']}"))
+            upgradelog.write(f"{time.ctime()} Updated version file to {CONFIG['LATEST_VERSION']})\n")
             CONFIG.set_str('CURRENT_VERSION', CONFIG['LATEST_VERSION'])
             return True
 
-        else:
-            msg = "Cannot perform update - Install Type not set"
-            upgradelog.write(f"{time.ctime()} {msg}\n")
-            logger.error(msg)
-            return False
+        msg = "Cannot perform update - Install Type not set"
+        upgradelog.write(f"{time.ctime()} {msg}\n")
+        logger.error(msg)
+        return False

@@ -19,8 +19,8 @@ import time
 import lazylibrarian
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, path_isfile, remove_file
-from lazylibrarian.formatter import md5_utf8, plural, check_int, get_list
+from lazylibrarian.filesystem import DIRS, path_isfile, remove_file, splitext
+from lazylibrarian.formatter import check_int, get_list, md5_utf8, plural
 
 try:
     import slskd_api
@@ -92,7 +92,7 @@ def slsk_search(book=None, searchtype='ebook', test=False):
             return 0
         return [], "Not connected to slskd"
 
-    with open(hashfilename, 'r') as f:
+    with open(hashfilename) as f:
         searchresults = json.load(f)
 
     logger.debug(f"{provider} returned {len(searchresults)}")
@@ -219,7 +219,8 @@ class SLSKD:
                             else:
                                 directory = self.slskd.users.directory(username=username, directory=file_dir)
                         except Exception as e:
-                            self.logger.warning(str(e))
+                            self.logger.warning(f"Ignoring {username}, {str(e)}")
+                            self.ignored_users.append(username)
                             continue
 
                         if not CONFIG.is_valid_booktype(file_name, booktype=searchtype):
@@ -238,7 +239,7 @@ class SLSKD:
                             new_files = []
                             extns = []
                             for item in directory['files']:
-                                title, extn = os.path.splitext(item['filename'])
+                                title, extn = splitext(item['filename'])
                                 extn = extn.lstrip('.').lower()
                                 if extn in extns:  # reject if multiple files of the same type
                                     new_files = []

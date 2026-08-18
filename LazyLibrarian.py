@@ -59,6 +59,7 @@ def main():
     starter.init_build_lists(lazylibrarian.config2.CONFIG)
     logger = logging.getLogger(__name__)
 
+    starter.update_znab_caps()
     version_file = starter.create_version_file('version.txt')
     starter.init_version_checks(version_file)
 

@@ -15,9 +15,8 @@ import sys
 from importlib import invalidate_caches
 from importlib.util import resolve_name
 from pathlib import Path
-from typing import Dict, List, Tuple
 
-DependencyList = Tuple[Tuple[str, str, str]]
+DependencyList = tuple[tuple[str, str, str]]
 ll_dependencies = (
     # pip name, bundled name, aka
     ('bs4', '', ''),
@@ -52,7 +51,7 @@ class ModuleUnbundler:
         self.bypass_file = os.path.join(self.basedir, 'unbundled.libs')
         self.deletable = []
 
-    def prepare_module_unbundling(self, dependencies: DependencyList = ll_dependencies) -> List[str]:
+    def prepare_module_unbundling(self, dependencies: DependencyList = ll_dependencies) -> list[str]:
         """ Prepare to unbundle the dependencies passed, stored in subdirs off where basefile resides.
         Returns a list of dependent libraries that can be removed in the process.
         Saves a file called unbundled.libs with these names; if this file exists, this routine does nothing.
@@ -64,7 +63,7 @@ class ModuleUnbundler:
             self.deletable = self._calc_libraries_to_delete(dependencies, bundled, distro)
         return self.deletable
 
-    def remove_bundled_modules(self) -> List[str]:
+    def remove_bundled_modules(self) -> list[str]:
         """ Remove the libraries identified in the prepare step, then add the list to the
         bypass file. Return the list of removed modules. """
         if self.deletable:
@@ -74,10 +73,9 @@ class ModuleUnbundler:
             with open(self.bypass_file, 'w') as f:
                 f.write(str(removed))
             return removed
-        else:
-            return []
+        return []
 
-    def _get_library_locations(self, dependencies: DependencyList) -> (Dict[str, str], Dict[str, str]):
+    def _get_library_locations(self, dependencies: DependencyList) -> (dict[str, str], dict[str, str]):
         """ Go through dependencies, return two dicts:
         1) A dict of dependencies where we need to use the bundled version, and
         2) a dict of dependencies where we can use a separate installation
@@ -119,7 +117,7 @@ class ModuleUnbundler:
         return bundled, distro
 
     @staticmethod
-    def _install_missing_libraries(bundled: Dict[str, str], distro: Dict[str, str]) -> Dict[str, str]:
+    def _install_missing_libraries(bundled: dict[str, str], distro: dict[str, str]) -> dict[str, str]:
         """ Attempt to install the libraries that are in 'bundled' but not in 'distro'.
         Return an updated dict of libraries that can now be unbundled. """
         for item in bundled:
@@ -137,22 +135,21 @@ class ModuleUnbundler:
         return distro
 
     @staticmethod
-    def _calc_libraries_to_delete(dependencies: DependencyList, bundled: Dict[str, str],
-                                  distro: Dict[str, str]) -> List[str]:
+    def _calc_libraries_to_delete(dependencies: DependencyList, bundled: dict[str, str],
+                                  distro: dict[str, str]) -> list[str]:
         """ Returns a list of libraries from dependencies that can be deleted, because
         they can be satisfied by a library in the distro list. """
         deletable = []
         for item in dependencies:
             # Unfold item for readability
             (pipname, bundledname, aka) = item
-            if aka and aka in bundled or pipname in bundled:
+            if aka and aka in bundled or pipname in bundled and (aka and aka in distro or pipname in distro):
                 # Is it bundled and could be deleted?
-                if aka and aka in distro or pipname in distro:
-                    # Is there a distro version?
-                    deletable.append(bundledname if bundledname else pipname)
+                # Is there a distro version?
+                deletable.append(bundledname if bundledname else pipname)
         return deletable
 
-    def _delete_libraries(self, deletable: List[str]) -> List[str]:
+    def _delete_libraries(self, deletable: list[str]) -> list[str]:
         """ Delete all of the libraries in deletable, return a list of those deleted """
         logger = logging.getLogger()
         removed = []

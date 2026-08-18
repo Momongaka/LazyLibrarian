@@ -20,8 +20,9 @@
 import logging
 
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
 from lazylibrarian.formatter import unaccented
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
+
 from .pushbullet2 import PushBullet
 
 
@@ -39,9 +40,8 @@ class PushbulletNotifier:
         logger = logging.getLogger(__name__)
         if pushbullet_token is None:
             pushbullet_token = CONFIG['PUSHBULLET_TOKEN']
-        if pushbullet_deviceid is None:
-            if CONFIG['PUSHBULLET_DEVICEID']:
-                pushbullet_deviceid = CONFIG['PUSHBULLET_DEVICEID']
+        if pushbullet_deviceid is None and CONFIG['PUSHBULLET_DEVICEID']:
+            pushbullet_deviceid = CONFIG['PUSHBULLET_DEVICEID']
 
         logger.debug(f"Pushbullet event: {str(event)}")
         logger.debug(f"Pushbullet message: {str(message)}")
@@ -59,9 +59,8 @@ class PushbulletNotifier:
                     ret += f"\nPushbullet: {device['nickname']} [{device['iden']}]"
             _ = pb.push_note(pushbullet_deviceid, str(event), str(message))
             return ret
-        else:
-            push = pb.push_note(pushbullet_deviceid, str(event), str(message))
-            return push
+        push = pb.push_note(pushbullet_deviceid, str(event), str(message))
+        return push
 
     def _notify(self, message=None, event=None, pushbullet_token=None, pushbullet_deviceid=None, force=False):
         """
@@ -92,13 +91,13 @@ class PushbulletNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG.get_bool('PUSHBULLET_NOTIFY_ONSNATCH'):
             if fail:
-                self._notify(message=title, event=notifyStrings[NOTIFY_FAIL])
+                self._notify(message=title, event=notify_strings[NOTIFY_FAIL])
             else:
-                self._notify(message=title, event=notifyStrings[NOTIFY_SNATCH])
+                self._notify(message=title, event=notify_strings[NOTIFY_SNATCH])
 
     def notify_download(self, title):
         if CONFIG.get_bool('PUSHBULLET_NOTIFY_ONDOWNLOAD'):
-            self._notify(message=title, event=notifyStrings[NOTIFY_DOWNLOAD])
+            self._notify(message=title, event=notify_strings[NOTIFY_DOWNLOAD])
 
     def test_notify(self, title="Test"):
         res = self._notify("This test notification asks for the device list", event='DeviceList', force=True)

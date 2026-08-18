@@ -19,6 +19,7 @@
 import inspect
 import logging
 import os
+import threading
 import time
 from datetime import timedelta
 
@@ -46,8 +47,7 @@ def get_info_on_caller(depth=1, filenamewithoutpath=True, filenamewithoutext=Tru
         caller_function = caller_info.function
         lineno = caller_info.lineno
         return filename, caller_function, lineno
-    else:
-        return '', '', 0
+    return '', '', 0
 
 
 def elapsed_since(start: float) -> str:
@@ -60,17 +60,15 @@ def get_process_memory() -> (bool, int):
     if PSUTIL:
         process = psutil.Process(os.getpid())
         return True, process.memory_info().rss
-    else:
-        return False, 0
+    return False, 0
 
 
 def get_threads_cpu_percent(p, interval=0.1):
-    import threading
     total_percent = p.cpu_percent(interval)
     total_time = sum(p.cpu_times())
-    names = [n.name for n in [t for t in threading.enumerate()]]
+    names = [n.name for n in list(threading.enumerate())]
     percents = [total_percent * ((t.system_time + t.user_time)/total_time) for t in p.threads()]
-    return list(zip(names, percents))
+    return list(zip(names, percents, strict=True))
 
 
 def get_threads():
@@ -113,5 +111,4 @@ def get_cpu_use() -> (bool, str):
         blocking = p.cpu_percent(interval=1)
         nonblocking = p.cpu_percent(interval=None)
         return True, f"Blocking {blocking}% Non-Blocking {nonblocking}% {p.cpu_times()}"
-    else:
-        return False, "Unknown - install psutil"
+    return False, "Unknown - install psutil"

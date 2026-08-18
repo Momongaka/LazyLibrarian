@@ -49,7 +49,7 @@ class DatabaseTest(LLTestCaseWithConfigandDIRS):
     def test_version_and_integrity(self):
         db = DBConnection()
         result = db.match('PRAGMA user_version')
-        self.assertEqual(result[0], 79, 'Unit tests developed for v79; please upgrade')
+        self.assertEqual(result[0], 91, 'Unit tests developed for v91; please upgrade')
         check = db.match('PRAGMA integrity_check')
         self.assertEqual('ok', check[0], 'Database integrity check failed')
         db.close()
@@ -70,9 +70,11 @@ class DatabaseTest(LLTestCaseWithConfigandDIRS):
 
     def test_tables_list(self):
         """ Test that all the expected tables exist """
-        expect = ['authors', 'wanted', 'magazines', 'languages', 'stats', 'series', 'downloads', 'users', 'isbn',
-                  'genres', 'sqlite_sequence', 'comics', 'jobs', 'books', 'issues', 'member', 'seriesauthors',
-                  'sync', 'failedsearch', 'genrebooks', 'comicissues', 'sent_file', 'pastissues', 'subscribers']
+        expect = ['authors', 'wanted', 'magazines', 'languages', 'stats', 'downloads', 'isbn',
+                  'genres', 'sqlite_sequence', 'comics', 'jobs', 'books', 'issues',
+                  'sync', 'failedsearch', 'genrebooks', 'comicissues', 'sent_file', 'pastissues',
+                  'subscribers', 'unauthorised', 'users', 'readinglists', 'series', 'member',
+                  'seriesauthors', 'bookauthors']
         db = DBConnection()
         tables = self.get_table_list(db)
         self.assertListEqual(expect, tables, 'Unexpected table mismatch')

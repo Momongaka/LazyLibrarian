@@ -1,11 +1,10 @@
 #!/usr/bin/python
-import sys
-import os
 import subprocess
+import sys
 
 from lazylibrarian.common import calibre_prg
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import get_directory
+from lazylibrarian.filesystem import get_directory, splitext
 
 
 def convert(input_file, output_format):
@@ -36,7 +35,7 @@ def convert(input_file, output_format):
     else:
         ebook_directory = get_directory('eBook')
 
-    basename, extn = os.path.splitext(input_file)
+    basename, extn = splitext(input_file)
 
     # Strip leading dot from output format
     output_format = output_format.strip('.')
@@ -69,4 +68,4 @@ def convert(input_file, output_format):
         return f"{basename}.{output_format}"
     except Exception as e:
         sys.stderr.write(f"{e}\n")
-        raise Exception(e)
+        raise

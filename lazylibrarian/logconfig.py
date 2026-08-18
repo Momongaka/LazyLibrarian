@@ -9,10 +9,9 @@ import logging
 import logging.config
 import logging.handlers
 import os
-from typing import Dict, List, Set, Optional
 
 from lazylibrarian.configenums import OnChangeReason
-from lazylibrarian.filesystem import DIRS, syspath
+from lazylibrarian.filesystem import DIRS, splitext, syspath
 
 
 class RecentMemoryHandler(logging.handlers.MemoryHandler):
@@ -45,9 +44,9 @@ class RedactFilter(logging.Filter):
     def __init__(self):
         super().__init__()
         self.redacted = 0
-        self.redactset: Set[str] = set()
+        self.redactset: set[str] = set()
 
-    def update_redactlist(self, redactlist: List[str]):
+    def update_redactlist(self, redactlist: list[str]):
         # Store the list as a set to make it more efficient to use
         self.redactset = set(redactlist)
 
@@ -171,18 +170,18 @@ class LogConfig:
         """ Get the default log config for either console-only or everything """
         return self.StartupLoggerConfig if console_only else self.DefaultConfig
 
-    def initialize_console_only_log(self, redact: Optional[bool]) -> Dict:
+    def initialize_console_only_log(self, redact: bool | None) -> dict:
         """ Initialize the console-only log used for startup """
         settings = self.get_default_logconfig(console_only=True)
         logging.config.dictConfig(settings)
         self.ensure_memoryhandler_for_ui(capacity_lines=-1, redact=redact)
         return settings
 
-    def initialize_log_config(self, max_size: int, max_number: int, redactui: bool, redactfiles: bool) -> Dict:
+    def initialize_log_config(self, max_size: int, max_number: int, redactui: bool, redactfiles: bool) -> dict:
         """ Apply a fresh configuration """
         settings = self.get_default_logconfig(console_only=False)
         # Apply LOGDIR and LOGSIZE to all file-based loggers
-        for name, handler in settings['handlers'].items():
+        for _name, handler in settings['handlers'].items():
             if 'FileHandler' in handler['class']:
                 handler['filename'] = self.get_full_filename(self.basefilename, redactfiles)
                 handler['maxBytes'] = max_size
@@ -199,7 +198,7 @@ class LogConfig:
 
     # Methods for dealing with in-memory log for UI display
 
-    def ensure_memoryhandler_for_ui(self, capacity_lines, redact: Optional[bool]):
+    def ensure_memoryhandler_for_ui(self, capacity_lines, redact: bool | None):
         """ Ensure there is a memory handler for displaying the log in the UI.
          If capacity_lines is > 0, set the capacity, otherwise leave as-is. """
         logger = logging.getLogger()
@@ -215,7 +214,7 @@ class LogConfig:
         # Make sure it's part of the root logger
         logger.addHandler(self._memorybuffer)
 
-    def set_file_redact_filter(self, redact: Optional[bool]):
+    def set_file_redact_filter(self, redact: bool | None):
         """ Apply the redact filter to all handlers, if redact is true """
         if redact is None:
             return  # No change
@@ -238,7 +237,7 @@ class LogConfig:
     def clear_ui_log(self):
         self._memorybuffer.clear()
 
-    def get_ui_logrows(self, filterstr: str = '') -> (List, int):
+    def get_ui_logrows(self, filterstr: str = '') -> (list, int):
         """ Return log rows to show in the UI, filtered by lowercase(filter), as
          well as the total number of items that could be displayed """
         filterstr = filterstr.lower() if filterstr else ''
@@ -370,9 +369,13 @@ class LogConfig:
     # Methods for dealing with special loggers
 
     @staticmethod
-    def get_special_logger_list() -> List:
+    def get_special_logger_list() -> list:
         """ Get the list of special loggers and their current state """
-        loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict if name.startswith('special.')]
+        loggers = [
+            logging.getLogger(name)
+            for name in logging.Logger.manager.loggerDict
+            if name.startswith("special.")
+        ]
         return loggers
 
     @staticmethod
@@ -419,27 +422,27 @@ class LogConfig:
 
     # Other methods for log management
 
-    def redact_list_updated(self, redactlist: List[str]):
+    def redact_list_updated(self, redactlist: list[str]):
         self.redact_filter.update_redactlist(redactlist)
 
     @staticmethod
-    def get_full_filename(filename: str, redact: Optional[bool]) -> str:
+    def get_full_filename(filename: str, redact: bool | None) -> str:
         """ Return the fully qualified log file name that uses filename as the basis.
         If redact is true, insert '-redacted' in the name. """
         if redact:
             justfilename = os.path.basename(filename)
-            basefilename, ext = os.path.splitext(justfilename)
+            basefilename, ext = splitext(justfilename)
             filename = f"{basefilename}-redacted{ext}"
         return DIRS.get_logfile(filename)
 
-    def get_redacted_logfilenames(self) -> List[str]:
+    def get_redacted_logfilenames(self) -> list[str]:
         """ Return list of redacted log file names currently in use """
         names = []
         logger = logging.getLogger()
         for handler in logger.handlers:
-            if isinstance(handler, logging.FileHandler):
-                if any(afilter == self.redact_filter for afilter in handler.filters):
-                    names.append(handler.baseFilename)
+            if (isinstance(handler, logging.FileHandler) and
+                    any(afilter == self.redact_filter for afilter in handler.filters)):
+                names.append(handler.baseFilename)
         return names
 
     @staticmethod
@@ -470,13 +473,10 @@ class LogConfig:
         if deleted == 0:
             if error:
                 return f'Failed to clear logfiles: {error}'
-            else:
-                return 'No log files to delete'
-        else:
-            if error:
-                return f"{deleted} log file(s) deleted from {logdir}. An error also occurred: {error}"
-            else:
-                return f"{deleted} log file(s) deleted from {logdir}"
+            return 'No log files to delete'
+        if error:
+            return f"{deleted} log file(s) deleted from {logdir}. An error also occurred: {error}"
+        return f"{deleted} log file(s) deleted from {logdir}"
 
 
 # Global access variable

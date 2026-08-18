@@ -26,8 +26,8 @@ class LibrarySyncTest(LLTestCaseWithConfigandDIRS):
         return get_directory("Testdata") + os.path.sep + name
 
     def testGetBookInfo_Epub(self):
-        expected_meta = {'type': 'epub', 'title': 'Test Title', 'creator': 'Bob Builder', 'publisher': 'Testing, Inc',
-                         'language': 'en', 'isbn': '9782123456803', 'gb_id': '9876542'}
+        expected_meta = {'type': 'epub', 'title': 'Test Title', 'publisher': 'Testing, Inc', 'language': 'en',
+                         'isbn': '9782123456803', 'gb_id': '9876542', 'creator': 'Bob Builder', 'authors': ['Bob Builder']}
         bookfile = self.getTestBook('Test Title - Bob Builder.epub')
         self.assertEqual(librarysync.get_book_info(bookfile), expected_meta)
 
@@ -45,8 +45,8 @@ class LibrarySyncTest(LLTestCaseWithConfigandDIRS):
 
     def testGetBookInfo_Opf(self):
         bookfile = self.getTestBook('metadata.opf')
-        expected_meta = {'type': 'opf', 'title': 'Test Title', 'creator': 'Bob Builder', 'publisher': 'Testing, Inc',
-                         'language': 'eng', 'isbn': '9782123456803', 'gb_id': '9876542'}
+        expected_meta = {'type': 'opf', 'title': 'Test Title', 'publisher': 'Testing, Inc', 'language': 'eng',
+                         'isbn': '9782123456803', 'gb_id': '9876542', 'creator': 'Bob Builder', 'authors': ['Bob Builder']}
         self.assertEqual(librarysync.get_book_info(bookfile), expected_meta)
 
     def testLibraryScan(self):

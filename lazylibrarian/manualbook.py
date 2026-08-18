@@ -11,14 +11,20 @@
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+from urllib.parse import quote, quote_plus
 
-from lazylibrarian.config2 import CONFIG
-from lazylibrarian import database
-from lazylibrarian.formatter import get_list, unaccented, plural, date_format
-from lazylibrarian.providers import iterate_over_rss_sites, iterate_over_torrent_sites, iterate_over_znab_sites, \
-    iterate_over_direct_sites, iterate_over_irc_sites
-from urllib.parse import quote_plus, quote
 from rapidfuzz import fuzz
+
+from lazylibrarian import database
+from lazylibrarian.config2 import CONFIG
+from lazylibrarian.formatter import date_format, get_list, plural, unaccented
+from lazylibrarian.providers import (
+    iterate_over_direct_sites,
+    iterate_over_irc_sites,
+    iterate_over_rss_sites,
+    iterate_over_torrent_sites,
+    iterate_over_znab_sites,
+)
 
 
 def search_item(item=None, bookid=None, cat=None):
@@ -132,10 +138,8 @@ def search_item(item=None, bookid=None, cat=None):
             if date:
                 date = date_format(date, context=title, datelang=CONFIG['DATE_LANG'])
             url = url.encode('utf-8')
-            if mode == 'torznab':
-                # noinspection PyTypeChecker
-                if url.startswith(b'magnet'):
-                    mode = 'magnet'
+            if mode == 'torznab' and url.startswith(b'magnet'):
+                mode = 'magnet'
 
             # calculate match percentage - torrents might have words_with_underscore_separator
             score = fuzz.token_set_ratio(searchterm, title.replace('_', ' '))

@@ -15,26 +15,29 @@
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from html import unescape as html_unescape
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
-from bs4 import Tag, BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from requests import get
+from requests.exceptions import JSONDecodeError
 
 import lazylibrarian
 from lazylibrarian import database
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, path_isfile, remove_file
-from lazylibrarian.formatter import md5_utf8, plural, check_int, size_in_bytes, get_list, sanitize
-
+from lazylibrarian.filesystem import DIRS, get_directory, path_isfile, remove_file
+from lazylibrarian.formatter import check_int, get_list, md5_utf8, plural, sanitize, size_in_bytes
 
 py310 = sys.version_info >= (3, 10)
 
+WIKIPEDIA_URL = "https://en.wikipedia.org/wiki/Anna%27s_Archive"
 
 @dataclass(**({"slots": True} if py310 else {}))
 class FileInfo:
@@ -129,7 +132,7 @@ class Language(Enum):
     ZH = "zh"
 
 
-class HTTPFailed(Exception):
+class HTTPFailedError(Exception):
     pass
 
 
@@ -186,13 +189,30 @@ def extract_publish_info(raw: str) -> tuple[str, str]:
 
 
 # noinspection PyDefaultArgument
-def html_parser(url: str, params: dict = {}) -> BeautifulSoup:
+def html_parser(url: str, params: dict = None) -> BeautifulSoup:
+    if not params:
+        params = {}
     params = dict(filter(lambda i: i[1], params.items()))
     response = get(url, params=params)
     if response.status_code >= 400:
-        raise HTTPFailed(f"server returned http status {response.status_code}")
+        raise HTTPFailedError(f"server returned http status {response.status_code}")
     html = response.text.replace("<!--", "").replace("-->", "")
     return BeautifulSoup(html, "html5lib")
+
+
+def annas_hosts_prefer(annas_hosts, host):
+    # success, move this host to front of list
+    annas_hosts.remove(host)
+    annas_hosts.insert(0, host)
+    CONFIG['ANNA_HOST'] = ','.join(annas_hosts)
+
+
+def annas_hosts_update():
+    annas_hosts = get_list(CONFIG['ANNA_HOST'])
+    new_hosts = fetch_annas_archive_domains()
+    annas_hosts.extend(new_hosts)
+    annas_hosts = set(annas_hosts)
+    CONFIG['ANNA_HOST'] = ','.join(annas_hosts)
 
 
 def annas_search(
@@ -200,9 +220,9 @@ def annas_search(
     language: Language = Language.ANY,
     file_type: FileType = FileType.ANY,
     order_by: OrderBy = OrderBy.MOST_RELEVANT,
-) -> str:
+) -> str | None:
 
-    logger = logging.getLogger(__name__)
+    downloadlogger = logging.getLogger('special.dlcomms')
     if not query.strip():
         raise ValueError("query can not be empty")
     params = {
@@ -211,14 +231,29 @@ def annas_search(
         "ext": file_type.value,
         "sort": order_by.value,
     }
-
-    try:
-        soup = html_parser(urljoin(CONFIG['ANNA_HOST'], "search"), params)
-    except Exception as e:
-        logger.error(f"{e}")
+    annas_hosts = get_list(CONFIG['ANNA_HOST'])
+    if len(annas_hosts) == 1:
+        # old style single host, add the wikipedia entries
+        annas_hosts_update()
+    soup = None
+    for host in annas_hosts:
+        prefix = ''
+        if not host.startswith('http'):
+            prefix = "https://"
+        try:
+            soup = html_parser(urljoin(prefix + host, "search"), params)
+            if soup:
+                # got some results, prefer this host next time
+                annas_hosts_prefer(annas_hosts, host)
+                break
+        except Exception as e:
+            downloadlogger.error(f"{host}: {e}")
+    if not soup:
+        # no searches returned anything, update the host list
+        annas_hosts_update()
         return None
 
-    raw_results = soup.find_all("a", class_="js-vim-focus")
+    raw_results = soup.select("div[class*='pt-3'][class*='border-b']")
     results = list(filter(lambda i: i is not None, map(parse_result, raw_results)))
     myhash = md5_utf8(query)
     cache_location = os.path.join(DIRS.CACHEDIR, "IRCCache")
@@ -242,36 +277,75 @@ def annas_search(
     return hashfilename
 
 
-def parse_result(raw_content: Tag) -> SearchResult:
+def parse_result(raw_content: Tag) -> SearchResult | None:
     try:
-        title = raw_content.find("h3").text.strip()
-    except AttributeError:
+        link = raw_content.find("a", class_="js-vim-focus")
+        if not link:
+            return None
+
+        title = link.text.strip()
+        hashid = link.get("href", "").split("md5/")[-1]
+        if not hashid:
+            return None
+
+    except (AttributeError, IndexError):
         return None
 
-    authors = raw_content.find("div", class_="max-lg:text-sm") or ''
-    if authors:
-        authors = authors.text
-    publish_info = raw_content.find("div", class_="max-lg:text-xs") or ''
-    if publish_info:
-        publish_info = publish_info.text
-        publisher, publish_date = extract_publish_info(publish_info)
-    else:
-        publish_date = ''
-        publisher = ''
+    # Extract author from fallback cover
+    authors = ''
+    author_div = raw_content.find("div", class_="text-amber-900")
+    if author_div:
+        authors = author_div.get("data-content", "")
+
+    # Extract file info from metadata div
+    file_info = FileInfo("", "", "")
+    metadata_div = raw_content.find("div", class_="text-gray-800")
+    if not metadata_div:
+        for div in raw_content.find_all("div"):
+            if "✅" in div.text:
+                metadata_div = div
+                break
+
+    if metadata_div:
+        metadata_text = metadata_div.text
+
+        lang_match = re.search(r'([A-Za-z]+)\s*\[([a-z]{2})\]', metadata_text)
+        language = lang_match.group(2) if lang_match else ""
+
+        size_match = re.search(r'(\d+\.?\d*\s*[MKG]B)', metadata_text)
+        size = size_match.group(1) if size_match else ""
+
+        format_match = re.search(
+            r'·\s*(PDF|EPUB|MOBI|AZW3|FB2|TXT|DJVU|CBR|CBZ|RTF|LIT|DOC|DOCX|HTML|HTM|LRF|MHT|ZIP|RAR)\s*·',
+            metadata_text, re.IGNORECASE)
+        extension = format_match.group(1).lower() if format_match else ""
+
+        file_info = FileInfo(extension, size, language)
+
+    # Fallback: extract extension from file path
+    if not file_info.extension:
+        file_path_div = raw_content.find("div", class_="text-gray-500")
+        if file_path_div:
+            file_path = file_path_div.text.strip()
+            if "." in file_path:
+                file_info = FileInfo(file_path.split(".")[-1].lower(), file_info.size, file_info.language)
+
+    publisher = ''
+    publish_date = ''
+
+    if metadata_div and metadata_div.text:
+        metadata_text = metadata_div.text
+        year_match = re.search(r'·\s*(\d{4})\s*·', metadata_text)
+        if year_match:
+            publish_date = year_match.group(1)
+
+    thumbnail = ''
     try:
-        thumbnail = raw_content.find("img").get("src") or ''
+        img = raw_content.find("img")
+        if img:
+            thumbnail = img.get("src", "")
     except AttributeError:
         thumbnail = ''
-    hashid = raw_content.get("href").split("md5/")[-1]
-
-    raw_file_info = raw_content.find(
-        "div", class_="text-gray-500"
-    )
-    if raw_file_info:
-        raw_file_info = raw_file_info.text
-        file_info = extract_file_info(raw_file_info)
-    else:
-        file_info = ''
 
     res = SearchResult(
         id=hashid,
@@ -285,70 +359,109 @@ def parse_result(raw_content: Tag) -> SearchResult:
     return res
 
 
-def annas_download(md5, folder, title, extn):
+def annas_download(md5, folder, title, extn, domain_index=0):
     logger = logging.getLogger(__name__)
-    url = urljoin(CONFIG['ANNA_HOST'], '/dyn/api/fast_download.json')
-    secret_key = CONFIG['ANNA_KEY']
-    params = {'md5': md5, 'key': secret_key, 'domain_index': 0}
-    response = get(url, params=params)
-    if str(response.status_code).startswith('2'):
+    downloadlogger = logging.getLogger('special.dlcomms')
+    params = {'md5': md5, 'key': CONFIG['ANNA_KEY']}
+    if domain_index:
+        params['domain_index'] = domain_index
+    annas_hosts = get_list(CONFIG['ANNA_HOST'])
+    if not annas_hosts:
+        return False, "No Annas hosts found"
+    response = None
+    url = None
+    for host in annas_hosts:
+        prefix = ''
+        if not host.startswith('http'):
+            prefix = "https://"
+        url = urljoin(prefix + host, '/dyn/api/fast_download.json')
+        try:
+            response = get(url, params=params)
+        except Exception as e:
+            downloadlogger.debug(f"Exception from {host}: {e}")
+            response = None
+        if response and response.status_code == 200:
+            downloadlogger.debug(f"Result {response.status_code} from {host}")
+            annas_hosts_prefer(annas_hosts, host)
+            break
+        downloadlogger.debug(f"Failed to download from {host}: {response.status_code if response else 'No response'}")
+
+    if not response:
+        return False, "No response from Annas"
+
+    if response.status_code == 200:
+        max_domain_index = check_int(CONFIG['ANNA_MAX_SERVERS'], 0) - 1 # Server indexes are 0-based
         res = response.json()
+        downloadlogger.debug(res)
         counters = res['account_fast_download_info']
         CONFIG.set_int('ANNA_DLLIMIT', counters['downloads_per_day'])
         lazylibrarian.TIMERS['ANNA_REMAINING'] = counters['downloads_left']
         if counters['downloads_left'] == 0:
-            msg = f"Download limit ({counters['downloads_per_day']}) reached"
+            msg = f"Download limit reached ({counters})"
             block_annas(counters['downloads_per_day'])
             return False, msg
         url = res['download_url']
         if url and url.startswith('http'):
-            r = get(url)
-            if not str(r.status_code).startswith('2'):
-                msg = f"Got a {r.status_code} response for {url}"
-                logger.warning(msg)
-                return False, msg
-            filedata = r.content
-            if not len(filedata):
-                msg = f"Got empty response for {url}"
-                logger.warning(msg)
-                return False, msg
-            if len(filedata) < 100:
-                msg = f"Only got {len(filedata)} bytes for {url}"
-                logger.warning(msg)
-                return False, msg
-            logger.debug(f"Got {len(filedata)} bytes for {url}")
-            download_dir = get_list(CONFIG['DOWNLOAD_DIR'])[0]
-            if folder:
-                parent = os.path.join(download_dir, folder)
-                if not os.path.isdir(parent):
-                    os.mkdir(parent)
-            dest_filename = os.path.join(download_dir, folder, sanitize(f"{title}{extn}"))
-            with open(dest_filename, 'wb') as f:
-                f.write(filedata)
-            logger.debug(f"Data written to file {dest_filename}")
-            if counters['downloads_left'] == 1:
-                # just used the last download
-                block_annas(counters['downloads_per_day'])
-            else:
+            try:
+                r = get(url)
+                if r.status_code != 200:
+                    msg = f"Got a {r.status_code} response for {url}"
+                    if domain_index < max_domain_index:
+                        return annas_download(md5, folder, title, extn, domain_index + 1)
+                    downloadlogger.warning(msg)
+                    return False, msg
+                filedata = r.content
+                if not len(filedata):
+                    msg = f"Got empty response for {url}"
+                    downloadlogger.warning(msg)
+                    return False, msg
+                if len(filedata) < 100:
+                    msg = f"Only got {len(filedata)} bytes for {url}"
+                    downloadlogger.warning(msg)
+                    return False, msg
+                downloadlogger.debug(f"Got {len(filedata)} bytes for {url}")
+                download_dir = get_directory('Download')
+                if folder:
+                    parent = os.path.join(download_dir, folder)
+                    if not os.path.isdir(parent):
+                        os.mkdir(parent)
+                dest_filename = os.path.join(download_dir, folder, sanitize(f"{title}{extn}"))
+                with open(dest_filename, 'wb') as f:
+                    f.write(filedata)
+                logger.debug(f"Data written to file {dest_filename}")
                 lazylibrarian.TIMERS['ANNA_REMAINING'] = counters['downloads_left'] - 1
                 logger.info(f"Anna {lazylibrarian.TIMERS['ANNA_REMAINING']} remaining "
                             f"of {counters['downloads_per_day']}")
-            return True, dest_filename
-        else:
-            errmsg = f"Invalid url: {url} {res['error']}"
-            logger.error(errmsg)
-            return False, errmsg
-    else:
-        errmsg = (f"Error Status: {response.status_code} Check your ANNAS key, "
-                  f"and make sure you have a PAID subscription")
+                return True, dest_filename
+            except Exception as e:
+                logger.debug(str(e))
+                if domain_index < max_domain_index:
+                    return annas_download(md5, folder, title, extn, domain_index + 1)
+        errmsg = f"Invalid url: {url} {res['error']}"
         logger.error(errmsg)
         return False, errmsg
+    if response.status_code == 409:
+        errmsg = f"Error Status: {response.status_code} Over your daily limit."
+    else:
+        downloadlogger.debug(url)
+        downloadlogger.debug(str(params))
+        try:
+            data = response.json()
+        except JSONDecodeError:
+            data = None
+        if data and 'error' in data:
+            errmsg = f"Error Status: {response.status_code}: {data['error']}"
+        else:
+            errmsg = (f"Error Status: {response.status_code}: Check your ANNAS key, "
+                      f"and make sure you have a PAID subscription")
+
+    logger.error(errmsg)
+    return False, errmsg
 
 
-def anna_search(book=None, test=False):
+def anna_search(book=None, searchtype='ebook', test=False):
     logger = logging.getLogger(__name__)
     provider = "annas"
-    # searchtype = 'eBook'
     lang = CONFIG['ANNA_SEARCH_LANG'].split(',')[0].strip().upper()
     if lang and lang in Language.__members__:
         language = Language[lang]
@@ -399,7 +512,7 @@ def anna_search(book=None, test=False):
     if not hashfilename:
         return [], ''
 
-    with open(hashfilename, 'r') as f:
+    with open(hashfilename) as f:
         searchresults = json.load(f)
 
     logger.debug(f"{provider} returned {len(searchresults)}")
@@ -414,8 +527,11 @@ def anna_search(book=None, test=False):
         dl = item['id']
         title = title.split('\n')[0]
 
+        if searchtype == 'mag':  # magazines don't have an author
+            author = title
         if not author or not title or not size or not dl:
             removed += 1
+            logger.debug(f"Rejecting Author:{author}, Title:{title}, Size:{size}, DL:{dl}")
         else:
             if author and author not in title:
                 title = f"{author.strip()} {title.strip()}"
@@ -423,7 +539,7 @@ def anna_search(book=None, test=False):
             results.append({
                 'bookid': book['bookid'],
                 'tor_prov': provider,
-                'tor_title': f"{title}{extn}",
+                'tor_title': f"{title}.{extn}",
                 'tor_url': dl,
                 'tor_size': size,
                 'tor_type': 'direct',
@@ -438,27 +554,73 @@ def anna_search(book=None, test=False):
         logger.debug(f"Test found {len(results)} {plural(len(results), 'result')} ({removed} removed)")
         return len(results)
 
-    logger.debug(f"Found {len(results)} {plural(len(results), 'result')} from {provider} for {book['searchterm']}")
+    logger.debug(f"Found {len(results)} {plural(len(results), 'result')} from {provider} "
+                 f"for {book['searchterm']} ({removed} removed)")
     return results, ''
 
 
 def block_annas(dl_limit=0):
+    logger = logging.getLogger(__name__)
     grabs, oldest = anna_grabs()
-    # rolling 18hr delay if limit reached
-    delay = oldest + 18 * 60 * 60 - time.time()
-    res = f"Reached Daily download limit ({grabs}/{dl_limit})"
-    BLOCKHANDLER.block_provider("annas", res, delay=delay)
+    if dl_limit and grabs >= dl_limit:
+        old_datestr = datetime.fromtimestamp(oldest, UTC).strftime('%Y-%m-%d %H:%M:%S')
+        # rolling delay if limit reached
+        resume = oldest + (18 * 60 * 60)
+        if resume > time.time():
+            delay = time.time() - resume
+        else:
+            # default delay if our grab was too old (it wasn't us)
+            delay = (30 * 60)
+
+        logger.debug(f"Grabs: {grabs}, Oldest: {old_datestr}, Limit: {dl_limit}, Delay: {delay}")
+        res = f"Reached Daily download limit ({grabs}/{dl_limit})"
+        BLOCKHANDLER.block_provider("annas", res, delay=delay)
+    else:
+        # we haven't grabbed enough, someone else is also using annas, wait 30 mins...
+        res = f"Anna reports 0 left of {dl_limit}"
+        BLOCKHANDLER.block_provider("annas", res, delay=30 * 60)
 
 
-def anna_grabs() -> (int, int):
+def anna_grabs() -> tuple[int, int]:
     # we might be out of sync with download counter, eg we might not be the only downloader
     # so although we can count how many we downloaded, normally we ask anna and use their counter
     # If we are over limit we try to use our datestamp to find out when the counter will reset
     db = database.DBConnection()
-    eighteen_hours_ago = time.time() - 18 * 60 * 60
+    eighteen_hours_ago = time.time() - (18 * 60 * 60)
     grabs = db.select("SELECT completed from wanted WHERE nzbprov='annas' and completed > ? order by completed",
                       (eighteen_hours_ago,))
     db.close()
     if grabs:
-        return len(grabs), grabs[0]['completed']
+        return len(grabs), int(grabs[0]['completed'])
     return 0, 0
+
+
+def fetch_annas_archive_domains():
+    """Fetch current Anna's Archive domains from Wikipedia. Returns list of bare domains."""
+    logger = logging.getLogger(__name__)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    try:
+        response = get(WIKIPEDIA_URL, headers=headers, timeout=10)
+        if response.status_code != 200:
+            logger.warning(f"Wikipedia returned status {response.status_code}")
+            return []
+    except Exception as e:
+        logger.warning(f"Failed to fetch domains from Wikipedia: {e}")
+        return []
+
+    domains = []
+    soup = BeautifulSoup(response.content.decode('utf-8', 'ignore'), 'html5lib')
+    urls = soup.find_all('span', class_='url')
+    for url in urls:
+        try:
+            href = str(url).rsplit('href="')[1].split('"')[0]
+            parsed = urlparse(href if '://' in href else 'https:' + href)
+            if parsed.netloc:
+                domains.append(parsed.netloc)
+        except IndexError:
+            continue
+    logger.info(f"Fetched {len(domains)} domain(s) from Wikipedia: {domains}")
+    return domains

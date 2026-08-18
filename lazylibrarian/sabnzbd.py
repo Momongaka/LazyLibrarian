@@ -11,13 +11,14 @@
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+from urllib.parse import urlencode
+
 import requests
 
 import lazylibrarian
-from lazylibrarian.config2 import CONFIG
 from lazylibrarian.common import proxy_list
+from lazylibrarian.config2 import CONFIG
 from lazylibrarian.formatter import make_utf8bytes, versiontuple
-from urllib.parse import urlencode
 
 
 def check_link():
@@ -187,13 +188,13 @@ def sab_nzbd(title=None, nzburl=None, remove_data=False, search=None, nzo_ids=No
 #    if lazylibrarian.SAB_PP:
 #        params["script"] = lazylibrarian.SAB_SCRIPT
 
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug(f'sab params: {repr(params)}')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug(f'sab params: {repr(params)}')
     logging.getLogger('urllib3.connectionpool').setLevel(logging.CRITICAL)
 
     url = f"{host}/api?{urlencode(params)}"
 
-    loggerdlcomms.debug(f'Request url for <a href="{url}">sab_nzbd</a>')
+    dlcommslogger.debug(f'Request url for <a href="{url}">sab_nzbd</a>')
     proxies = proxy_list()
     try:
         timeout = CONFIG.get_int('HTTP_TIMEOUT')
@@ -211,23 +212,18 @@ def sab_nzbd(title=None, nzburl=None, remove_data=False, search=None, nzo_ids=No
         res = f"Unable to connect to SAB with URL: {url}, {type(e).__name__}:{str(e)}"
         logger.error(res)
         return False, res
-    loggerdlcomms.debug(f"Result text from SAB: {str(result)}")
+    dlcommslogger.debug(f"Result text from SAB: {str(result)}")
 
     if title and title.startswith('LL.('):
         return result, ''
 
-    if result['status'] is True:
+    if result.get('status') is True:
         logger.info(f"{title} sent to SAB successfully.")
         # sab versions earlier than 0.8.0 don't return nzo_ids
-        if 'nzo_ids' in result:
-            if result['nzo_ids']:  # check its not empty
-                return result['nzo_ids'][0], ''
+        if 'nzo_ids' in result and result['nzo_ids']:  # check its not empty
+            return result['nzo_ids'][0], ''
         return 'unknown', ''
-    elif result['status'] is False:
-        res = f"SAB returned Error: {result['error']}"
-        logger.error(res)
-        return False, res
-    else:
-        res = f"Unknown error: {str(result)}"
-        logger.error(res)
-        return False, res
+
+    res = f"Send to SAB failed: {str(result)}"
+    logger.error(res)
+    return False, res

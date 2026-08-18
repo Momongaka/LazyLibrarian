@@ -19,25 +19,23 @@
 
 import datetime
 import json
+import logging
 import os
 import sys
 import time
-import logging
 from collections import defaultdict
 from http.client import responses
-from typing import Optional
 
 import requests
 
 from lazylibrarian import database
 from lazylibrarian.common import proxy_list
-from lazylibrarian.config2 import CONFIG
-from lazylibrarian.config2 import LLConfigHandler
+from lazylibrarian.config2 import CONFIG, LLConfigHandler
 from lazylibrarian.formatter import thread_name
 from lazylibrarian.processcontrol import get_info_on_caller
 
 
-class LazyTelemetry(object):
+class LazyTelemetry:
     """Handles basic telemetry gathering for LazyLibrarian, helping
     developers prioritise future development"""
 
@@ -61,7 +59,7 @@ class LazyTelemetry(object):
     # Singleton; no __init__ method
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(LazyTelemetry, cls).__new__(cls)
+            cls._instance = super().__new__(cls)
             # More initialization goes initialization here
             cls._boottime = datetime.datetime.now()
         return cls._instance
@@ -141,17 +139,17 @@ class LazyTelemetry(object):
 
         # Record the actual config of these features
         if _config['BOOK_API'] == 'GoodReads':
-            cfg_telemetry["params"] += f"PRIMARY_GR "
+            cfg_telemetry["params"] += "PRIMARY_GR "
         elif _config['BOOK_API'] == 'GoogleBooks':
-            cfg_telemetry["params"] += f"PRIMARY_GB "
+            cfg_telemetry["params"] += "PRIMARY_GB "
         elif _config['BOOK_API'] == 'HardCover':
-            cfg_telemetry["params"] += f"PRIMARY_HC "
+            cfg_telemetry["params"] += "PRIMARY_HC "
         elif _config['BOOK_API'] == 'OpenLibrary':
-            cfg_telemetry["params"] += f"PRIMARY_OL "
+            cfg_telemetry["params"] += "PRIMARY_OL "
 
         # Record whether these are configured differently from the default
-        for key in ['GR_API', 'GB_API', 'OL_API', 'HC_API', 'GR_SYNC', 'HC_SYNC', 'LT_DEVKEY', 'IMP_PREFLANG',
-                    'IMP_CALIBREDB', 'DOWNLOAD_DIR', 'ONE_FORMAT', 'API_KEY']:
+        for key in ['GR_API', 'GB_API', 'OL_API', 'DNB_API', 'RAN_API', 'HC_API', 'GR_SYNC', 'HC_SYNC', 'LT_DEVKEY',
+                    'IMP_PREFLANG', 'IMP_CALIBREDB', 'DOWNLOAD_DIR', 'ONE_FORMAT', 'API_KEY']:
             item = _config.get_item(key)
             if item and not item.is_default():
                 cfg_telemetry["params"] += f"{key} "
@@ -163,7 +161,7 @@ class LazyTelemetry(object):
         # Count how many Apprise notifications are configured
         cfg_telemetry["APPRISE"] = _config.count_in_use('APPRISE')
 
-    def record_usage_data(self, counter: Optional[str] = None):
+    def record_usage_data(self, counter: str | None = None):
         usg = self.get_usage_telemetry()
         if not counter:
             # Use the module/name of the caller
@@ -172,7 +170,7 @@ class LazyTelemetry(object):
                 # We were called via the helper function, find the real caller:
                 caller_module, caller_function, _ = get_info_on_caller(depth=2)
             counter = f'{caller_module}/{caller_function}'
-        assert not any([c in counter for c in ' "=']), "Counter must be plain text"
+        assert not any(c in counter for c in ' "='), "Counter must be plain text"
         usg[counter] += 1
 
     def clear_usage_data(self):
@@ -230,12 +228,9 @@ class LazyTelemetry(object):
         except Exception as e:
             return f"Exception {type(e).__name__}: {str(e)}", False
 
-        if str(r.status_code).startswith('2'):  # (200 OK etc)
-            return r.text, True  # Success
-        if r.status_code in responses:
-            msg = responses[r.status_code]
-        else:
-            msg = r.text
+        if r.status_code == 200:
+            return r.text, True
+        msg = responses.get(r.status_code, r.text)
         return f"Response status {r.status_code}: {msg}", False
 
     def submit_data(self, server: str, send_config: bool, send_usage: bool):
@@ -257,9 +252,8 @@ class LazyTelemetry(object):
                 id1 = serverid.split('\n')[0]
                 status1 = status.split('\n')[0] if status else ''
                 return f"Server ID: {id1}\n\nStatus:\n{status1}"
-            else:
-                return f"Error connecting to server: {serverid}"
-        except requests.exceptions:
+            return f"Error connecting to server: {serverid}"
+        except requests.exceptions.RequestException:
             return "Error connecting to server"
 
 
@@ -268,19 +262,18 @@ class LazyTelemetry(object):
 TELEMETRY = LazyTelemetry()
 
 
-def record_usage_data(counter: Optional[str] = None):
+def record_usage_data(counter: str | None = None):
     """ Convenience function for recording usage """
     TELEMETRY.record_usage_data(counter)
 
 
 def telemetry_send() -> str:
     """ Routine called by scheduler, to regularly send telemetry data """
-    threadname = thread_name()
-    if "Thread" in threadname:
-        thread_name("TELEMETRYSEND")
+    thread_name("TELEMETRYSEND")
     logger = logging.getLogger(__name__)
     db = database.DBConnection()
     try:
+        logger.info(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
         TELEMETRY.set_install_data(CONFIG, testing=False)
         TELEMETRY.set_config_data(CONFIG)
@@ -295,7 +288,8 @@ def telemetry_send() -> str:
                 result = result.splitlines()[0]  # Return only the first line
         logger.debug(f'Telemetry data sending: {result}, {status}')
     finally:
+        logger.info(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         db.close()
-        thread_name(threadname)
+        thread_name("WEBSERVER")
     return result

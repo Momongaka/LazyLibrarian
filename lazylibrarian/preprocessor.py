@@ -10,7 +10,6 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
-import json
 import logging
 import os
 import subprocess
@@ -18,17 +17,34 @@ from urllib.parse import unquote_plus
 
 import lazylibrarian
 from lazylibrarian import database
-from lazylibrarian.bookrename import audio_parts, name_vars, id3read
+from lazylibrarian.bookrename import audio_parts, id3read, name_vars
 from lazylibrarian.common import calibre_prg, zip_audio
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import DIRS, remove_file, path_exists, listdir, setperm, safe_move, safe_copy
-from lazylibrarian.formatter import (get_list, make_unicode, check_int, human_size, now, check_float, plural)
-from lazylibrarian.images import shrink_mag, coverswap, valid_pdf, write_pdf_tags
+from lazylibrarian.filesystem import (
+    DIRS,
+    listdir,
+    path_exists,
+    remove_file,
+    safe_copy,
+    safe_move,
+    setperm,
+    splitext,
+)
+from lazylibrarian.formatter import (
+    check_float,
+    check_int,
+    get_list,
+    human_size,
+    make_unicode,
+    now,
+    plural,
+)
+from lazylibrarian.images import coverswap, shrink_mag, valid_pdf, write_pdf_tags
 
 
 def preprocess_ebook(bookfolder):
     logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
+    postprocesslogger = logging.getLogger('special.postprocess')
     logger.debug(f"Preprocess ebook {bookfolder}")
     ebook_convert = calibre_prg('ebook-convert')
     if not ebook_convert:
@@ -38,14 +54,14 @@ def preprocess_ebook(bookfolder):
     sourcefile = None
     created = ''
     for fname in listdir(bookfolder):
-        _, extn = os.path.splitext(fname)
+        _, extn = splitext(fname)
         if extn.lower() == '.epub':
             sourcefile = fname
             break
     if not sourcefile:
         for fname in listdir(bookfolder):
-            filename, extn = os.path.splitext(fname)
-            if extn.lower() in ['.mobi', '.azw3']:
+            filename, extn = splitext(fname)
+            if extn.lower() in ['.mobi', ".azw", '.azw3']:
                 sourcefile = fname
                 break
 
@@ -53,7 +69,7 @@ def preprocess_ebook(bookfolder):
         logger.error(f"No suitable sourcefile found in {bookfolder}")
         return False
 
-    basename, source_extn = os.path.splitext(sourcefile)
+    basename, source_extn = splitext(sourcefile)
     logger.debug(f"Wanted formats: {CONFIG['EBOOK_WANTED_FORMATS']}")
     wanted_formats = get_list(CONFIG['EBOOK_WANTED_FORMATS'])
     for ftype in wanted_formats:
@@ -61,9 +77,9 @@ def preprocess_ebook(bookfolder):
             logger.debug(f"No {ftype}")
             params = [ebook_convert, os.path.join(bookfolder, sourcefile),
                       os.path.join(bookfolder, basename + '.' + ftype)]
-            if ftype == 'mobi':
+            if ftype in ['mobi', 'azw', 'azw3']:
                 params.extend(['--output-profile', 'kindle'])
-            loggerpostprocess.debug(str(params))
+            postprocesslogger.debug(str(params))
             try:
                 if os.name != 'nt':
                     _ = subprocess.check_output(params, preexec_fn=lambda: os.nice(10),
@@ -87,7 +103,7 @@ def preprocess_ebook(bookfolder):
         if CONFIG.get_bool('KEEP_JPG'):
             wanted_formats.append('jpg')
         for fname in listdir(bookfolder):
-            filename, extn = os.path.splitext(fname)
+            filename, extn = splitext(fname)
             if not extn or extn.lstrip('.').lower() not in wanted_formats:
                 logger.debug(f"Deleting {fname}")
                 remove_file(os.path.join(bookfolder, fname))
@@ -144,11 +160,11 @@ def get_ffmpeg_details():
 
 def write_metadata(source_file, metadata_file):
     logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
+    postprocesslogger = logging.getLogger('special.postprocess')
     ffmpeg = CONFIG['FFMPEG']
     params = [ffmpeg, '-i', source_file,
               '-f', 'ffmetadata', '-y', metadata_file]
-    if loggerpostprocess.isEnabledFor(logging.DEBUG):
+    if postprocesslogger.isEnabledFor(logging.DEBUG):
         params.append('-report')
         logger.debug(str(params))
         ffmpeg_env = os.environ.copy()
@@ -174,7 +190,7 @@ def write_metadata(source_file, metadata_file):
 
 def read_part_durations(bookfolder, parts, metadata_file, duration_file):
     logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
+    postprocesslogger = logging.getLogger('special.postprocess')
     ffmpeg = CONFIG['FFMPEG']
     part_durations = []
     highest_bitrate = 0
@@ -183,7 +199,7 @@ def read_part_durations(bookfolder, parts, metadata_file, duration_file):
         # we get the duration data from the subprocess response
         params = [ffmpeg, '-i', os.path.join(bookfolder, part[3]),
                   '-f', 'ffmetadata', '-y', os.path.join(bookfolder, "partmeta.ll")]
-        if loggerpostprocess.isEnabledFor(logging.DEBUG):
+        if postprocesslogger.isEnabledFor(logging.DEBUG):
             params.append('-report')
             logger.debug(str(params))
             ffmpeg_env = os.environ.copy()
@@ -213,7 +229,6 @@ def read_part_durations(bookfolder, parts, metadata_file, duration_file):
                 except IndexError:
                     logger.debug(f"Error reading duration from {part[3]}, assume 0")
                     part_durations.append([part[0], 0])
-                    pass
             else:
                 logger.debug(f"No duration found in {part[3]}, assume 0")
                 part_durations.append([part[0], 0])
@@ -229,13 +244,13 @@ def read_part_durations(bookfolder, parts, metadata_file, duration_file):
     if part_durations:
         part_durations.sort(key=lambda x: x[0])
         start = 0
-        with open(metadata_file, 'r', encoding="utf-8") as f:
-            with open(os.path.join(bookfolder, duration_file), 'w', encoding="utf-8") as o:
-                for lyne in f.readlines():
-                    if not lyne.startswith('[CHAPTER]') and not lyne.startswith('TIMEBASE='):
-                        if not lyne.startswith('START=') and not lyne.startswith('END='):
-                            if not lyne.startswith('title='):
-                                o.write(lyne)
+        with (open(metadata_file, encoding="utf-8") as f,
+              open(os.path.join(bookfolder, duration_file), 'w', encoding="utf-8") as o):
+            for lyne in f.readlines():
+                if (not lyne.startswith('[CHAPTER]') and not lyne.startswith('TIMEBASE=') and
+                    not lyne.startswith('START=') and not lyne.startswith('END=') and
+                        not lyne.startswith('title=')):
+                    o.write(lyne)
 
         with open(duration_file, 'a', encoding="utf-8") as f:
             for item in part_durations:
@@ -266,28 +281,20 @@ def get_metatags(bookid, bookfile, authorname, bookname, source_file):
         id3r = id3read(source_file)
         if not match['Narrator'] and id3r.get('narrator'):
             db.action("UPDATE books SET Narrator=? WHERE BookID=?", (id3r['narrator'], bookid))
-        artist = id3r.get('artist')
-        composer = id3r.get('composer')
-        album_artist = id3r.get('albumartist')
-        album = id3r.get('album')
-        comment = id3r.get('comment')
-        author = authorname
-        media_type = "Audiobook"
-        genre = match['BookGenre']
-        description = match['BookDesc']
-        date = match['BookDate']
-        if date == '0000':
-            date = ''
+        id3dict = {'artist': id3r.get('artist'), 'composer': id3r.get('composer'),
+                   'album_artist': id3r.get('albumartist'), 'album': id3r.get('album'), 'comment': id3r.get('comment'),
+                   'author': authorname, 'media_type': "Audiobook", 'genre': match['BookGenre'],
+                   'description': match['BookDesc'], 'date': match['BookDate']}
+        if match['BookDate'] == '0000':
+            id3dict['date'] = ''
         if match['SeriesDisplay']:
             series = match['SeriesDisplay'].split('<br>')[0].strip()
             if series and '$SerName' in CONFIG['AUDIOBOOK_DEST_FILE']:
                 title = f"{title} ({series})"
         metatags = ['-metadata', f"title={title}"]
-        for item in ['artist', 'album_artist', 'composer', 'album', 'author',
-                     'date', 'comment', 'description', 'genre', 'media_type']:
-            value = eval(item)
-            if value:
-                metatags.extend(['-metadata', f"{item}={value}"])
+        for item in id3dict:
+            if id3dict[item]:
+                metatags.extend(['-metadata', f"{item}={id3dict[item]}"])
     else:
         metatags = ['-metadata', f"album={bookname}",
                     '-metadata', f"artist={authorname}",
@@ -298,12 +305,18 @@ def get_metatags(bookid, bookfile, authorname, bookname, source_file):
 
 def write_audio_tags(bookfolder, filename, track, metatags):
     logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
+    postprocesslogger = logging.getLogger('special.postprocess')
     ffmpeg = CONFIG['FFMPEG']
     try:
-        extn = os.path.splitext(filename)[1]
+        extn = splitext(filename)[1]
+        # ffmpeg will detect cover art in m4a as a video
+        # and try to convert to mjpeg to h264 and will fail when codec is not installed.
+        # This copies image as is
         params = [ffmpeg, '-i', os.path.join(bookfolder, filename),
-                  '-y', '-c:a', 'copy']
+                  '-y', '-c:a', 'copy',
+                  '-c:v', 'copy']
+        # ffmpeg will detect cover art in m4a as a video and try to convert to mjpeg to h264
+        # and will fail when codec is not installed. This copies image as is
         params.extend(metatags)
         params.extend(['-metadata', f'track={track}'])
         tempfile = os.path.join(bookfolder, f"tempaudio{extn}")
@@ -315,7 +328,7 @@ def write_audio_tags(bookfolder, filename, track, metatags):
             b2a = False
 
         params.append(tempfile)
-        if loggerpostprocess.isEnabledFor(logging.DEBUG):
+        if postprocesslogger.isEnabledFor(logging.DEBUG):
             params.append('-report')
             logger.debug(str(params))
             ffmpeg_env = os.environ.copy()
@@ -349,9 +362,9 @@ def write_audio_tags(bookfolder, filename, track, metatags):
     return True
 
 
-def preprocess_audio(bookfolder, bookid=0, authorname='', bookname='', merge=None, tag=None, zipp=None):
+def preprocess_audio(bookfolder, bookid='', authorname='', bookname='', merge=None, tag=None, zipp=None):
     logger = logging.getLogger(__name__)
-    loggerpostprocess = logging.getLogger('special.postprocess')
+    postprocesslogger = logging.getLogger('special.postprocess')
     if merge is None:
         merge = CONFIG.get_bool('CREATE_SINGLEAUDIO')
     if tag is None:
@@ -395,7 +408,7 @@ def preprocess_audio(bookfolder, bookid=0, authorname='', bookname='', merge=Non
             if token in unquoted_type:
                 logger.warning(f'Cannot set output type, contains "{token}"')
     if not out_type:
-        out_type = os.path.splitext(parts[0][3])[1]
+        out_type = splitext(parts[0][3])[1]
 
     if '-f ' in CONFIG['AUDIO_OPTIONS']:
         force_type = '.' + CONFIG['AUDIO_OPTIONS'].split('-f ', 1)[1].split(',')[0].split(' ')[0].strip()
@@ -407,7 +420,7 @@ def preprocess_audio(bookfolder, bookid=0, authorname='', bookname='', merge=Non
         force_mp4 = True
     # else:  # should we force mp4 if input is mp4 but output is mp3?
     #     for part in parts:
-    #         if os.path.splitext(part[3])[1] in ['.m4b', '.m4a', '.aac', '.mp4']:
+    #         if splitext(part[3])[1] in ['.m4b', '.m4a', '.aac', '.mp4']:
     #             force_mp4 = True
     #            break
 
@@ -426,8 +439,9 @@ def preprocess_audio(bookfolder, bookid=0, authorname='', bookname='', merge=Non
 
     with open(partslist_file, 'w', encoding="utf-8") as f:
         for part in parts:
-            # json.dumps escapes the invalid chars for us, eg apostrophe
-            f.write(f"file {json.dumps(part[3])}\n")
+            # Use single quotes and escape apostrophes for FFmpeg compatibility
+            escaped_name = part[3].replace("'", "'\\''")
+            f.write(f"file '{escaped_name}'\n")
 
     bookfile = namevars['AudioSingleFile'] if namevars['Author'] else ''
     # might not have any namevars (eg no bookid)
@@ -436,12 +450,12 @@ def preprocess_audio(bookfolder, bookid=0, authorname='', bookname='', merge=Non
     outfile = bookfile + out_type
 
     if len(parts) == 1:
-        if out_type == os.path.splitext(parts[0][3])[1]:
+        if out_type == splitext(parts[0][3])[1]:
             logger.info("Only one audio file found, nothing to merge")
             merge = False
         else:
             logger.info(f"Only one audio file found, changing format from "
-                        f"{os.path.splitext(parts[0][3])[1]} to {out_type}")
+                        f"{splitext(parts[0][3])[1]} to {out_type}")
             merge = True
 
     ff_ver = lazylibrarian.FFMPEGVER
@@ -473,7 +487,7 @@ def preprocess_audio(bookfolder, bookid=0, authorname='', bookname='', merge=Non
         params.extend(options)
         params.append('-y')
         params.append(os.path.join(bookfolder, outfile))
-        if loggerpostprocess.isEnabledFor(logging.DEBUG):
+        if postprocesslogger.isEnabledFor(logging.DEBUG):
             params.append('-report')
             logger.debug(str(params))
             ffmpeg_env = os.environ.copy()
@@ -534,23 +548,36 @@ def preprocess_magazine(bookfolder, cover=0, tag=False, title='', issue='', genr
     logger.debug(f"Preprocess magazine {bookfolder} cover={cover}")
     try:
         sourcefile = None
+        source_extn = ''
         for fname in listdir(bookfolder):
-            _, extn = os.path.splitext(fname)
-            if extn.lower() == '.pdf':
+            _, extn = splitext(fname)
+            lower_extn = extn.lower()
+            if lower_extn == '.pdf':
                 sourcefile = fname
+                source_extn = lower_extn
                 break
+            if not sourcefile and lower_extn in ['.cbz', '.cbr']:
+                sourcefile = fname
+                source_extn = lower_extn
 
         if not sourcefile:
             msg = f"No suitable sourcefile found in {bookfolder}"
             logger.error(msg)
             return False, msg
 
+        cover = check_int(cover, 0)
+        dpi = CONFIG.get_int('SHRINK_MAG')
+
+        if source_extn in ['.cbz', '.cbr']:
+            if dpi or (CONFIG.get_bool('SWAP_COVERPAGE') and cover > 1) or tag:
+                logger.debug(f"Magazine preprocessing options apply to pdf only, leaving {sourcefile} unchanged")
+            else:
+                logger.debug(f"No preprocessing required for {source_extn} magazine archive")
+            return True, ''
+
         if not valid_pdf(os.path.join(bookfolder, sourcefile)):
             msg = f"Invalid pdf {sourcefile} in {bookfolder}"
             return False, msg
-
-        dpi = CONFIG.get_int('SHRINK_MAG')
-        cover = check_int(cover, 0)
 
         if not dpi and not (CONFIG.get_bool('SWAP_COVERPAGE') and cover > 1) and not tag:
             logger.debug("No preprocessing required")

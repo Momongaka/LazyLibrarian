@@ -13,11 +13,12 @@
 # Purpose:
 #   Look up book metadata or information, find it in the DB or add from dir
 
+import contextlib
 import logging
 import os
 import re
 import shutil
-import threading
+import time
 import traceback
 import zipfile
 from xml.etree import ElementTree
@@ -25,22 +26,47 @@ from xml.etree import ElementTree
 from rapidfuzz import fuzz
 
 import lazylibrarian
-from lazylibrarian import database, ROLE
-from lazylibrarian.bookrename import book_rename, audio_rename, id3read, delete_empty_folders
-from lazylibrarian.cache import cache_img, ImageType
+from lazylibrarian import ROLE, database
+from lazylibrarian.blockhandler import BLOCKHANDLER
+from lazylibrarian.bookrename import audio_rename, book_rename, delete_empty_folders, id3read
+from lazylibrarian.cache import ImageType, cache_img
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import (DIRS, path_exists, path_isdir, path_isfile, listdir, walk, any_file,
-                                      opf_file, get_directory, book_file)
-from lazylibrarian.formatter import (plural, is_valid_isbn, get_list, unaccented, replace_all, strip_quotes,
-                                     split_title, now, make_unicode, split_author_names)
-from lazylibrarian.gb import GoogleBooks
-from lazylibrarian.gr import GoodReads
-from lazylibrarian.hc import HardCover
-from lazylibrarian.au import Audible
+from lazylibrarian.filesystem import (
+    DIRS,
+    any_file,
+    book_file,
+    get_directory,
+    listdir,
+    opf_file,
+    path_exists,
+    path_isdir,
+    path_isfile,
+    splitext,
+)
+from lazylibrarian.formatter import (
+    get_list,
+    is_valid_isbn,
+    make_unicode,
+    now,
+    plural,
+    replace_all,
+    split_author_names,
+    split_title,
+    strip_quotes,
+    thread_name,
+    unaccented,
+)
 from lazylibrarian.images import img_id
-from lazylibrarian.importer import (update_totals, add_author_name_to_db, search_for, collate_nopunctuation,
-                                    title_translates)
-from lazylibrarian.ol import OpenLibrary
+from lazylibrarian.importer import (
+    add_author_name_to_db,
+    book_keys,
+    collate_fuzzy,
+    collate_nopunctuation,
+    move_book_to_author,
+    search_for,
+    title_translates,
+    update_totals,
+)
 from lazylibrarian.preprocessor import preprocess_audio
 from lib.mobi import Mobi
 
@@ -49,20 +75,20 @@ from lib.mobi import Mobi
 def get_book_meta(fdir, reason="get_book_meta"):
     # look for a bookid in a LL.() filename or a .desktop file and return author/title/bookid
     logger = logging.getLogger(__name__)
-    loggerlibsync = logging.getLogger('special.libsync')
+    libsynclogger = logging.getLogger('special.libsync')
     bookid = ''
     reason = f"{reason} [{fdir}]"
-    loggerlibsync.debug(reason)
+    libsynclogger.debug(reason)
     try:
         for item in listdir(fdir):
-            loggerlibsync.debug(f"Checking [{item}]")
+            libsynclogger.debug(f"Checking [{item}]")
             if 'LL.(' in item:
                 bookid = item.split('LL.(')[1].split(')')[0]
                 if bookid:
                     logger.debug(f"bookid {bookid} from {item}")
                     break
-            if item.endswith('.desktop') or item.endswith('.url'):
-                with open(os.path.join(fdir, item), 'r') as f:
+            if item.endswith(('.desktop', '.url')):
+                with open(os.path.join(fdir, item)) as f:
                     try:
                         lynes = f.readlines()
                     except Exception as e:
@@ -82,21 +108,10 @@ def get_book_meta(fdir, reason="get_book_meta"):
             existing_book = db.match(cmd, (bookid,))
             if not existing_book:
                 logger.debug(f"Searching {CONFIG['BOOK_API']} for {bookid}")
-                if CONFIG['BOOK_API'] == "GoogleBooks":
-                    gb = GoogleBooks(bookid)
-                    gb.find_book(bookid, None, None, reason)
-                elif CONFIG['BOOK_API'] == "GoodReads":
-                    gr = GoodReads(bookid)
-                    gr.find_book(bookid, None, None, reason)
-                elif CONFIG['BOOK_API'] == "HardCover":
-                    hc = HardCover(bookid)
-                    hc.find_book(bookid, None, None, reason)
-                elif CONFIG['BOOK_API'] == "OpenLibrary":
-                    ol = OpenLibrary(bookid)
-                    ol.find_book(bookid, None, None, reason)
-                elif CONFIG['BOOK_API'] == "Audible":
-                    au = Audible(bookid)
-                    au.find_book(bookid, None, None, reason)
+                this_source = lazylibrarian.INFOSOURCES[CONFIG['BOOK_API']]
+                api = this_source['api']
+                api = api()
+                _ = api.add_bookid_to_db(bookid, None, None, reason)
                 existing_book = db.match(cmd, (bookid,))
             db.close()
             if existing_book:
@@ -111,17 +126,18 @@ def get_book_meta(fdir, reason="get_book_meta"):
 
 
 def get_book_info(fname):
-    # only handles epub, mobi, azw3 and opf for now,
+    # only handles epub, mobi, azw, azw3 and opf for now,
     # for pdf see notes below
     logger = logging.getLogger(__name__)
+    searchinglogger = logging.getLogger('special.searching')
     fname = make_unicode(fname)
     res = {}
-    extn = os.path.splitext(fname)[1]
+    extn = splitext(fname)[1]
     if not extn:
         return res
 
     res['type'] = extn[1:].lower()
-    if res['type'] in ["mobi", "azw3"]:
+    if res['type'] in ["mobi", "azw", "azw3"]:
         try:
             book = Mobi(fname)
             book.parse()
@@ -133,6 +149,7 @@ def get_book_info(fname):
         res['title'] = make_unicode(book.title())
         res['language'] = make_unicode(book.language())
         res['isbn'] = make_unicode(book.isbn())
+        searchinglogger.debug(f"{res}")
         return res
 
         # noinspection PyUnreachableCode
@@ -154,7 +171,7 @@ def get_book_info(fname):
                     res['type'] = "pdf"
                     return res
         """
-    elif res['type'] == "epub":
+    if res['type'] == "epub":
         # prepare to read from the .epub file
         try:
             zipdata = zipfile.ZipFile(fname)
@@ -185,11 +202,8 @@ def get_book_info(fname):
         txt = zipdata.read(cfname)
 
     elif res['type'] == "opf":
-        f = open(fname, 'rb')
-        try:
+        with open(fname, 'rb') as f:
             txt = f.read()
-        finally:
-            f.close()
         txt = make_unicode(txt)
         # sanitize any unmatched html tags or ElementTree won't parse
         dic = {'<br>': '', '</br>': ''}
@@ -236,16 +250,21 @@ def get_book_info(fname):
                             res['gr_id'] = txt
                         elif attrib[k] == 'OPENLIBRARY':
                             res['ol_id'] = txt
-                        elif attrib[k] == 'HARDCOVER':
+                        elif attrib[k].upper() in ['HARDCOVER', 'HARDCOVER-ID'] and txt.isnumeric():
                             res['hc_id'] = txt
                         elif attrib[k] == 'GOOGLE':
                             res['gb_id'] = txt
                         elif attrib[k] == 'AUDIBLE':
                             res['au_id'] = txt
+                        elif attrib[k] == 'DNB':
+                            res['dnb_id'] = txt
+                        elif attrib[k] == 'RANOBEDB':
+                            res['ran_id'] = txt
         n += 1
     if len(authors):
         res['creator'] = authors[0]
         res['authors'] = authors
+    searchinglogger.debug(f"{res}")
     return res
 
 
@@ -256,7 +275,7 @@ def find_book_in_db(author, book, ignored=None, library='eBook', reason='find_bo
     # or one already marked 'Open' so we match the same one as before
     # or prefer not ignored over ignored
     logger = logging.getLogger(__name__)
-    loggerfuzz = logging.getLogger('special.fuzz')
+    fuzzlogger = logging.getLogger('special.fuzz')
     book = book.replace('\n', ' ')
     book = " ".join(book.split())
     author = " ".join(author.split())
@@ -291,9 +310,9 @@ def find_book_in_db(author, book, ignored=None, library='eBook', reason='find_bo
 
         whichstatus = 'Status' if library == 'eBook' else 'AudioStatus'
 
-        loggerfuzz.debug(f"Found {len(res)} exact match")
+        fuzzlogger.debug(f"Found {len(res)} exact match")
         for item in res:
-            loggerfuzz.debug(f"{book} [{item[whichstatus]}]")
+            fuzzlogger.debug(f"{book} [{item[whichstatus]}]")
 
         match = None
         for item in res:
@@ -346,7 +365,7 @@ def find_book_in_db(author, book, ignored=None, library='eBook', reason='find_bo
                            f"(source={source},library={library},ignored={ignored})")
             return 0, ''
 
-        loggerfuzz.debug(cmd)
+        fuzzlogger.debug(cmd)
 
         best_ratio = 0.0
         best_partial = 0.0
@@ -368,7 +387,19 @@ def find_book_in_db(author, book, ignored=None, library='eBook', reason='find_bo
 
         book_lower = unaccented(book.lower(), only_ascii=False)
         book_lower = strip_quotes(book_lower)
-        book_partname, book_sub, _ = split_title(author, book_lower)
+        # source is the book_key eg hc_id, dnb_id
+        # from this we need to see if the source provides subtitles
+        has_subtitles = []
+        for item in lazylibrarian.INFOSOURCES.keys():
+            this_source = lazylibrarian.INFOSOURCES[item]
+            if this_source['has_subs']:
+                has_subtitles.append(this_source['book_key'])
+
+        if source in has_subtitles:
+            book_partname = ''
+            book_sub = ''
+        else:
+            book_partname, book_sub, _ = split_title(author, book_lower)
 
         # We want to match a book on disk with a subtitle to a shorter book in the DB
         # - Strict prefix match with a : followed by junk is allowed
@@ -378,15 +409,14 @@ def find_book_in_db(author, book, ignored=None, library='eBook', reason='find_bo
 
         logger.debug(f"Searching {len(books)} {ign}{plural(len(books), 'book')} by "
                      f"[{authorid}:{author}] in database for [{book}]")
-        loggerfuzz.debug(f'book partname [{book_partname}] book_sub [{book_sub}]')
         if book_partname == book_lower:
             book_partname = ''
-
+        fuzzlogger.debug(f'book partname [{book_partname}] book_sub [{book_sub}]')
         for a_book in books:
             a_bookname = a_book['BookName']
             if a_book['BookSub'] and book_sub:
                 a_bookname += f" {a_book['BookSub']}"
-            loggerfuzz.debug(f"Checking [{a_bookname}]")
+            fuzzlogger.debug(f"Checking [{a_bookname}]")
             # tidy up everything to raise fuzziness scores
             # still need to lowercase for matching against partial_name later on
             a_book_lower = unaccented(a_bookname.lower(), only_ascii=False)
@@ -400,52 +430,109 @@ def find_book_in_db(author, book, ignored=None, library='eBook', reason='find_bo
             #
             # token sort ratio allows "Lord Of The Rings, The"   to match  "The Lord Of The Rings"
             ratio = fuzz.token_sort_ratio(book_lower, a_book_lower)
-            loggerfuzz.debug(f"Ratio {round(ratio, 2)} [{book_lower}][{a_book_lower}]")
             # partial ratio allows "Lord Of The Rings"   to match  "The Lord Of The Rings"
             partial = fuzz.partial_ratio(book_lower, a_book_lower)
-            loggerfuzz.debug(f"PartialRatio {round(partial, 2)} [{book_lower}][{a_book_lower}]")
             if book_partname:
                 # partname allows "Lord Of The Rings (illustrated edition)"   to match  "The Lord Of The Rings"
                 partname = fuzz.partial_ratio(book_partname, a_book_lower)
-                loggerfuzz.debug(f"PartName {round(partname, 2)} [{book_partname}][{a_book_lower}]")
+
+            # lose points if the difference is just numbers so we don't match "book 2" and "book 3"
+            # eg "He Who Fights With Monsters #7" is not the same as "He Who Fights With Monsters 05"
+            # AND "He Who Fights With Monsters" is not the same as "He Who Fights With Monsters #2"
+            # BUT The Secret of Secrets (Robert Langdon, #6) IS the same as The Secret of Secrets
+            set1 = set(book_lower.split())
+            set2 = set(a_book_lower.split())
+            differences = set1.symmetric_difference(set2)
+            numbers = []
+            for word in differences:
+                # see if word coerces to an integer or a float
+                word = word.replace('-', '')  # merge ranges so books 1-3 is different to books 1-5
+                try:
+                    numbers.append(float(re.findall(r'\d+\.\d+', word)[0]))
+                except IndexError:
+                    with contextlib.suppress(IndexError):
+                        numbers.append(int(re.findall(r'\d+', word)[0]))
+
+            if len(numbers) == 2 and numbers[0] != numbers[1]:
+                # make sure we are below match threshold
+                if ratio >= CONFIG.get_int('NAME_RATIO'):
+                    ratio = CONFIG.get_int('NAME_RATIO') - 5
+                if partial >= CONFIG.get_int('NAME_PARTIAL'):
+                    partial = CONFIG.get_int('NAME_PARTIAL') - 5
+                if partname >= CONFIG.get_int('NAME_PARTNAME'):
+                    partname = CONFIG.get_int('NAME_PARTNAME') - 5
+                fuzzlogger.debug(f"Downgraded ratios as different numbers {numbers}")
+
+            if len(numbers) == 1:
+                # If the number is in braces and other words are in the braces,
+                # looks like it's series details eg (Robert Langdon, #6)
+                # and the comparison book doesn't include series details
+                ok = False
+                try:
+                    series_details = book_lower.split('(')[1].split(')')[0].split()
+                    for word in series_details:
+                        word = word.replace('-', '')
+                        try:
+                            n = float(re.findall(r'\d+\.\d+', word)[0])
+                        except IndexError:
+                            try:
+                                n = int(re.findall(r'\d+', word)[0])
+                            except IndexError:
+                                n = None
+                        if n is not None and n == numbers[0]:
+                            ok = True  # found the number
+                            break
+                    if len(series_details) == 1:
+                        # don't accept only number, eg (#6)
+                        ok = False
+                        if numbers[0] == 1:
+                            # unless first book in series, so
+                            # He Who Fights With Monsters (He Who Fights With Monsters #1)
+                            # and He Who Fights With Monsters (#1)
+                            # and He Who Fights With Monsters
+                            # are all the same book
+                            ok = True
+                except IndexError:
+                    ok = False
+                if not ok:
+                    # make sure we are below match threshold
+                    if ratio >= CONFIG.get_int('NAME_RATIO'):
+                        ratio = CONFIG.get_int('NAME_RATIO') - 5
+                    if partial >= CONFIG.get_int('NAME_PARTIAL'):
+                        partial = CONFIG.get_int('NAME_PARTIAL') - 5
+                    if partname >= CONFIG.get_int('NAME_PARTNAME'):
+                        partname = CONFIG.get_int('NAME_PARTNAME') - 5
+                    fuzzlogger.debug(f"Downgraded ratios as one has number {numbers}")
 
             # lose a point for each extra word in the fuzzy matches so we get the closest match
             # this should also stop us matching single books against omnibus editions
+            title_length = len(get_list(a_book_lower))
             words = len(get_list(book_lower))
-            words -= len(get_list(a_book_lower))
-            # lose points if the difference is just digits so we don't match "book 2" and "book 3"
-            # or "some book" and "some book 2"
-            set1 = set(book_lower)
-            set2 = set(a_book_lower)
-            difference = set1.symmetric_difference(set2)
-            digits = sum(c.isdigit() for c in difference)
-            if digits == len(difference):
-                # make sure we are below match threshold
-                ratio = CONFIG.get_int('NAME_RATIO') - 1
-                partial = CONFIG.get_int('NAME_PARTIAL') - 1
-                partname = CONFIG.get_int('NAME_PARTNAME') - 1
-            else:
-                ratio -= abs(words)
-                partial -= abs(words)
-                # don't subtract extra words from partname so we can compare books with/without subtitle
-                # partname -= abs(words)
+            words -= title_length
+            ratio -= abs(words)
+            partial -= abs(words)
+            if title_length <= 2:  # very short titles can't use partial match, too many false positives
+                fuzzlogger.debug(f"Not using partial ratio as short title [{title_length}]")
+                partial = CONFIG.get_int('NAME_PARTIAL') - 5
+            # don't subtract extra words from partname so we can compare books with/without subtitle
+            # partname -= abs(words)
 
-            def isitbest(aratio, abest_ratio, aratio_name, abest_type, astatus):
+            def isitbest(aratio, abest_ratio, aratio_name, abest_type, astatus, booklower, abookname):
                 use_it = False
                 if aratio > abest_ratio:
                     use_it = True
                 elif aratio == abest_ratio:
                     use_it = astatus == 'Have'
                     if not use_it:
-                        want_words = get_list(book_lower)
+                        want_words = get_list(booklower)
                         best_words = get_list(aratio_name.lower())
-                        new_words = get_list(a_bookname.lower())
+                        new_words = get_list(abookname.lower())
                         best_cnt = 0
                         new_cnt = 0
-                        for word in want_words:
-                            if word in best_words:
+                        for wrd in want_words:
+                            if wrd in best_words:
                                 best_cnt += 1
-                            if word in new_words:
+                            if wrd in new_words:
                                 new_cnt += 1
                         if new_cnt > best_cnt:
                             use_it = True
@@ -453,19 +540,20 @@ def find_book_in_db(author, book, ignored=None, library='eBook', reason='find_bo
                         use_it = astatus != 'Ignored'
                 return use_it
 
-            if isitbest(ratio, best_ratio, ratio_name, best_type, a_book[whichstatus]):
+            if isitbest(ratio, best_ratio, ratio_name, best_type, a_book[whichstatus], book_lower, a_bookname):
                 best_ratio = ratio
                 best_type = a_book[whichstatus]
                 ratio_name = a_book['BookName']
                 ratio_id = a_book['BookID']
 
-            if isitbest(partial, best_partial, partial_name, partial_type, a_book[whichstatus]):
+            if isitbest(partial, best_partial, partial_name, partial_type, a_book[whichstatus], book_lower, a_bookname):
                 best_partial = partial
                 partial_type = a_book[whichstatus]
                 partial_name = a_book['BookName']
                 partial_id = a_book['BookID']
 
-            if isitbest(partname, best_partname, partname_name, partname_type, a_book[whichstatus]):
+            if isitbest(partname, best_partname, partname_name, partname_type, a_book[whichstatus],
+                        book_lower, a_bookname):
                 best_partname = partname
                 partname_type = a_book[whichstatus]
                 partname_name = a_book['BookName']
@@ -513,8 +601,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
     """ Scan a directory tree adding new books into database
         Return how many books you added """
     logger = logging.getLogger(__name__)
-    loggerlibsync = logging.getLogger('special.libsync')
-    loggermatching = logging.getLogger('special.matching')
+    libsynclogger = logging.getLogger('special.libsync')
+    matchinglogger = logging.getLogger('special.matching')
     destdir = get_directory(library)
     if not startdir:
         if not destdir:
@@ -526,11 +614,15 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
         logger.warning(f'Cannot find directory: {startdir}. Not scanning')
         return 0
 
+    db = database.DBConnection()
+    my_thread = thread_name()
+    logger.debug(f"Storing start time for {my_thread}")
+    db.upsert("jobs", {"Start": time.time()}, {"Name": my_thread})
     if startdir == destdir:
         lazylibrarian.AUTHORS_UPDATE = 1
-    logger.debug("Counting directories...")
+    logger.debug(f"Counting directories: {startdir}")
     dir_cnt = 0
-    for rootdir, dirnames, filenames in walk(startdir):
+    for rootdir, dirnames, _filenames in os.walk(startdir):
         for directory in dirnames:
             lazylibrarian.libraryscan_data = f"Counting directories: {dir_cnt}"
             # prevent magazine being scanned
@@ -549,10 +641,10 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
     logger.debug(msg)
     lazylibrarian.libraryscan_data = msg
 
-    db = database.DBConnection()
     processed_subdirectories = []
     rehit = []
-    remiss = []
+    remiss = {}
+    warn_incomplete = False
     # noinspection PyBroadException
     try:
         # keep statistics of full library scans
@@ -602,9 +694,14 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
             if library == 'eBook':
                 cmd = ("select AuthorName, BookName, BookFile, BookID from books,authors where BookLibrary "
                        "is not null and books.AuthorID = authors.AuthorID")
-                if not startdir == destdir:
-                    cmd += f" and instr(BookFile, '{startdir}') = 1"
-                books = db.select(cmd)
+                args = ()
+                if startdir != destdir:
+                    cmd += " and instr(BookFile, ?) = 1"
+                    args += (startdir, )
+                if args:
+                    books = db.select(cmd, args)
+                else:
+                    books = db.select(cmd)
                 status = CONFIG['NOTFOUND_STATUS']
                 logger.info(f'Missing eBooks will be marked as {status}')
                 for book in books:
@@ -618,9 +715,14 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
             else:  # library == 'AudioBook':
                 cmd = ("select AuthorName, BookName, AudioFile, BookID from books,authors where AudioLibrary "
                        "is not null and books.AuthorID = authors.AuthorID")
-                if not startdir == destdir:
-                    cmd += f" and instr(AudioFile, '{startdir}') = 1"
-                books = db.select(cmd)
+                args = ()
+                if startdir != destdir:
+                    cmd += " and instr(AudioFile, ?) = 1"
+                    args += (startdir, )
+                if args:
+                    books = db.select(cmd, args)
+                else:
+                    books = db.select(cmd)
                 status = CONFIG['NOTFOUND_STATUS']
                 logger.info(f'Missing AudioBooks will be marked as {status}')
                 for book in books:
@@ -681,7 +783,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
             "\\$Total", "(?P<total>.*?)").replace(
             "\\$Abridged", "(?P<abridged>.*?)").replace(
             "\\$\\$", "\\ ") + r'\.[' + booktypes + ']'
-        loggermatching.debug(f"Pattern [{match_string}]")
+        matchinglogger.debug(f"Pattern [{match_string}]")
 
         # noinspection PyBroadException
         try:
@@ -691,7 +793,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
             pattern = None
 
         last_authorid = None
-        for rootdir, dirnames, filenames in walk(startdir):
+        for rootdir, dirnames, filenames in os.walk(startdir):
             for directory in dirnames:
                 # prevent magazine being scanned
                 c = directory[0]
@@ -707,16 +809,15 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
             total_items = dir_cnt
             for files in filenames:
                 current_item = len(processed_subdirectories)
-                current_percent = int(current_item * 100 / total_items)
+                current_percent = int(current_item * 100 / total_items) if total_items else 0
                 lazylibrarian.libraryscan_data = f"{current_item}/{total_items}/{current_percent}"
                 # Added new code to skip if we've done this directory before.
                 # Made this conditional with a switch in config.ini
                 # in case user keeps multiple different books in the same subdirectory
-                if library == 'eBook' and CONFIG.get_bool('IMP_SINGLEBOOK') and \
-                        (subdirectory in processed_subdirectories):
-                    loggerlibsync.debug(f"[{subdirectory}] already scanned")
-                elif library == 'AudioBook' and (subdirectory in processed_subdirectories):
-                    loggerlibsync.debug(f"[{subdirectory}] already scanned")
+                if (library == 'eBook' and CONFIG.get_bool('IMP_SINGLEBOOK') and
+                        (subdirectory in processed_subdirectories) or library == 'AudioBook'
+                        and (subdirectory in processed_subdirectories)):
+                    libsynclogger.debug(f"[{subdirectory}] already scanned")
                 elif not path_isdir(rootdir):
                     logger.debug(f"Directory {repr(rootdir)} missing (renamed?)")
                 else:
@@ -736,22 +837,19 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                         isbn = ""
                         book = ""
                         author = ""
-                        gr_id = ""
-                        gb_id = ""
-                        au_id = ""
-                        ol_id = ""
-                        hc_id = ""
                         publisher = ""
                         narrator = ""
-                        extn = os.path.splitext(files)[1]
+                        extn = splitext(files)[1]
                         bookid = None
                         forced_bookid = ''
+                        ident = ''
 
                         # if it's an epub or a mobi we can try to read metadata from it
                         res = {}
-                        if extn.lower() in [".epub", ".mobi"]:
+                        if extn.lower() in [".epub", ".mobi", ".azw", ".azw3"]:
                             book_filename = os.path.join(rootdir, files)
                             try:
+                                logger.debug(f"Reading info from {book_filename}")
                                 res = get_book_info(book_filename)
                             except Exception as e:
                                 logger.error(f'get_book_info failed for {book_filename}, {type(e).__name__} {str(e)}')
@@ -771,16 +869,18 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 logger.debug(f"Book meta incomplete in {book_filename}")
 
                         # calibre uses "metadata.opf", LL uses "bookname - authorname.opf"
-                        # just look for any .opf file in the current directory since we don't know
-                        # LL preferred authorname/bookname at this point.
+                        # match on the current book's filename since a series folder may
+                        # hold opf/metadata for more than one book
                         # Allow metadata in opf file to override book metadata as may be users pref
                         metafile = ''
                         try:
-                            metafile = opf_file(rootdir)
+                            metafile = opf_file(rootdir, bookfile=files)
                             if metafile:
+                                logger.debug(f"Reading info from {metafile}")
                                 res2 = get_book_info(metafile)
                                 for item in res2:
-                                    res[item] = res2[item]
+                                    if res2[item]:  # only override if OPF field is non-empty
+                                        res[item] = res2[item]
                         except Exception as e:
                             logger.error(f'get_book_info failed for {metafile}, {type(e).__name__} {str(e)}')
 
@@ -798,43 +898,36 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 publisher = res['publisher']
                             if 'narrator' in res:
                                 narrator = res['narrator']
+
                             ident = ''
-                            if 'gr_id' in res:
-                                gr_id = res['gr_id']
-                                ident = f"GR: {gr_id}"
-                            if 'gb_id' in res:
-                                gb_id = res['gb_id']
-                                ident = f"GB: {gb_id}"
-                            if 'au_id' in res:
-                                au_id = res['au_id']
-                                ident = f"AU: {au_id}"
-                            if 'ol_id' in res:
-                                ol_id = res['ol_id']
-                                ident = f"OL: {ol_id}"
-                            if 'hc_id' in res:
-                                hc_id = res['hc_id']
-                                ident = f"HC: {hc_id}"
+                            for k in book_keys():
+                                if k in res:
+                                    i = k.split('_')[0].upper()
+                                    # "GR: {res['gr_id']}""
+                                    ident = f"{i}: {res[k]}"
+                                    break
+
                             logger.debug(
                                 f"file meta [{isbn}] [{language}] [{author}] [{book}] [{ident}] [{publisher}] "
                                 f"[{narrator}]")
                             if not author or not book:
                                 logger.debug(f"File meta incomplete in {metafile}")
 
-                        if not author or not book:
+                        if not author or not book and CONFIG.is_valid_booktype(files, 'audiobook'):
                             # no author/book from metadata file, and not embedded either
                             # or audiobook which may have id3 tags
-                            if CONFIG.is_valid_booktype(files, 'audiobook'):
-                                filename = os.path.join(rootdir, files)
-                                id3tags = id3read(filename)
-                                author = id3tags.get('author')
-                                book = id3tags.get('title')
-                                if not narrator:
-                                    narrator = id3tags.get('narrator')
+                            filename = os.path.join(rootdir, files)
+                            id3tags = id3read(filename)
+                            author = id3tags.get('author')
+                            book = id3tags.get('title')
+                            if not narrator:
+                                narrator = id3tags.get('narrator')
 
                         if not author or not book:
                             # try for details from a special file
-                            author, book, forced_bookid = get_book_meta(rootdir, reason="libraryscan")
-
+                            author, book, override_bookid = get_book_meta(rootdir, reason="libraryscan")
+                            if override_bookid:
+                                forced_bookid = override_bookid
                         # Failing anything better, just pattern match on filename
                         if pattern and (not author or not book):
                             # might need a different pattern match for audiobooks
@@ -869,16 +962,15 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                             else:
                                 logger.debug(f"Pattern match author[{author}] book[{book}]")
 
-                        if publisher:
-                            if publisher.lower() in get_list(CONFIG['REJECT_PUBLISHER']):
-                                logger.warning(f"Ignoring {files}: Publisher {publisher}")
-                                author = ''  # suppress
+                        if publisher and publisher.lower() in get_list(CONFIG['REJECT_PUBLISHER']):
+                            logger.warning(f"Ignoring {files}: Publisher {publisher}")
+                            author = ''  # suppress
 
                         if not author or not book:
                             logger.debug(f"No valid {library} found in {subdirectory}")
                         else:
                             # flag that we found a book in this subdirectory
-                            if subdirectory:
+                            if subdirectory and subdirectory not in processed_subdirectories:
                                 processed_subdirectories.append(subdirectory)
 
                             # If we have a valid looking isbn, and language != "Unknown", add it to cache
@@ -899,7 +991,6 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
 
                             newauthorname, authorid, new_author = add_author_name_to_db(
                                 author, addbooks=None, reason=f"Add author of {book}", title=book)
-
                             if last_authorid and last_authorid != authorid:
                                 update_totals(last_authorid)
                             last_authorid = authorid
@@ -914,44 +1005,60 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 # author exists, check if this book by this author is in our database
                                 # metadata might have quotes in book name
                                 # some books might be stored under a different author name
-                                # eg books by multiple authors, books where author is "writing as"
+                                # e.g. books by multiple authors, books where author is "writing as"
                                 # or books we moved to "merge" authors
                                 book = strip_quotes(book)
 
                                 # If we have a valid ID, use that
-                                bookid = ''
                                 mtype = ''
                                 match = None
-                                if gr_id and CONFIG['BOOK_API'] == "GoodReads":
-                                    bookid = gr_id
-                                elif gb_id and CONFIG['BOOK_API'] == "GoogleBooks":
-                                    bookid = gb_id
-                                elif ol_id and CONFIG['BOOK_API'] == "OpenLibrary":
-                                    bookid = ol_id
-                                elif hc_id and CONFIG['BOOK_API'] == "HardCover":
-                                    bookid = hc_id
-                                elif au_id and CONFIG['BOOK_API'] == "Audible":
-                                    bookid = au_id
-                                if bookid:
-                                    match = db.match('SELECT AuthorID,Status FROM books where BookID=?',
-                                                     (bookid,))
+                                bookid = None
+                                key = None
+                                if ident:
+                                    try:
+                                        key, bookid = ident.split(':')
+                                        bookid = bookid.strip()
+                                        key = f"{key.lower()}_id"
+                                    except (ValueError, IndexError):
+                                        bookid = None
+                                if bookid and key:
+                                    match = db.match(f'SELECT AuthorID,Status,BookID,BookName FROM books where {key}=?', (bookid, ))
                                     if match:
-                                        mtype = match['Status']
                                         if authorid != match['AuthorID']:
+                                            if collate_fuzzy(match['BookName'], book) == 0:
+                                                logger.warning(
+                                                    f"Metadata bookid [{bookid}] author drifted from "
+                                                    f"[{match['AuthorID']}] to [{authorid}]; title matches, accepting")
+                                                move_book_to_author(match['BookID'], match['AuthorID'], authorid)
+                                                bookid = match['BookID']
+                                                mtype = match['Status']
+                                            else:
+                                                logger.warning(
+                                                    f"Metadata bookid [{bookid}] belongs to author "
+                                                    f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
+                                                match = None
+                                                bookid = None
+                                        else:
+                                            mtype = match['Status']
+                                if bookid and not match:
+                                    cmd = "SELECT Status,BookID FROM books where BookName=? and AuthorID=?"
+                                    match = db.match(cmd, (book, authorid))
+                                    if match:
+                                        collision = db.match("SELECT BookID FROM books where BookID=?", (bookid,))
+                                        if collision and collision['BookID'] != match['BookID']:
                                             logger.warning(
-                                                f"Metadata authorid [{authorid}] does not match database "
-                                                f"[{match['AuthorID']}]")
-                                    if not match:
-                                        cmd = "SELECT Status,BookID FROM books where BookName=? and AuthorID=?"
-                                        match = db.match(cmd, (book, authorid))
-                                        if match:
+                                                f"Metadata bookid [{bookid}] already belongs to a different "
+                                                f"book; not merging with {match['BookID']}, ignoring stale metadata")
+                                            match = None
+                                            bookid = None
+                                        else:
                                             logger.warning(
                                                 f"Metadata bookid [{bookid}] not found in database, title matches "
                                                 f"{match['BookID']}")
                                             mtype = match['Status']
                                             # update stored bookid to match preferred (owned) book
                                             db.action('PRAGMA foreign_keys = OFF')
-                                            for table in ['books', 'member', 'wanted', 'failedsearch', 'genrebooks']:
+                                            for table in ['books', 'member', 'wanted', 'failedsearch', 'genrebooks', 'bookauthors']:
                                                 cmd = f"UPDATE {table} SET BookID=? WHERE BookID=?"
                                                 db.action(cmd, (bookid, match['BookID']))
                                             db.action('PRAGMA foreign_keys = ON')
@@ -962,70 +1069,65 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                     # which might have several bookid/isbn for the same book
                                     reason = f'Author exists for {book}'
                                     logger.debug(reason)
-                                    oldbookid = bookid
                                     bookid, mtype = find_book_in_db(author, book, reason=reason)
+                                    logger.debug(f"Found {bookid} in database for {author}:{book}")
                                     if bookid:
-                                        if oldbookid:
-                                            logger.warning(
-                                                f"Metadata bookid [{oldbookid}] not found in database, using {bookid}")
-                                        else:
-                                            logger.debug(f"Found bookid {bookid} for {book}")
-                                    elif oldbookid:
-                                        bookid = oldbookid
-                                        logger.warning(
-                                            f"Metadata bookid [{bookid}] not found in database, trying to add...")
-                                        if CONFIG['BOOK_API'] == "GoodReads" and gr_id:
-                                            finder = GoodReads(gr_id)
-                                            finder.find_book(gr_id, None, None, "Added by gr librarysync")
-                                        elif CONFIG['BOOK_API'] == "GoogleBooks" and gb_id:
-                                            finder = GoogleBooks(gb_id)
-                                            finder.find_book(gb_id, None, None, "Added by gb librarysync")
-                                        elif CONFIG['BOOK_API'] == "OpenLibrary" and ol_id:
-                                            finder = OpenLibrary(ol_id)
-                                            finder.find_book(ol_id, None, None, "Added by ol librarysync")
-                                        elif CONFIG['BOOK_API'] == "HardCover" and hc_id:
-                                            finder = HardCover(hc_id)
-                                            finder.find_book(hc_id, None, None, "Added by hc librarysync")
-                                        elif CONFIG['BOOK_API'] == "Audible" and au_id:
-                                            finder = Audible(au_id)
-                                            finder.find_book(au_id, None, None, "Added by aui librarysync")
-
-                                    if bookid:
-                                        # see if it's there now...
+                                        logger.debug(f"Found bookid {bookid} for {book}")
                                         match = db.match('SELECT AuthorID,BookName,Status from books where BookID=?',
                                                          (bookid,))
                                         if match:
-                                            mtype = match['Status']
-                                            book = match['BookName']
                                             if authorid != match['AuthorID']:
-                                                logger.warning(
-                                                    f"Metadata authorid [{authorid}] does not match database "
-                                                    f"[{match['AuthorID']}]")
+                                                if collate_fuzzy(match['BookName'], book) == 0:
+                                                    logger.warning(
+                                                        f"Metadata bookid [{bookid}] author drifted from "
+                                                        f"[{match['AuthorID']}] to [{authorid}]; title matches, accepting")
+                                                    move_book_to_author(match['BookID'], match['AuthorID'], authorid)
+                                                    mtype = match['Status']
+                                                    book = match['BookName']
+                                                else:
+                                                    logger.warning(
+                                                        f"Metadata bookid [{bookid}] belongs to author "
+                                                        f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
+                                                    match = None
+                                                    bookid = ""
+                                            else:
+                                                mtype = match['Status']
+                                                book = match['BookName']
                                         else:
                                             logger.debug(f"Unable to add bookid via metadata bookid ({bookid})")
                                             bookid = ""
 
                                 if not bookid and isbn:
                                     # See if the isbn is in our database
-                                    match = db.match('SELECT AuthorID,BookID,Status FROM books where BookIsbn=?',
+                                    match = db.match('SELECT AuthorID,BookID,BookName,Status FROM books where BookIsbn=?',
                                                      (isbn,))
                                     if match:
-                                        bookid = match['BookID']
-                                        mtype = match['Status']
                                         if authorid != match['AuthorID']:
-                                            logger.warning(
-                                                f"Metadata authorid [{authorid}] does not match database "
-                                                f"[{match['AuthorID']}]")
+                                            if collate_fuzzy(match['BookName'], book) == 0:
+                                                logger.warning(
+                                                    f"ISBN [{isbn}] author drifted from "
+                                                    f"[{match['AuthorID']}] to [{authorid}]; title matches, accepting")
+                                                move_book_to_author(match['BookID'], match['AuthorID'], authorid)
+                                                bookid = match['BookID']
+                                                mtype = match['Status']
+                                            else:
+                                                logger.warning(
+                                                    f"ISBN [{isbn}] belongs to author "
+                                                    f"[{match['AuthorID']}], not [{authorid}]; ignoring stale metadata")
+                                                match = None
+                                        else:
+                                            bookid = match['BookID']
+                                            mtype = match['Status']
 
                                 if bookid and mtype == "Ignored":
                                     logger.warning(
                                         f"Book {book} by {author} is marked Ignored in database, importing anyway")
 
-                                if not bookid and forced_bookid:
-                                    if lazylibrarian.postprocess.process_book_from_dir(source_dir=source_dir,
-                                                                                       library=library,
-                                                                                       bookid=forced_bookid):
-                                        bookid = forced_bookid
+                                if (not bookid and forced_bookid and
+                                        lazylibrarian.manual_import.process_book_from_dir(source_dir=rootdir,
+                                                                                          library=library,
+                                                                                          bookid=forced_bookid)):
+                                    bookid = forced_bookid
 
                                 if not bookid:
                                     # get author name from (grand)parent directory of this book directory
@@ -1034,7 +1136,7 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                     if ' ' not in newauthorname:
                                         newauthorname = os.path.basename(os.path.dirname(rootdir))
                                     newauthorname = make_unicode(newauthorname)
-                                    # calibre replaces trailing periods with _ eg Smith Jr. -> Smith Jr_
+                                    # calibre replaces trailing periods with _ e.g. Smith Jr. -> Smith Jr_
                                     if newauthorname.endswith('_'):
                                         newauthorname = f"{newauthorname[:-1]}."
                                     if author.lower() != newauthorname.lower():
@@ -1051,25 +1153,24 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                 # at this point if we still have no bookid, it looks like we
                                 # have author and book title but no database entry for it
                                 if not bookid:
-                                    sources = [CONFIG['BOOK_API']]
+                                    sources = []
+                                    if not BLOCKHANDLER.is_blocked(CONFIG['BOOK_API']):
+                                        sources.append(CONFIG['BOOK_API'])
                                     if CONFIG.get_bool('MULTI_SOURCE'):
-                                        # Either original source doesn't have the book or it didn't match language prefs
-                                        # or it's under a different author (pseudonym, series continuation author)
+                                        # Either original source doesn't have the book, or it didn't match language
+                                        # prefs, or it's under another author (pseudonym, series continuation author)
                                         # Since we have the book anyway, try and reload it
-                                        if "OpenLibrary" not in sources and CONFIG['OL_API']:
-                                            sources.append("OpenLibrary")
-                                        if "HardCover" not in sources and CONFIG['HC_API']:
-                                            sources.append("HardCover")
-                                        if "GoodReads" not in sources and CONFIG['GR_API']:
-                                            sources.append("GoodReads")
-                                        if "GoogleBooks" not in sources and CONFIG['GB_API']:
-                                            sources.append("GoogleBooks")
-                                        if "Audible" not in sources and CONFIG['AU_API']:
-                                            sources.append("Audible")
-
+                                        for source in lazylibrarian.INFOSOURCES.keys():
+                                            this_source = lazylibrarian.INFOSOURCES[source]
+                                            if source not in sources and CONFIG[this_source['enabled']] and not BLOCKHANDLER.is_blocked(source):
+                                                sources.append(source)
+                                    if not sources:
+                                        # no available info sources (all blocked?)
+                                        libsynclogger.debug("No infosources available")
+                                        warn_incomplete = True
                                     searchresults = []
                                     for source in sources:
-                                        searchresults += search_for(f"{book} <ll> {author}", source)
+                                        searchresults += search_for(f"{book}<ll>{author}", source)
 
                                     sortedlist = sorted(searchresults,
                                                         key=lambda x: (x['highest_fuzz'], x['bookrate_count']),
@@ -1110,25 +1211,20 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                             logger.debug(f"{bookid} [{bookauthor}] matched on rescan for {booktitle}")
                                         else:
                                             logger.debug(f"Adding {bookid} [{bookauthor}] on rescan for {booktitle}")
-                                            if source == 'OpenLibrary':
-                                                src_id = OpenLibrary(bookid)
-                                            elif source == 'GoodReads':
-                                                src_id = GoodReads(bookid)
-                                            elif source == 'HardCover':
-                                                src_id = HardCover(bookid)
-                                            elif source == 'Audible':
-                                                src_id = Audible(bookid)
-                                            else:
-                                                src_id = GoogleBooks(bookid)
-                                            src_id.find_book(bookid, reason=f"Librarysync {source} rescan {bookauthor}")
+                                            this_source = lazylibrarian.INFOSOURCES[source]
+                                            api = this_source['api']
+                                            api = api()
+                                            _ = api.add_bookid_to_db(bookid, reason=f"Librarysync {source} "
+                                                                     f"rescan {bookauthor}")
                                             if language and language != "Unknown":
                                                 # set language from book metadata
                                                 logger.debug(f"Setting language from metadata {booktitle} : {language}")
                                                 cmd = "UPDATE books SET BookLang=? WHERE BookID=?"
                                                 db.action(cmd, (language, bookid))
                                     else:
-                                        logger.warning(f"Rescan no match for {book}, closest {round(closest, 2)}%")
-                                        remiss.append(f"{book}:{author} ({round(closest, 2)}%)")
+                                        logger.warning(f"Rescan no match for {book}  from {len(sources)} "
+                                                        f"{plural(len(sources), 'source')}, closest {round(closest, 2)}%")
+                                        remiss[book] = f"{book}:{author} ({round(closest, 2)}%)"
 
                                 # see if it's there now...
                                 if bookid:
@@ -1136,8 +1232,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                            "AuthorName, BookName, BookID, BookDesc, BookGenre,Narrator from "
                                            "books,authors where books.AuthorID = authors.AuthorID and BookID=?")
                                     check_status = db.match(cmd, (bookid,))
-
                                     if not check_status:
+                                        warn_incomplete = True
                                         logger.debug(f'Unable to find bookid {bookid} in database')
                                     else:
                                         if CONFIG['CONTRIBUTING_AUTHORS'] and res and 'authors' in res:
@@ -1159,43 +1255,42 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
 
                                         book_filename = None
                                         if library == 'eBook':
-                                            if check_status['Status'] != 'Open':
+                                            if check_status['Status'] not in ['Open', 'Have']:
                                                 # we found a new book
                                                 new_book_count += 1
                                                 db.action(
                                                     'UPDATE books set Status=?, BookLibrary=? where BookID=?',
                                                     (CONFIG['FOUND_STATUS'], now(), bookid))
 
-                                            # create an opf file if there isn't one
-                                            book_filename = os.path.join(rootdir, files)
-                                            _ = lazylibrarian.postprocess.create_opf(os.path.dirname(book_filename),
-                                                                                     check_status,
-                                                                                     os.path.splitext(os.path.basename(
-                                                                                         book_filename))[0],
-                                                                                     overwrite=False)
-
-                                            db.action("UPDATE books SET BookFile=? where BookID=?",
-                                                      (book_filename, bookid))
-
+                                            if CONFIG.get_bool('IMP_EBOOKOPF'):
+                                                # create an opf file if there isn't one
+                                                book_filename = os.path.join(rootdir, files)
+                                                _ = lazylibrarian.metadata_opf.create_opf(os.path.dirname(book_filename),
+                                                                                          check_status,
+                                                                                          splitext(os.path.basename(
+                                                                                              book_filename))[0],
+                                                                                          overwrite=False)
                                             if CONFIG.get_bool('IMP_RENAME'):
-                                                book_filename, _ = book_rename(bookid)
+                                                new_filename, _ = book_rename(bookid)
+                                                if new_filename and new_filename != check_status['BookFile']:
+                                                    book_filename = new_filename
+                                                    db.action("UPDATE books SET BookFile=?,Status=? where BookID=?",
+                                                              (book_filename, CONFIG['FOUND_STATUS'], bookid))
 
                                             # check preferred type and store book location
                                             # so we can check if it gets (re)moved
-                                            book_basename = os.path.splitext(book_filename)[0]
+                                            book_basename = splitext(book_filename)[0]
                                             booktype_list = get_list(CONFIG['EBOOK_TYPE'])
                                             for book_type in booktype_list:
                                                 preferred_type = f"{book_basename}.{book_type}"
                                                 if path_exists(preferred_type):
                                                     book_filename = preferred_type
-                                                    logger.debug(f"Librarysync link to preferred type {book_type}")
+                                                    if book_filename != check_status['BookFile']:
+                                                        modified_count += 1
+                                                        logger.debug(f"Librarysync link to preferred type {book_type}")
+                                                        db.action("UPDATE books SET BookFile=?,Status=? where BookID=?",
+                                                                  (book_filename, CONFIG['FOUND_STATUS'], bookid))
                                                     break
-
-                                            # location may have changed on rename
-                                            if book_filename != check_status['BookFile']:
-                                                db.action('UPDATE books SET BookFile=? WHERE BookID=?',
-                                                          (book_filename, bookid))
-                                                modified_count += 1
 
                                             if 'unknown' in check_status['AuthorName'].lower():
                                                 newauth = db.match("SELECT * from authors WHERE AuthorName=?",
@@ -1224,11 +1319,12 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
 
                                             # store audiobook location so we can check if it gets (re)moved
                                             book_filename = os.path.join(rootdir, files)
-                                            # create an opf if there isn't one
-                                            _ = lazylibrarian.postprocess.create_opf(os.path.dirname(book_filename),
-                                                                                     check_status,
-                                                                                     check_status['BookName'],
-                                                                                     overwrite=False)
+                                            if CONFIG.get_bool('IMP_EBOOKOPF'):
+                                                # create an opf if there isn't one
+                                                _ = lazylibrarian.metadata_opf.create_opf(os.path.dirname(book_filename),
+                                                                                          check_status,
+                                                                                          check_status['BookName'],
+                                                                                          overwrite=False)
                                             # link to the first part of multi-part audiobooks
                                             tokmatch = ''
                                             for token in [' 001.', ' 01.', ' 1.', ' 001 ', ' 01 ', ' 1 ', '01']:
@@ -1247,20 +1343,21 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                                       (book_filename, bookid))
 
                                             if CONFIG['AUDIOBOOK_DEST_FILE']:
-                                                if CONFIG.get_bool('IMP_RENAME'):
-                                                    book_filename = audio_rename(bookid, rename=True, playlist=True)
+                                                rename = CONFIG.get_bool('IMP_RENAME')
+                                                new_filename = audio_rename(bookid, rename=rename, playlist=True)
+                                                if new_filename and new_filename != book_filename:
+                                                    book_filename = new_filename
+                                                if rename:
                                                     preprocess_audio(os.path.dirname(book_filename), bookid,
                                                                      author, book, tag=True)
-                                                else:
-                                                    book_filename = audio_rename(bookid, rename=False, playlist=True)
 
                                             # location may have changed since last scan
-                                            if book_filename and book_filename != check_status['AudioFile']:
+                                            if book_filename != check_status['AudioFile']:
                                                 modified_count += 1
                                                 logger.warning(f"Updating audiobook location for {author} {book} from "
                                                                f"{check_status['AudioFile']} to {book_filename}")
-                                                db.action('UPDATE books set AudioFile=? where BookID=?',
-                                                          (book_filename, bookid))
+                                                db.action('UPDATE books set AudioFile=?,AudioStatus=? where BookID=?',
+                                                          (book_filename, CONFIG['FOUND_STATUS'], bookid))
 
                                         # update cover file to any .jpg in book folder, prefer cover.jpg
                                         if book_filename:
@@ -1280,10 +1377,9 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                                         logger.warning(
                                             f"Failed to match audiobook [{book}] by [{author}] in database")
 
-                            if not authorid:
-                                if not warned_no_new_authors and not CONFIG.get_bool('ADD_AUTHOR'):
-                                    logger.warning("Add authors to database is disabled")
-                                    warned_no_new_authors = True
+                            if not authorid and not warned_no_new_authors and not CONFIG.get_bool('ADD_AUTHOR'):
+                                logger.warning("Add authors to database is disabled")
+                                warned_no_new_authors = True
 
                             if new_author and not bookid:
                                 # we auto-added a new author but they don't have the book so we should remove them again
@@ -1299,7 +1395,8 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
         if startdir == destdir:
             if len(remiss):
                 lazylibrarian.libraryscan_data = (f'<div class="alert alert-danger">'
-                                                  f'Failed to match {len(remiss)}<br></div>')
+                                                  f'{len(remiss)} unmatched items<br>'
+                                                  'See debug log for details<br></div>')
             # On full library scans, check for books with unknown language
             nolang = db.match(
                 "select count(*) as counter from Books where status='Open' and BookLang='Unknown'")
@@ -1343,10 +1440,10 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
                 f"Unable to cache language for {st['uncached']} {plural(st['uncached'], 'book')} with missing ISBN")
             logger.debug(f"Found {st['duplicates']} duplicate {plural(st['duplicates'], 'book')}")
             logger.debug(f"Rescan {rescan_hits} {plural(rescan_hits, 'hit')}, {rescan_count - rescan_hits} miss")
-            for bk in rehit:
+            for bk in set(rehit):
                 logger.debug(f"HIT: {bk}")
-            for bk in remiss:
-                logger.debug(f"MISS: {bk}")
+            for bk in remiss.keys():
+                logger.debug(f"MISS: {remiss[bk]}")
             logger.debug(
                 f"Cache {lazylibrarian.CACHE_HIT} {plural(lazylibrarian.CACHE_HIT, 'hit')}, "
                 f"{lazylibrarian.CACHE_MISS} miss")
@@ -1428,6 +1525,10 @@ def library_scan(startdir=None, library='eBook', authid=None, remove=True):
     finally:
         logger.debug(f"Processed folders: {len(processed_subdirectories)}, "
                      f"matched books: {len(rehit)}, unmatched: {len(remiss)}")
-        if '_SCAN' in threading.current_thread().name:
-            threading.current_thread().name = 'WEBSERVER'
+        if warn_incomplete:
+            logger.warning("Library scan is incomplete due to provider errors. Some authors/books may be missing.")
+        logger.debug(f"Storing finish time for {my_thread}")
+        db.upsert("jobs", {"Finish": time.time()}, {"Name": my_thread})
+        if '_SCAN' in my_thread:
+            thread_name('WEBSERVER')
         db.close()

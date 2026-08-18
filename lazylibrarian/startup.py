@@ -13,7 +13,7 @@
 # Purpose:
 #   Contains global startup and initialization code for LL
 
-import calendar
+import contextlib
 import json
 import locale
 import logging
@@ -24,7 +24,7 @@ import sys
 import tarfile
 import time
 import traceback
-from shutil import rmtree, move
+from shutil import move, rmtree
 from typing import Any
 
 import cherrypy
@@ -32,19 +32,26 @@ import requests
 import urllib3
 
 import lazylibrarian
-from lazylibrarian import database, versioncheck
+from lazylibrarian import au, database, dnb, gb, gr, hc, ol, ran, versioncheck
 from lazylibrarian.blockhandler import BLOCKHANDLER
-from lazylibrarian.cache import init_hex_caches, fetch_url
+from lazylibrarian.cache import fetch_url, init_hex_caches
 from lazylibrarian.cleanup import UNBUNDLER
-from lazylibrarian.common import log_header, docker
+from lazylibrarian.common import docker, log_header, validate_monthtable
 from lazylibrarian.config2 import CONFIG, LLConfigHandler
 from lazylibrarian.configtypes import ConfigDict
-from lazylibrarian.dbupgrade import check_db, db_current_version, upgrade_needed, db_upgrade
-from lazylibrarian.filesystem import DIRS, path_isfile, path_isdir, syspath, remove_file
-from lazylibrarian.formatter import check_int, get_list, unaccented, make_unicode
+from lazylibrarian.dbupgrade import check_db, db_current_version, db_upgrade, upgrade_needed
+from lazylibrarian.filesystem import DIRS, path_isdir, path_isfile, remove_file, syspath
+from lazylibrarian.formatter import check_int, make_unicode, unaccented
 from lazylibrarian.logconfig import LOGCONFIG
 from lazylibrarian.notifiers import APPRISE_VER
-from lazylibrarian.scheduling import restart_jobs, initscheduler, startscheduler, shutdownscheduler, SchedulerCommand
+from lazylibrarian.providers import get_capabilities
+from lazylibrarian.scheduling import (
+    SchedulerCommand,
+    initscheduler,
+    restart_jobs,
+    shutdownscheduler,
+    startscheduler,
+)
 
 
 class StartupLazyLibrarian:
@@ -64,7 +71,7 @@ class StartupLazyLibrarian:
         try:
             locale.setlocale(locale.LC_ALL, "")
             lazylibrarian.SYS_ENCODING = locale.getpreferredencoding()
-        except (locale.Error, IOError):
+        except (OSError, locale.Error):
             pass
 
         # for OSes that are poorly configured I'll just force UTF-8
@@ -129,7 +136,7 @@ class StartupLazyLibrarian:
 
         elif options.debug:
             LOGCONFIG.change_root_loglevel('DEBUG')
-            self.logger.info(f'Enabled option DEBUG level logging.')
+            self.logger.info('Enabled option DEBUG level logging.')
 
         else:
             loglevel = CONFIG['LOGLEVEL']
@@ -165,9 +172,8 @@ class StartupLazyLibrarian:
         else:
             configfile = os.path.join(DIRS.DATADIR, "config.ini")
 
-        if options.pidfile:
-            if lazylibrarian.DAEMON:
-                lazylibrarian.PIDFILE = str(options.pidfile)
+        if options.pidfile and lazylibrarian.DAEMON:
+            lazylibrarian.PIDFILE = str(options.pidfile)
 
         if options.update:
             lazylibrarian.SIGNAL = 'update'
@@ -246,10 +252,8 @@ class StartupLazyLibrarian:
         _ = init_hex_caches()
         makocache = DIRS.get_mako_cachedir()
         self.logger.debug("Clearing mako cache")
-        try:
+        with contextlib.suppress(FileNotFoundError):
             rmtree(makocache)
-        except FileNotFoundError:
-            pass
         os.makedirs(makocache)
         remove_file(os.path.join(DIRS.CACHEDIR, 'alive.png'))
         # keep track of last api calls so we don't call more than once per second
@@ -273,11 +277,13 @@ class StartupLazyLibrarian:
         try:
             result = db.match('PRAGMA user_version')
             check = db.match('PRAGMA integrity_check')
+            dbfile = db.match('PRAGMA database_list')
             if result:
                 version = result[0]
             else:
                 version = 0
             self.logger.info(f"Database is v{version}, integrity check: {check[0]}")
+            self.logger.info(f"Database {dict(dbfile)}")
         except Exception as e:
             self.logger.error(f"Can't connect to the database: {type(e).__name__} {str(e)}")
             sys.exit(0)
@@ -300,10 +306,9 @@ class StartupLazyLibrarian:
         try:
             sqlv = getattr(sqlite3, 'sqlite_version', None)
             parts = sqlv.split('.')
-            if int(parts[0]) == 3:
-                if int(parts[1]) < 6 or int(parts[1]) == 6 and int(parts[2]) < 19:
-                    self.logger.error("Your version of sqlite3 is too old, please upgrade to at least v3.6.19")
-                    sys.exit(0)
+            if int(parts[0]) == 3 and int(parts[1]) < 6 or int(parts[1]) == 6 and int(parts[2]) < 19:
+                self.logger.error("Your version of sqlite3 is too old, please upgrade to at least v3.6.19")
+                sys.exit(0)
         except Exception as e:
             self.logger.warning(f"Unable to parse sqlite3 version: {type(e).__name__} {str(e)}")
 
@@ -320,24 +325,52 @@ class StartupLazyLibrarian:
         lazylibrarian.NEWUSER_MSG = self.build_logintemplate()
         lazylibrarian.NEWFILE_MSG = self.build_filetemplate()
         lazylibrarian.BOOKSTRAP_THEMELIST = self.build_bookstrap_themes(DIRS.PROG_DIR)
+        lazylibrarian.INFOSOURCES = self.build_sources()
+
+    @staticmethod
+    def build_sources():
+        info_sources = {
+                'OpenLibrary': {'src': 'OL', 'author_key': 'ol_id', 'book_key': 'ol_id', 'enabled': 'OL_API',
+                                'api': ol.OpenLibrary, 'has_subs': 0},
+                'GoodReads': {'src': 'GR', 'author_key': 'gr_id', 'book_key': 'gr_id', 'enabled': 'GR_API',
+                              'api': gr.GoodReads, 'has_subs': 0},
+                'HardCover': {'src': 'HC', 'author_key': 'hc_id', 'book_key': 'hc_id', 'enabled': 'HC_API',
+                              'api': hc.HardCover, 'has_subs': 1},
+                'GoogleBooks': {'src': 'GB', 'author_key': 'authorid', 'book_key': 'gb_id', 'enabled': 'GB_API',
+                                'api': gb.GoogleBooks, 'has_subs': 1},
+                'DNB': {'src': 'DN', 'author_key': 'authorid', 'book_key': 'dnb_id', 'enabled': 'DNB_API',
+                        'api': dnb.DNB, 'has_subs': 1},
+                'RanobeDB': {'src': 'RA', 'author_key': 'ran_id', 'book_key': 'ran_id', 'enabled': 'RAN_API',
+                        'api': ran.RanobeDB, 'has_subs': 0},
+                'Audible': {'src': 'AU', 'author_key': 'au_id', 'book_key': 'au_id', 'enabled': 'AU_API',
+                        'api': au.Audible, 'has_subs': 0},
+                }
+        adminlogger = logging.getLogger('special.admin')
+        adminlogger.debug(info_sources)
+        return info_sources
 
     @staticmethod
     def get_unrarlib(config: ConfigDict):
         """ Detect presence of unrar library
             Return type of library and rarfile()
         """
+        adminlogger = logging.getLogger('special.admin')
         rarfile = None
         # noinspection PyBroadException
         try:
             # noinspection PyUnresolvedReferences
+            # pylint: disable=import-error
             from unrar import rarfile
+            # pylint: enable=import-error
             if config.get_int('PREF_UNRARLIB') == 1:
+                adminlogger.debug("Using unrar")
                 return 1, rarfile
         except Exception:
             # noinspection PyBroadException
             try:
                 from lib.unrar import rarfile
                 if config.get_int('PREF_UNRARLIB') == 1:
+                    adminlogger.debug("Using unrar")
                     return 1, rarfile
             except Exception:
                 pass
@@ -346,9 +379,11 @@ class StartupLazyLibrarian:
             # noinspection PyBroadException
             try:
                 from lib.UnRAR2 import RarFile
+                adminlogger.debug("Using unrar2")
                 return 2, RarFile
             except Exception:
                 if rarfile:
+                    adminlogger.debug("Using unrar")
                     return 1, rarfile
         return 0, None
 
@@ -382,7 +417,7 @@ class StartupLazyLibrarian:
         if path_isfile(msg_file):
             try:
                 # noinspection PyArgumentList
-                with open(syspath(msg_file), 'r', encoding='utf-8') as msg_data:
+                with open(syspath(msg_file), encoding='utf-8') as msg_data:
                     res = msg_data.read()
                 for item in ["{username}", "{password}", "{permission}"]:
                     if item not in res:
@@ -400,7 +435,7 @@ class StartupLazyLibrarian:
         msg_file = os.path.join(DIRS.DATADIR, 'filetemplate.text')
         if path_isfile(msg_file):
             try:
-                with open(syspath(msg_file), 'r', encoding='utf-8') as msg_data:
+                with open(syspath(msg_file), encoding='utf-8') as msg_data:
                     res = msg_data.read()
                 for item in ["{name}", "{method}", "{link}"]:
                     if item not in res:
@@ -418,7 +453,7 @@ class StartupLazyLibrarian:
                           os.path.join(DIRS.PROG_DIR, 'example.genres.json')]:
             if path_isfile(json_file):
                 try:
-                    with open(syspath(json_file), 'r', encoding='utf-8') as json_data:
+                    with open(syspath(json_file), encoding='utf-8') as json_data:
                         res = json.load(json_data)
                     self.logger.info(f"Loaded genres from {json_file}")
                     return res
@@ -434,43 +469,43 @@ class StartupLazyLibrarian:
         # https://hexdocs.pm/ex_unicode/Unicode.Category.QuoteMarks.html
 
         quotes = {
-            u'\u0022': "'",  # quotation mark (")
-            u'\u0027': "'",  # apostrophe (')
-            u'\u0060': "'",  # grave-accent
-            u'\u00a8': '"',  # DIAERESIS
-            u'\u00ab': '"',  # left-pointing double-angle quotation mark
-            u'\u00b4': "'",  # acute accent
-            u'\u00bb': '"',  # right-pointing double-angle quotation mark
-            u'\u2018': "'",  # left single quotation mark
-            u'\u2019': "'",  # right single quotation mark
-            u'\u201a': "'",  # single low-9 quotation mark
-            u'\u201b': "'",  # single high-reversed-9 quotation mark
-            u'\u201c': '"',  # left double quotation mark
-            u'\u201d': '"',  # right double quotation mark
-            u'\u201e': '"',  # double low-9 quotation mark
-            u'\u201f': '"',  # double high-reversed-9 quotation mark
-            u'\u2039': "'",  # single left-pointing angle quotation mark
-            u'\u203a': "'",  # single right-pointing angle quotation mark
-            u'\u300c': "'",  # left corner bracket
-            u'\u300d': "'",  # right corner bracket
-            u'\u300e': "'",  # left white corner bracket
-            u'\u300f': "'",  # right white corner bracket
-            u'\u301d': '"',  # reversed double prime quotation mark
-            u'\u301e': '"',  # double prime quotation mark
-            u'\u301f': '"',  # low double prime quotation mark
-            u'\ufe41': "'",  # presentation form for vertical left corner bracket
-            u'\ufe42': "'",  # presentation form for vertical right corner bracket
-            u'\ufe43': "'",  # presentation form for vertical left corner white bracket
-            u'\ufe44': "'",  # presentation form for vertical right corner white bracket
-            u'\uff02': "'",  # fullwidth quotation mark
-            u'\uff07': "'",  # fullwidth apostrophe
-            u'\uff62': "'",  # halfwidth left corner bracket
-            u'\uff63': "'",  # halfwidth right corner bracket
+            '\u0022': "'",  # quotation mark (")
+            '\u0027': "'",  # apostrophe (')
+            '\u0060': "'",  # grave-accent
+            '\u00a8': '"',  # DIAERESIS
+            '\u00ab': '"',  # left-pointing double-angle quotation mark
+            '\u00b4': "'",  # acute accent
+            '\u00bb': '"',  # right-pointing double-angle quotation mark
+            '\u2018': "'",  # left single quotation mark
+            '\u2019': "'",  # right single quotation mark
+            '\u201a': "'",  # single low-9 quotation mark
+            '\u201b': "'",  # single high-reversed-9 quotation mark
+            '\u201c': '"',  # left double quotation mark
+            '\u201d': '"',  # right double quotation mark
+            '\u201e': '"',  # double low-9 quotation mark
+            '\u201f': '"',  # double high-reversed-9 quotation mark
+            '\u2039': "'",  # single left-pointing angle quotation mark
+            '\u203a': "'",  # single right-pointing angle quotation mark
+            '\u300c': "'",  # left corner bracket
+            '\u300d': "'",  # right corner bracket
+            '\u300e': "'",  # left white corner bracket
+            '\u300f': "'",  # right white corner bracket
+            '\u301d': '"',  # reversed double prime quotation mark
+            '\u301e': '"',  # double prime quotation mark
+            '\u301f': '"',  # low double prime quotation mark
+            '\ufe41': "'",  # presentation form for vertical left corner bracket
+            '\ufe42': "'",  # presentation form for vertical right corner bracket
+            '\ufe43': "'",  # presentation form for vertical left corner white bracket
+            '\ufe44': "'",  # presentation form for vertical right corner white bracket
+            '\uff02': "'",  # fullwidth quotation mark
+            '\uff07': "'",  # fullwidth apostrophe
+            '\uff62': "'",  # halfwidth left corner bracket
+            '\uff63': "'",  # halfwidth right corner bracket
         }
         for json_file in [os.path.join(DIRS.DATADIR, 'dicts.json')]:
             if path_isfile(json_file):
                 try:
-                    with open(syspath(json_file), 'r', encoding='utf-8') as json_data:
+                    with open(syspath(json_file), encoding='utf-8') as json_data:
                         res = json.load(json_data)
                     self.logger.info(f"Loaded dicts from {json_file}")
                     return res
@@ -478,12 +513,13 @@ class StartupLazyLibrarian:
                     self.logger.error(f'Failed to load {json_file}, {type(e).__name__} {str(e)}')
         self.logger.debug('No valid dicts.json file found, using defaults')
         return {"filename_dict": {'<': '', '>': '', '...': '', ' = ': ' ', '?': '', '$': 's', '|': '',
-                                  ' + ': ' ', '"': '', ',': '', '*': '', ':': '', ';': '', '\'': '', '//': '/',
+                                  ' + ': ' ', '"': '', ',': '', '*': '', ':': '', ';': '', '\'': '', '/': '_',
                                   '\\\\': '\\'},
                 "apostrophe_dict": quotes
                 }
 
     def build_monthtable(self, config: ConfigDict):
+        adminlogger = logging.getLogger('special.admin')
         seasons = {}
         table = None
         json_file = os.path.join(DIRS.DATADIR, 'seasons.json')
@@ -497,6 +533,7 @@ class StartupLazyLibrarian:
         if not seasons:
             seasons = {"winter": 1, "spring": 4, "summer": 7, "fall": 10,
                        "autumn": 10, "christmas": 12}
+        adminlogger.debug(seasons)
 
         json_file = os.path.join(DIRS.DATADIR, 'monthnames.json')
         if path_isfile(json_file):
@@ -504,16 +541,21 @@ class StartupLazyLibrarian:
                 with open(syspath(json_file)) as json_data:
                     table = json.load(json_data)
                 mlist = ''
-                # only print alternate entries as each language is in twice (long and short month names)
-                for item in table[0][::2]:
-                    mlist += f"{item} "
-                self.logger.debug(f'Loaded monthnames.json : {mlist}')
+                if not validate_monthtable(table):
+                    self.logger.error("monthnames.json is invalid")
+                    table = []
+                if table:
+                    # only print alternate entries as each language is in twice (long and short month names)
+                    for item in table[0][::2]:
+                        mlist += f"{item} "
+                    self.logger.debug(f'Loaded monthnames.json : {mlist}')
             except Exception as e:
                 self.logger.error(f'Failed to load monthnames.json, {type(e).__name__} {str(e)}')
 
         if not table:
             # Default Month names table to hold long/short month names for multiple languages
             # which we can match against magazine issues
+            self.logger.debug('Using default monthnames')
             table = [
                 ['en_GB.UTF-8', 'en_GB.UTF-8'],
                 ['January', 'Jan'],
@@ -530,73 +572,10 @@ class StartupLazyLibrarian:
                 ['December', 'Dec']
             ]
 
-        if len(get_list(config['IMP_MONTHLANG'])) > 0:  # any extra languages wanted?
-            try:
-                current_locale = locale.setlocale(locale.LC_ALL, '')  # read current state.
-                if 'LC_CTYPE' in current_locale:
-                    current_locale = locale.setlocale(locale.LC_CTYPE, '')
-                # getdefaultlocale() doesnt seem to work as expected on windows, returns 'None'
-                self.logger.debug(f'Current locale is {current_locale}')
-            except locale.Error as e:
-                self.logger.debug(f"Error getting current locale : {str(e)}")
-                return [table, table]
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(table, f, ensure_ascii=False)
 
-            lang = str(current_locale)
-            # check not already loaded, also all english variants and 'C' use the same month names
-            if lang in table[0] or ((lang.startswith('en_') or lang == 'C') and 'en_' in str(table[0])):
-                self.logger.debug(f'Month names for {lang} already loaded')
-            else:
-                self.logger.debug(f'Loading month names for {lang}')
-                table[0].append(lang)
-                for f in range(1, 13):
-                    table[f].append(calendar.month_name[f])
-                table[0].append(lang)
-                for f in range(1, 13):
-                    table[f].append(calendar.month_abbr[f])
-                self.logger.info(
-                    f"Added month names for locale [{lang}], {table[1][len(table[1]) - 2]}, "
-                    f"{table[1][len(table[1]) - 1]} ...")
-
-            for lang in get_list(config['IMP_MONTHLANG']):
-                try:
-                    if lang in table[0] or ((lang.startswith('en_') or lang == 'C') and 'en_' in str(table[0])):
-                        self.logger.debug(f'Month names for {lang} already loaded')
-                    else:
-                        locale.setlocale(locale.LC_ALL, lang)
-                        self.logger.debug(f'Loading month names for {lang}')
-                        table[0].append(lang)
-                        for f in range(1, 13):
-                            table[f].append(calendar.month_name[f])
-                        table[0].append(lang)
-                        for f in range(1, 13):
-                            table[f].append(calendar.month_abbr[f])
-                        locale.setlocale(locale.LC_ALL, current_locale)  # restore entry state
-                        self.logger.info(
-                            f"Added month names for locale [{lang}], {table[1][len(table[1]) - 2]}, "
-                            f"{table[1][len(table[1]) - 1]} ...")
-                except Exception as e:
-                    locale.setlocale(locale.LC_ALL, current_locale)  # restore entry state
-                    self.logger.warning(f"Unable to load requested locale [{lang}] {type(e).__name__} {str(e)}")
-                    try:
-                        wanted_lang = lang.split('_')[0]
-                        params = ['locale', '-a']
-                        res = subprocess.check_output(params, stderr=subprocess.STDOUT)
-                        all_locales = make_unicode(res).split()
-                        locale_list = []
-                        for a_locale in all_locales:
-                            if a_locale.startswith(wanted_lang):
-                                locale_list.append(a_locale)
-                        if locale_list:
-                            self.logger.warning(f"Found these alternatives: {str(locale_list)}")
-                        else:
-                            self.logger.warning("Unable to find an alternative")
-                    except Exception as e:
-                        self.logger.warning(f"Unable to get a list of alternatives, {type(e).__name__} {str(e)}")
-                    self.logger.debug(f"Set locale back to entry state {current_locale}")
-
-                with open(json_file, 'w', encoding='utf-8') as f:
-                    json.dump(table, f, ensure_ascii=False)
-
+        adminlogger.debug(table)
         # Create a second copy of the monthnames without accents and lowercased to speed up matching
         cleantable = []
         for lyne in table:
@@ -608,6 +587,23 @@ class StartupLazyLibrarian:
         monthnames = [table, cleantable]
         return monthnames, seasons
 
+    def update_znab_caps(self):
+        caps_changed = False
+        for provider in CONFIG.providers('NEWZNAB'):
+            if provider['ENABLED']:
+                updated = get_capabilities(provider)
+                if updated:
+                    self.logger.debug(f"Updated caps for {provider['DISPNAME']}")
+                    caps_changed = True
+        for provider in CONFIG.providers('TORZNAB'):
+            if provider['ENABLED']:
+                updated = get_capabilities(provider)
+                if updated:
+                    self.logger.debug(f"Updated caps for {provider['DISPNAME']}")
+                    caps_changed = True
+        if caps_changed:
+            CONFIG.save_config_and_backup_old(section='Capabilities')
+
     def create_version_file(self, filename):
         # flatpak insists on PROG_DIR being read-only so we have to move version.txt into CACHEDIR
         old_file = os.path.join(DIRS.PROG_DIR, filename)
@@ -615,16 +611,12 @@ class StartupLazyLibrarian:
         if path_isfile(old_file):
             if not path_isfile(version_file):
                 try:
-                    with open(syspath(old_file), 'r') as s:
-                        with open(syspath(version_file), 'w') as d:
-                            d.write(s.read())
+                    with open(syspath(old_file)) as s, open(syspath(version_file), 'w') as d:
+                        d.write(s.read())
                 except OSError:
                     self.logger.warning(f"Unable to copy {filename}")
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(old_file)
-            except OSError:
-                pass
-
         return version_file
 
     def init_version_checks(self, version_file):
@@ -643,13 +635,12 @@ class StartupLazyLibrarian:
                 f"Current Version [{CONFIG['CURRENT_VERSION']}] - Latest remote version "
                 f"[{CONFIG['LATEST_VERSION']}] - Install type [{CONFIG['INSTALL_TYPE']}]")
 
-            if CONFIG.get_int('GIT_UPDATED') == 0:
+            if CONFIG.get_int('GIT_UPDATED') == 0 and CONFIG['LATEST_VERSION'].startswith(CONFIG['CURRENT_VERSION']):
                 # we don't know when the last update was
                 # (docker doesn't set timestamp or it's a first time install)
                 # allow comparison of long and short hashes
-                if CONFIG['LATEST_VERSION'].startswith(CONFIG['CURRENT_VERSION']):
-                    CONFIG.set_int('GIT_UPDATED', int(time.time()))
-                    self.logger.debug('Setting update timestamp to now')
+                CONFIG.set_int('GIT_UPDATED', int(time.time()))
+                self.logger.debug('Setting update timestamp to now')
 
         # if gitlab doesn't recognise a hash it returns 0 commits
         if not CONFIG['LATEST_VERSION'].startswith(CONFIG['CURRENT_VERSION']) \
@@ -706,17 +697,22 @@ class StartupLazyLibrarian:
         # Crons and scheduled jobs started here
         # noinspection PyUnresolvedReferences
         startscheduler()
+        # wipe any aborted entries if running when shutdown
+        db = database.DBConnection()
+        columns = db.select('PRAGMA table_info(jobs)')
+        if columns:  # check for no such table
+            db.action("UPDATE jobs SET Finish=Start WHERE Finish<Start")
+        db.close()
         if not lazylibrarian.STOPTHREADS:
             restart_jobs(command=SchedulerCommand.START)
 
     def shutdown(self, restart=False, update=False, doquit=False, testing=False):
         shutdownscheduler()
-        if not testing:
-            if not (update and doquit):  # commandline update, don't save config as no filename
-                if self.logger.isEnabledFor(logging.DEBUG):  # TODO add a separate setting
-                    CONFIG.create_access_summary(syspath(DIRS.get_logfile('configaccess.log')))
-                CONFIG.add_access_errors_to_log()
-                CONFIG.save_config_and_backup_old(restart_jobs=False)
+        if not testing and not (update and doquit):  # commandline update, don't save config as no filename
+            if self.logger.isEnabledFor(logging.DEBUG):  # TODO add a separate setting
+                CONFIG.create_access_summary(syspath(DIRS.get_logfile('configaccess.log')))
+            CONFIG.add_access_errors_to_log()
+            CONFIG.save_config_and_backup_old(restart_jobs=False)
 
         if not restart and not update:
             self.logger.info(f'LazyLibrarian (pid {os.getpid()}) is shutting down...')
@@ -734,10 +730,8 @@ class StartupLazyLibrarian:
                 if updated:
                     self.logger.info('Lazylibrarian version updated')
                     makocache = os.path.join(DIRS.CACHEDIR, 'mako')
-                    try:
+                    with contextlib.suppress(FileNotFoundError):
                         rmtree(makocache)
-                    except FileNotFoundError:
-                        pass
                     os.makedirs(makocache)
                     if CONFIG.configfilename:
                         # won't have one if  --update
@@ -880,7 +874,7 @@ class StartupLazyLibrarian:
                                 version_file = os.path.join(DIRS.CACHEDIR, 'version.txt')
                                 old_location = os.path.join(DIRS.PROG_DIR, 'version.txt')
                                 if os.path.isfile(old_location):
-                                    with open(old_location, 'r') as fp:
+                                    with open(old_location) as fp:
                                         current_version = fp.read().strip(' \n\r')
                                     self.logger.debug(f'Moving {old_location} to {version_file}')
                                     move(old_location, version_file)

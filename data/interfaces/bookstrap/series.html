@@ -13,11 +13,28 @@
           <label class="control-label"> </label>
         %endif
             %if CONFIG['USER_ACCOUNTS']:
+            %if authorid == None:
               %if pref&lazylibrarian.pref_myseries:
                 <a href="toggle_my_series" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="All, or just mine"><i class="fa fa-user-circle"></i></a>
               %else:
                 <a href="toggle_my_series" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="All, or just mine"><i class="fa fa-users"></i></a>
               %endif
+            %endif
+            %endif
+            %if authorid == None:
+            %if active == 'True':
+              %if whichStatus != None:
+                <a href="series?active=False&which_status=${whichStatus}" class="btn btn-sm btn-primary" data-toggle="tooltip" title="Show all authors"><i class="fa fa-user-friends"></i> Show All</a>
+              %else:
+                <a href="series?active=False" class="btn btn-sm btn-primary" data-toggle="tooltip" title="Show all authors"><i class="fa fa-user-friends"></i> Show All</a>
+              %endif
+            %else:
+              %if whichStatus != None:
+                <a href="series?active=True&which_status=${whichStatus}" class="btn btn-sm btn-primary" data-toggle="tooltip" title="Only active/wanted authors"><i class="fa fa-user-check"></i> Show Active</a>
+              %else:
+                <a href="series?active=True" class="btn btn-sm btn-primary" data-toggle="tooltip" title="Only active/wanted authors"><i class="fa fa-user-check"></i> Show Active</a>
+              %endif
+            %endif
             %endif
         </div>
         <div class="clearfix visible-xs"><hr/></div>
@@ -149,9 +166,9 @@
 
         $('#whichStatus').change(function(){
             %if authorid != None:
-               window.location = 'series?authorid=${authorid}&which_status=' + $(this).val()
+               window.location = 'series?authorid=${authorid}&which_status=' + $(this).val() + '&active=${active}'
             %else:
-               window.location = 'series?which_status=' + $(this).val()
+               window.location = 'series?which_status=' + $(this).val() + '&active=${active}'
             %endif
         })
 
@@ -161,6 +178,8 @@
                 "order": [[3, 'desc']],
                 "bAutoWidth": false,
                 "stateSave": true,
+                "stateSaveParams": function (settings, data) { data.perm = ${perm}; },
+                "stateLoadParams": function (settings, data) { return data.perm === ${perm}; },
                 "rowId": 0,
                 "columnDefs":
                     [{ targets: 'no-sort', orderable: false },
@@ -225,7 +244,7 @@
                 "sPaginationType": "full_numbers",
                 "aaSorting": [[3, 'desc']],
                 "bServerSide": true,
-                "sAjaxSource": 'get_series?whichStatus=${whichStatus}&AuthorID=${authorid}',
+                "sAjaxSource": 'get_series?whichStatus=${whichStatus}&AuthorID=${authorid}&active=${active}',
                 "bFilter": true,
                 "aLengthMenu": [[5, 10, 15, 25, 50, 100, 500, 1000, 5000, -1], [5, 10, 15, 25, 50, 100, 500, 1000, 5000, "All"]],
                 "iDisplayLength": ${CONFIG['DISPLAYLENGTH']},
@@ -310,7 +329,7 @@
                         label: 'OK',
                         className: 'btn-primary',
                         callback: function() {
-                            window.location.reload(data.redirect);
+                            window.location = data.redirect
                         }
                     }
                 }

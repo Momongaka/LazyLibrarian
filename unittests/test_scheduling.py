@@ -52,7 +52,7 @@ class SchedulingTest(LLTestCaseWithStartup):
         self.assertLess(startdate, datetime.datetime.fromtimestamp(time.time()+700), 'start seems too late')
 
         # Add the job to the schedule and start the scheduler
-        scheduling.add_interval_job(fakescheduled_job, hours=0, minutes=10, startdate=startdate)
+        scheduling.add_interval_job(fakescheduled_job, hours=0, minutes=10, startdate=startdate, target="fakescheduled_job")
         scheduling.startscheduler()
 
         # Do the same again, this time it should return the same time

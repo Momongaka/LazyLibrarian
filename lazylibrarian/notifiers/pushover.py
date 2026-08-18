@@ -19,12 +19,12 @@
 
 
 import logging
-from urllib.parse import urlencode
 from http.client import HTTPSConnection
+from urllib.parse import urlencode
 
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
 from lazylibrarian.formatter import unaccented
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 
 class PushoverNotifier:
@@ -75,7 +75,6 @@ class PushoverNotifier:
                                  uri,
                                  headers={'Content-type': "application/x-www-form-urlencoded"},
                                  body=urlencode(data))
-            pass
         except Exception as e:
             logger.error(str(e))
             return False
@@ -92,16 +91,13 @@ class PushoverNotifier:
                 request_body = request_body.decode()
                 if 'devices' in request_body:
                     return f"Devices: {request_body.split('[')[1].split(']')[0]}"
-                else:
-                    return request_body
-            else:
-                return True
-        elif 400 <= request_status < 500:
+                return request_body
+            return True
+        if 400 <= request_status < 500:
             logger.error(f"Pushover request failed: {str(request_body)}")
             return False
-        else:
-            logger.error(f"Pushover notification failed: {request_status}")
-            return False
+        logger.error(f"Pushover notification failed: {request_status}")
+        return False
 
     def _notify(self, message=None, event=None, pushover_apitoken=None, pushover_keys=None,
                 pushover_device=None, notification_type=None, method=None, force=False):
@@ -134,13 +130,13 @@ class PushoverNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG.get_bool('PUSHOVER_ONSNATCH'):
             if fail:
-                self._notify(message=title, event=notifyStrings[NOTIFY_FAIL], notification_type='note')
+                self._notify(message=title, event=notify_strings[NOTIFY_FAIL], notification_type='note')
             else:
-                self._notify(message=title, event=notifyStrings[NOTIFY_SNATCH], notification_type='note')
+                self._notify(message=title, event=notify_strings[NOTIFY_SNATCH], notification_type='note')
 
     def notify_download(self, title):
         if CONFIG.get_bool('PUSHOVER_ONDOWNLOAD'):
-            self._notify(message=title, event=notifyStrings[NOTIFY_DOWNLOAD], notification_type='note')
+            self._notify(message=title, event=notify_strings[NOTIFY_DOWNLOAD], notification_type='note')
 
     def test_notify(self, title="Test"):
         res = self._notify(message="This notification asks for the device list",

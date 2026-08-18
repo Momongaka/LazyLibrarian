@@ -6,8 +6,7 @@
 <%def name="headerIncludes()">
     <div id="subhead_container">
         <form id="subhead_menu" class="form-inline">
-        <input type="hidden" name="bookfilter" id="bookfilter" value=''>
-        %if perm&lazylibrarian.perm_force:
+        %if perm&lazylibrarian.perm_status:
             %if author['Status'] == 'Paused':
                 <a href="resume_author?authorid=${author['AuthorID']}" class="btn btn-sm btn-primary"><i class="fa fa-pause"></i> Paused</a>
             %else:
@@ -21,12 +20,17 @@
                 %endif
               %endif
             %endif
+        %endif
+        %if perm&lazylibrarian.perm_force:
             <a href="refresh_author?authorid=${author['AuthorID']}" class="btn btn-sm btn-primary"><i class="fa fa-sync"></i> Refresh Author</a>
             <a href="library_scan_author?authorid=${author['AuthorID']}&library=eBook" class="btn btn-sm btn-primary"><i class="fa fa-sync"></i> eBook Scan</a>
             %if CONFIG.get_int('AUDIO_TAB') > 0:
                 <a href="library_scan_author?authorid=${author['AuthorID']}&library=AudioBook" class="btn btn-sm btn-primary"><i class="fa fa-sync"></i> AudioBook Scan</a>
             %endif
+        %endif
+        %if perm&lazylibrarian.perm_edit:
             <button class="button btn btn-sm btn-primary" type="button" value="removeme" id="removeme"><i class="fa fa-times"></i> Remove Author</button>
+        %endif
             %if ignored == 'True':
               %if library == 'AudioBook':
                 <a href="author_page?authorid=${author['AuthorID']}&ignored=False&library=AudioBook" class="btn btn-sm btn-primary"><i class="fa fa-book"></i> Show Active</a>
@@ -40,7 +44,6 @@
                 <a href="author_page?authorid=${author['AuthorID']}&ignored=True" class="btn btn-sm btn-primary"><i class="fa fa-ban"></i> Show Ignored</a>
               %endif
             %endif
-        %endif
         %if showseries >= 1:
             %if perm&lazylibrarian.perm_series:
               <a href="series?authorid=${author['AuthorID']}" class="btn btn-sm btn-primary"><i class="fa fa-book"></i> Series</a>
@@ -58,9 +61,9 @@
             %endif
         %endif
         %if lazylibrarian.PRIMARY_AUTHORS == True:
-            <a href="toggle_primary?authorid=${author['AuthorID']}" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-star"></i></a>
+            <a href="toggle_primary?page=author_page&authorid=${author['AuthorID']}" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-star"></i></a>
         %else:
-            <a href="toggle_primary?authorid=${author['AuthorID']}" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-handshake"></i></a>
+            <a href="toggle_primary?page=author_page&authorid=${author['AuthorID']}" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-handshake"></i></a>
         %endif
          <div class="form-group pull-right">
             %if len(types) > 1:
@@ -223,6 +226,7 @@
     <input type="hidden" name="booklang" value=${booklang}>
     <input type="hidden" name="library" value=${library}>
     <input type="hidden" name="ignored" value=${ignored}>
+    <input type="hidden" name="bookfilter" id="bookfilter" value=''>
     %if perm&lazylibrarian.perm_status or  CONFIG['USER_ACCOUNTS']:
     <div class="col-xs-12 col-sm-5">
       <div class="form-group">
@@ -313,9 +317,10 @@
                     }
                 },
                 callback: function (result) {
-                  if (result) { $.get("remove_author", {'authorid': '${author['AuthorID']}' },
-                      function (data) { }); }
-                window.location = "authors"
+                  if (result) {
+                      $.get("remove_author", {'authorid': '${author['AuthorID']}' });
+                      window.location = "authors";
+                  }
                 }
             });
         });
@@ -344,6 +349,8 @@
                 "order": [[ 6, 'desc' ]],
                 "bAutoWidth": false,
                 "stateSave": true,
+                "stateSaveParams": function (settings, data) { data.perm = ${perm}; },
+                "stateLoadParams": function (settings, data) { return data.perm === ${perm}; },
                 "rowId": 0,
                 "columnDefs":[
                     { targets: 'no-sort', orderable: false },
@@ -511,7 +518,10 @@
               }
               $(this).toggleClass('selected');
           } );
-
+            oTable.on('search.dt', function() {
+              var input = $('.dataTables_filter input')[0];
+              $('#bookfilter').val(input.value);
+            })
             oTable.on( 'xhr', function () {
               var json = oTable.ajax.json();
               if (json.loading) {
@@ -564,7 +574,6 @@
     function submitFormAjax() {
         var form = document.getElementById("mark_books");
         var formData = new FormData(form);
-
         // Show loading modal
         bootbox.dialog({
             message: '<div class="text-center"><i class="fa fa-spinner fa-spin fa-2x"></i><br><br>Processing...</div>',
@@ -611,7 +620,7 @@
                         label: 'OK',
                         className: 'btn-primary',
                         callback: function() {
-                            window.location.reload(data.redirect);
+                            window.location = data.redirect;
                         }
                     }
                 }

@@ -1,12 +1,13 @@
 # modified from https://github.com/v1k45/python-qBittorrent
 
 import json
-from typing import Optional
+
 import requests
+
 from lazylibrarian.common import proxy_list
 
 
-class WrongCredentials(Exception):
+class WrongCredentialsError(Exception):
     def __str__(self):
         return "Please make sure the username and password are correct"
 
@@ -45,7 +46,7 @@ class Client:
 
         self._url = url + "api/v2/"
         self._verify = verify
-        self._timeout = timeout
+        self._timeout = 10.0
         self._proxies = proxy_list()
         self._max_attempts_on_403 = max_attempts_on_403
 
@@ -65,7 +66,7 @@ class Client:
         Updates the username and attempts to re-login
 
         :param value:
-        :raises WrongCredentials: If the username & password combination are wrong
+        :raises WrongCredentialsError: If the username & password combination are wrong
         :return:
         """
         self._username = value
@@ -81,7 +82,7 @@ class Client:
         Updates the password and attempts to re-login
 
         :param value:
-        :raises WrongCredentials: If the username & password combination are wrong
+        :raises WrongCredentialsError: If the username & password combination are wrong
         :return:
         """
         self._password = value
@@ -106,11 +107,11 @@ class Client:
         In case you need to update both username and password you can use this function instead of the property
         setters. It will attempt to log in after changes are made.
 
-        This should avoid raising WrongCredentials when both credentials change.
+        This should avoid raising WrongCredentialsError when both credentials change.
 
         :param username:
         :param password:
-        :raises WrongCredentials: If the username & password combination are wrong
+        :raises WrongCredentialsError: If the username & password combination are wrong
         :return:
         """
         self._username = username
@@ -188,7 +189,7 @@ class Client:
         stores the authenticated session if the login is correct.
         Else, shows the login error.
 
-        :raises WrongCredentials: When given credentials are wrong
+        :raises WrongCredentialsError: When given credentials are wrong
         :return:
         """
         self._session = requests.Session()
@@ -202,12 +203,13 @@ class Client:
             data={"username": self.username, "password": self.password},
             verify=self._verify,
         )
-        if login.text == "Ok.":
+        # qbittorrent 5.xx sometimes returns status code 204
+        if login.text == "Ok." or login.status_code == 204:
             return
 
-        raise WrongCredentials
+        raise WrongCredentialsError
 
-    def logout(self) -> Optional[requests.Response]:
+    def logout(self) -> requests.Response | None:
         """
         Logout the current session.
         """
@@ -444,7 +446,7 @@ class Client:
         if isinstance(file_buffer, list):
             torrent_files = {}
             for i, f in enumerate(file_buffer):
-                torrent_files.update({"torrents%s" % i: f})
+                torrent_files.update({f"torrents{i}": f})
         else:
             torrent_files = {"torrents": file_buffer}
 
@@ -501,28 +503,34 @@ class Client:
             data = {"hashes": infohash_list.lower()}
         return data
 
-    def pause(self, infohash):
+    def pause(self, infohash, pause=True):
         """
         Pause a torrent.
 
         :param infohash: INFO HASH of torrent.
         """
-        return self._post("torrents/pause", data={"hashes": infohash.lower()})
+        if pause:
+            return self._post("torrents/pause", data={"hashes": infohash.lower()})
+        return self._post("torrents/stop", data={"hashes": infohash.lower()})
 
-    def pause_all(self):
+    def pause_all(self, pause=True):
         """
         Pause all torrents.
         """
-        return self._post("torrents/pause", data={"hashes": "all"})
+        if pause:
+            return self._post("torrents/pause", data={"hashes": "all"})
+        return self._post("torrents/stop", data={"hashes": "all"})
 
-    def pause_multiple(self, infohash_list):
+    def pause_multiple(self, infohash_list, pause=True):
         """
         Pause multiple torrents.
 
         :param infohash_list: Single or list() of infohashes.
         """
         data = self._process_infohash_list(infohash_list)
-        return self._post("torrents/pause", data=data)
+        if pause:
+            return self._post("torrents/pause", data=data)
+        return self._post("torrents/stop", data=data)
 
     def set_category(self, infohash_list, category):
         """
@@ -556,28 +564,34 @@ class Client:
 
         return self._post("torrents/removeCategories", data={"categories": categories})
 
-    def resume(self, infohash):
+    def resume(self, infohash, resume=True):
         """
         Resume a paused torrent.
 
         :param infohash: INFO HASH of torrent.
         """
-        return self._post("torrents/resume", data={"hashes": infohash.lower()})
+        if resume:
+            return self._post("torrents/resume", data={"hashes": infohash.lower()})
+        return self._post("torrents/start", data={"hashes": infohash.lower()})
 
-    def resume_all(self):
+    def resume_all(self, resume=True):
         """
         Resume all torrents.
         """
-        return self._post("torrents/resume", data={"hashes": "all"})
+        if resume:
+            return self._post("torrents/resume", data={"hashes": "all"})
+        return self._post("torrents/start", data={"hashes": "all"})
 
-    def resume_multiple(self, infohash_list):
+    def resume_multiple(self, infohash_list, resume=True):
         """
         Resume multiple paused torrents.
 
         :param infohash_list: Single or list() of infohashes.
         """
         data = self._process_infohash_list(infohash_list)
-        return self._post("torrents/resume", data=data)
+        if resume:
+            return self._post("torrents/resume", data=data)
+        return self._post("torrents/start", data=data)
 
     def delete(self, infohash_list):
         """
@@ -692,7 +706,7 @@ class Client:
         """
         if priority not in [0, 1, 2, 4, 6, 7]:
             raise ValueError("Invalid priority, refer WEB-UI docs for info.")
-        elif not isinstance(file_id, int):
+        if not isinstance(file_id, int):
             raise TypeError("File ID must be an int")
 
         data = {"hash": infohash.lower(), "id": file_id, "priority": priority}
@@ -793,7 +807,7 @@ class Client:
 
         :param kwargs: set preferences in kwargs form.
         """
-        json_data = "json={}".format(json.dumps(kwargs))
+        json_data = f"json={json.dumps(kwargs)}"
         headers = {"content-type": "application/x-www-form-urlencoded"}
         return self._post("app/setPreferences", data=json_data, headers=headers)
 

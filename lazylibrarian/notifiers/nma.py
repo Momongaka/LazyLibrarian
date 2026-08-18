@@ -1,7 +1,7 @@
 import logging
 
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 try:
     from pynma import pynma
@@ -44,12 +44,11 @@ class NmaNotifier:
 
         response = p.push(title, event, message, priority=nma_priority, batch_mode=batch)
 
-        if not response[nma_api][u'code'] == u'200':
-            logger.error(u"NMA: Could not send notification to NotifyMyAndroid")
+        if response[nma_api]["code"] != "200":
+            logger.error("NMA: Could not send notification to NotifyMyAndroid")
             return False
-        else:
-            logger.debug(f"NMA: Success. NotifyMyAndroid returned : {response[nma_api][u'code']}")
-            return True
+        logger.debug(f"NMA: Success. NotifyMyAndroid returned : {response[nma_api]['code']}")
+        return True
 
     #
     # Public functions
@@ -58,13 +57,13 @@ class NmaNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG['NMA_ONSNATCH']:
             if fail:
-                self._send_nma(nma_priority=None, event=notifyStrings[NOTIFY_FAIL], message=title)
+                self._send_nma(nma_priority=None, event=notify_strings[NOTIFY_FAIL], message=title)
             else:
-                self._send_nma(nma_priority=None, event=notifyStrings[NOTIFY_SNATCH], message=title)
+                self._send_nma(nma_priority=None, event=notify_strings[NOTIFY_SNATCH], message=title)
 
     def notify_download(self, title):
         if CONFIG['NMA_ONDOWNLOAD']:
-            self._send_nma(nma_priority=None, event=notifyStrings[NOTIFY_DOWNLOAD], message=title)
+            self._send_nma(nma_priority=None, event=notify_strings[NOTIFY_DOWNLOAD], message=title)
 
     # noinspection PyUnusedLocal
     def test_notify(self, title="Test"):

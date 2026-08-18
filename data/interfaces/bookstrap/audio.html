@@ -25,15 +25,20 @@
             <a href="toggle_my_a_feeds" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="All, or just mine"><i class="fa fa-users"></i></a>
           %endif
         %endif
+        %if lazylibrarian.PRIMARY_AUTHORS == True:
+            <a href="toggle_primary?page=audio" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-star"></i></a>
+        %else:
+            <a href="toggle_primary?page=audio" class="button btn btn-sm btn-primary" data-toggle="tooltip" title="Primary Author, or Contributor"><i class="fa fa-handshake"></i></a>
+        %endif
       </div>
       <div class="col-xs-2">
         %if len(languages) > 1:
         <div class="form-group">
           <label for="chooselanguage"><small>Language</small></label>
-          <select class="form-control input-sm" name="chooselanguage" id="chooselanguage" onchange="window.location = 'audio?BookLang=' + this.options[this.selectedIndex].value">
+          <select class="form-control input-sm" name="chooselanguage" id="chooselanguage" onchange="window.location = 'audio?booklang=' + this.options[this.selectedIndex].value">
             <option value="">All</option>
             %for language in languages:
-            <option value="${language['BookLang']}">${language['BookLang']}</option>
+            <option value="${language['booklang']}">${language['booklang']}</option>
             %endfor
           </select>
         </div>
@@ -121,6 +126,8 @@
             "dom": "<'row'<'col-xs-6'l><'col-xs-6'f>><'row'<'col-sm-12'tr>><'row'<'col-sm-5'i><'col-sm-7'p>>",
             "bAutoWidth": false,
             "stateSave": true,
+            "stateSaveParams": function (settings, data) { data.perm = ${perm}; },
+            "stateLoadParams": function (settings, data) { return data.perm === ${perm}; },
             "order": [[ 2, 'asc' ]],
             "rowId": 0,
             "columnDefs":[
@@ -369,7 +376,7 @@
                         label: 'OK',
                         className: 'btn-primary',
                         callback: function() {
-                            window.location.reload(data.redirect);
+                            window.location = data.redirect
                         }
                     }
                 }

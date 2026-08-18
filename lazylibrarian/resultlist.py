@@ -21,12 +21,16 @@ from rapidfuzz import fuzz
 from lazylibrarian import database
 from lazylibrarian.common import only_punctuation
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.downloadmethods import nzb_dl_method, tor_dl_method, \
-    direct_dl_method, irc_dl_method
-from lazylibrarian.formatter import unaccented, replace_all, get_list, now, check_int
-from lazylibrarian.notifiers import notify_snatch, custom_notify_snatch
+from lazylibrarian.downloadmethods import (
+    direct_dl_method,
+    irc_dl_method,
+    nzb_dl_method,
+    tor_dl_method,
+)
+from lazylibrarian.formatter import check_int, get_list, now, replace_all, unaccented
+from lazylibrarian.notifiers import custom_notify_snatch, notify_snatch
 from lazylibrarian.providers import get_searchterm
-from lazylibrarian.scheduling import schedule_job, SchedulerCommand
+from lazylibrarian.scheduling import SchedulerCommand, schedule_job
 
 
 def process_result_list(resultlist, book, searchtype, source):
@@ -60,7 +64,7 @@ def find_best_result(resultlist, book, searchtype, source):
     """
     # noinspection PyBroadException
     logger = logging.getLogger(__name__)
-    loggerfuzz = logging.getLogger('special.fuzz')
+    fuzzlogger = logging.getLogger('special.fuzz')
     db = database.DBConnection()
     highest = None
     try:
@@ -93,6 +97,63 @@ def find_best_result(resultlist, book, searchtype, source):
             minsize = CONFIG.get_int('REJECT_MINSIZE')
             auxinfo = 'eBook'
 
+        # Language tags that appear in release names, mapped to the set of
+        # IMP_PREFLANG values each one satisfies.  Only unambiguous indicators:
+        # two-letter codes (en, fr, de ...) are too common as English words.
+        _LANG_TO_PREFLANG = {
+            'english': {'en', 'eng', 'english'},
+            'eng': {'en', 'eng', 'english'},
+            'french': {'fr', 'fre', 'fra', 'french'},
+            'fre': {'fr', 'fre', 'fra', 'french'},
+            'fra': {'fr', 'fre', 'fra', 'french'},
+            'german': {'de', 'ger', 'deu', 'german'},
+            'ger': {'de', 'ger', 'deu', 'german'},
+            'deu': {'de', 'ger', 'deu', 'german'},
+            'spanish': {'es', 'spa', 'spanish'},
+            'spa': {'es', 'spa', 'spanish'},
+            'italian': {'it', 'ita', 'italian'},
+            'ita': {'it', 'ita', 'italian'},
+            'swedish': {'sv', 'swe', 'swedish'},
+            'swe': {'sv', 'swe', 'swedish'},
+            'norwegian': {'no', 'nor', 'norwegian'},
+            'nor': {'no', 'nor', 'norwegian'},
+            'danish': {'da', 'dan', 'danish'},
+            'dan': {'da', 'dan', 'danish'},
+            'dutch': {'nl', 'dut', 'nld', 'dutch'},
+            'dut': {'nl', 'dut', 'nld', 'dutch'},
+            'nld': {'nl', 'dut', 'nld', 'dutch'},
+            'portuguese': {'pt', 'por', 'portuguese'},
+            'por': {'pt', 'por', 'portuguese'},
+            'russian': {'ru', 'rus', 'russian'},
+            'rus': {'ru', 'rus', 'russian'},
+            'polish': {'pl', 'pol', 'polish'},
+            'pol': {'pl', 'pol', 'polish'},
+            'czech': {'cs', 'cze', 'ces', 'czech'},
+            'cze': {'cs', 'cze', 'ces', 'czech'},
+            'ces': {'cs', 'cze', 'ces', 'czech'},
+            'finnish': {'fi', 'fin', 'finnish'},
+            'fin': {'fi', 'fin', 'finnish'},
+            'hungarian': {'hu', 'hun', 'hungarian'},
+            'hun': {'hu', 'hun', 'hungarian'},
+            'turkish': {'tr', 'tur', 'turkish'},
+            'tur': {'tr', 'tur', 'turkish'},
+            'japanese': {'ja', 'jpn', 'japanese'},
+            'jpn': {'ja', 'jpn', 'japanese'},
+            'chinese': {'zh', 'chi', 'zho', 'chinese'},
+            'chi': {'zh', 'chi', 'zho', 'chinese'},
+            'zho': {'zh', 'chi', 'zho', 'chinese'},
+            'korean': {'ko', 'kor', 'korean'},
+            'kor': {'ko', 'kor', 'korean'},
+            'arabic': {'ar', 'ara', 'arabic'},
+            'ara': {'ar', 'ara', 'arabic'},
+            'romanian': {'ro', 'ron', 'romanian'},
+            'ron': {'ro', 'ron', 'romanian'},
+            'greek': {'el', 'ell', 'greek'},
+            'ell': {'el', 'ell', 'greek'},
+        }
+        preflang_lower = {v.strip().lower() for v in get_list(CONFIG['IMP_PREFLANG'], ',') if v.strip()}
+        check_lang = preflang_lower and 'all' not in preflang_lower
+
         if source == 'nzb':
             prefix = 'nzb'
         else:  # rss and direct providers return same names as torrents
@@ -112,12 +173,12 @@ def find_best_result(resultlist, book, searchtype, source):
                 book_match = fuzz.token_set_ratio(title.replace(author, ''), only_title)
             if 'booksearch' in res and res['booksearch'] == 'bibliotik':
                 # bibliotik only returns book title, not author name
-                loggerfuzz.debug("bibliotik, ignoring author fuzz")
+                fuzzlogger.debug("bibliotik, ignoring author fuzz")
                 author_match = 100
             else:
                 author_match = fuzz.token_set_ratio(author, result_title)
 
-            loggerfuzz.debug(f"{source.upper()} author/book Match: {author_match}/{book_match} {result_title} "
+            fuzzlogger.debug(f"{source.upper()} author/book Match: {author_match}/{book_match} {result_title} "
                              f"at {res[prefix + 'prov']}")
 
             rejected = False
@@ -212,6 +273,32 @@ def find_best_result(resultlist, book, searchtype, source):
                         logger.debug(f"Rejecting {result_title}, contains {word}")
                         break
 
+            if not rejected and check_lang:
+                title_words = get_list(title.lower())
+                author_words = get_list(author.lower())
+                for word in get_list(result_title.lower()):
+                    if word in title_words or word in author_words:
+                        continue
+                    mapped = _LANG_TO_PREFLANG.get(word)
+                    if mapped and not mapped.intersection(preflang_lower):
+                        rejected = True
+                        logger.debug(f"Rejecting {result_title}, language '{word}' "
+                                     f"not in preferred languages")
+                        break
+
+            if not rejected:
+                result_words = set(get_list(result_title.lower()))
+                ebook_types = {t.lower() for t in get_list(CONFIG['EBOOK_TYPE'])}
+                audio_types = {t.lower() for t in get_list(CONFIG['AUDIOBOOK_TYPE'])}
+                format_tokens = result_words & (ebook_types | audio_types)
+                if format_tokens:
+                    if auxinfo == 'eBook' and format_tokens <= audio_types:
+                        rejected = True
+                        logger.debug(f"Rejecting {result_title}, format tokens are audiobook types")
+                    elif auxinfo == 'AudioBook' and format_tokens <= ebook_types:
+                        rejected = True
+                        logger.debug(f"Rejecting {result_title}, format tokens are ebook types")
+
             size_temp = check_int(res[f"{prefix}size"], 1000)  # Need to cater for when this is NONE (Issue 35)
             size = round(float(size_temp) / 1048576, 2)
 
@@ -290,7 +377,7 @@ def find_best_result(resultlist, book, searchtype, source):
                 matches.append([score, new_value_dict, control_value_dict, res['priority']])
 
         if matches:
-            highest = max(matches, key=lambda s: (s[0], s[3]))
+            highest = max(matches, key=lambda s: (weighted_score(s), check_int(s[3], 0)))
             score = highest[0]
             new_value_dict = highest[1]
             # controlValueDict = highest[2]
@@ -311,6 +398,12 @@ def find_best_result(resultlist, book, searchtype, source):
 
     db.close()
     return highest
+
+
+def weighted_score(s):
+    # priority is already 0-100-ish per provider; normalize it down to a modest bonus
+    priority_bonus = (check_int(s[3], 0) / 100) * CONFIG.get_int('PRIORITY_WEIGHT')
+    return check_int(s[0], 0) + priority_bonus
 
 
 def download_result(match, book):
@@ -386,9 +479,8 @@ def download_result(match, book):
             # either sleep for a while, or unblock the one with the lowest counter.
             schedule_job(SchedulerCommand.START, target='PostProcessor')
             return 2  # we found it
-        else:
-            db.action("UPDATE wanted SET status='Failed',DLResult=? WHERE NZBurl=?",
-                      (res, control_value_dict["NZBurl"]))
+        db.action("UPDATE wanted SET status='Failed',DLResult=? WHERE NZBurl=?",
+                  (res, control_value_dict["NZBurl"]))
         return 0
     except Exception:
         logger.error(f'Unhandled exception in download_result: {traceback.format_exc()}')

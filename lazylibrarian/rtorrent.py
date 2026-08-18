@@ -15,19 +15,20 @@ import logging
 import socket
 import ssl
 from time import sleep
-
-from lazylibrarian.filesystem import get_directory
-from lazylibrarian.config2 import CONFIG
 from xmlrpc.client import Binary, ServerProxy
+
+from lazylibrarian.config2 import CONFIG
+from lazylibrarian.filesystem import get_directory
+from lazylibrarian.formatter import versiontuple
 
 
 def get_server():
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
+    dlcommslogger = logging.getLogger('special.dlcomms')
     host = CONFIG['RTORRENT_HOST']
     if not host:
         logger.error("rtorrent error: No host found, check your config")
-        return False, ''
+        return None, ''
 
     host = host.rstrip('/')
     if not host.startswith("http://") and not host.startswith("https://"):
@@ -51,62 +52,58 @@ def get_server():
             server = ServerProxy(host)
         version = server.system.client_version()
         socket.setdefaulttimeout(None)  # reset timeout
-        loggerdlcomms.debug(f"rTorrent client version = {version}")
+        dlcommslogger.debug(f"rTorrent client version = {version}")
     except Exception as e:
         socket.setdefaulttimeout(None)  # reset timeout if failed
         logger.error(f"xmlrpc_client error: {repr(e)}")
-        return False, ''
-    if version:
+        return None, ''
+    if version and versiontuple(version) >= versiontuple('0.9.8'):
         return server, version
-    else:
-        logger.warning('No response from rTorrent server')
-        return False, ''
+    if version:
+        logger.error(f"rTorrent {version} is not supported, require >= 0.9.8")
+        return None, version
+    logger.warning('No response from rTorrent server')
+    return None, ''
 
 
 def add_torrent(tor_url, hash_id, data=None):
     logger = logging.getLogger(__name__)
     server, version = get_server()
-    if server is False:
+    if not server:
+        if version:
+            return False, f'rTorrent {version} is not supported (require >= 0.9.8)'
         return False, 'rTorrent unable to connect to server'
     try:
+        paused = CONFIG.get_bool('TORRENT_PAUSED')
+        label = CONFIG['RTORRENT_LABEL']
+        directory = CONFIG['RTORRENT_DIR']
+
+        post_load_cmds = []
+        if label:
+            post_load_cmds.append(f'd.custom1.set="{label}"')
+        if directory:
+            post_load_cmds.append(f'd.directory.set="{directory}"')
+
         if data:
             logger.debug(f'Sending rTorrent content [{str(data)[:40]}...]')
-            if version.startswith('0.9') or version.startswith('1.'):
-                _ = server.load.raw('', Binary(data))
+            if paused:
+                _ = server.load.raw('', Binary(data), *post_load_cmds)
             else:
-                _ = server.load_raw(Binary(data))
+                _ = server.load.raw_start('', Binary(data), *post_load_cmds)
         else:
             logger.debug(f'Sending rTorrent url [{str(tor_url)[:40]}...]')
-            if version.startswith('0.9') or version.startswith('1.'):
-                _ = server.load.normal('', tor_url)  # response isn't anything useful, always 0
+            if paused:
+                _ = server.load.normal('', tor_url, *post_load_cmds)  # response isn't anything useful, always 0
             else:
-                _ = server.load(tor_url)
+                _ = server.load.start('', tor_url, *post_load_cmds)
         # need a short pause while rtorrent loads it
         retries = 5
         while retries:
             mainview = server.download_list("", "main")
-            for tor in mainview:
-                if tor.upper() == hash_id.upper():
-                    break
+            if any(tor.upper() == hash_id.upper() for tor in mainview):
+                break
             sleep(1)
             retries -= 1
-
-        label = CONFIG['RTORRENT_LABEL']
-        if label:
-            if version.startswith('0.9') or version.startswith('1.'):
-                server.d.custom1.set(hash_id, label)
-            else:
-                server.d.set_custom1(hash_id, label)
-
-        directory = CONFIG['RTORRENT_DIR']
-        if directory:
-            if version.startswith('0.9') or version.startswith('1.'):
-                server.d.directory.set(hash_id, directory)
-            else:
-                server.d.set_directory(hash_id, directory)
-
-        if not CONFIG.get_bool('TORRENT_PAUSED'):
-            server.d.start(hash_id)
 
     except Exception as e:
         res = f"rTorrent Error: {type(e).__name__}: {str(e)}"
@@ -116,12 +113,8 @@ def add_torrent(tor_url, hash_id, data=None):
     # wait a while for download to start, that's when rtorrent fills in the name
     name = get_name(hash_id)
     if name:
-        if version.startswith('0.9') or version.startswith('1.'):
-            directory = get_directory(hash_id)
-            label = server.d.custom1(hash_id)
-        else:
-            directory = server.d.get_directory(hash_id)
-            label = server.d.get_custom1(hash_id)
+        directory = get_directory(hash_id)
+        label = server.d.custom1(hash_id)
 
         if label:
             logger.debug(f'rTorrent downloading {name} to {directory} with label {label}')
@@ -133,20 +126,20 @@ def add_torrent(tor_url, hash_id, data=None):
 
 def get_progress(hash_id):
     server, _ = get_server()
-    if server is False:
-        return 0, 'error'
+    if not server:
+        return -2, 'connection error'
     mainview = server.download_list("", "main")
     for tor in mainview:
         if tor.upper() == hash_id.upper():
             if server.d.complete(tor):
                 return 100, 'finished'
             return int((server.d.bytes_done(tor) * 100) / server.d.size_bytes(tor)), 'OK'
-    return -1, ''
+    return -1, 'not found'
 
 
 def get_files(hash_id):
     server, _ = get_server()
-    if server is False:
+    if not server:
         return []
 
     mainview = server.download_list("", "main")
@@ -167,7 +160,7 @@ def get_files(hash_id):
 
 def get_name(hash_id):
     server, version = get_server()
-    if server is False:
+    if not server:
         return False
 
     mainview = server.download_list("", "main")
@@ -176,10 +169,7 @@ def get_name(hash_id):
             retries = 5
             name = ''
             while retries:
-                if version.startswith('0.9') or version.startswith('1.'):
-                    name = server.d.name(tor)
-                else:
-                    name = server.d.get_name(tor)
+                name = server.d.name(tor)
                 if tor.upper() not in name:
                     break
                 sleep(5)
@@ -190,7 +180,7 @@ def get_name(hash_id):
 
 def get_folder(hash_id):
     server, version = get_server()
-    if server is False:
+    if not server:
         return False
 
     mainview = server.download_list("", "main")
@@ -199,10 +189,7 @@ def get_folder(hash_id):
             retries = 5
             name = ''
             while retries:
-                if version.startswith('0.9') or version.startswith('1.'):
-                    name = get_directory(tor)
-                else:
-                    name = server.d.get_directory(tor)
+                name = get_directory(tor)
                 if tor.upper() not in name:
                     break
                 sleep(5)
@@ -214,7 +201,7 @@ def get_folder(hash_id):
 # noinspection PyUnusedLocal
 def remove_torrent(hash_id, remove_data=False):
     server, _ = get_server()
-    if server is False:
+    if not server:
         return False
 
     mainview = server.download_list("", "main")
@@ -226,6 +213,6 @@ def remove_torrent(hash_id, remove_data=False):
 
 def check_link():
     server, version = get_server()
-    if server is False:
+    if not server:
         return "rTorrent login FAILED\nCheck debug log"
     return f"rTorrent login successful: rTorrent {version}"

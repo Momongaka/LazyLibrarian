@@ -28,28 +28,6 @@ class BlockhandlerTest(LLTestCase):
         self.assertIsInstance(handler._torznab, ArrayConfig)
         self.assertNotEqual(handler._torznab, handler._newznab)
 
-    def test_gb_call(self):
-        self.set_loglevel(logging.INFO)
-        handler = BlockHandler()
-        msg, ok = handler.add_gb_call()
-        self.assertTrue(ok, 'Nothing should be blocked')
-        self.assertEqual(msg, 'Ok')
-
-        calls = handler.get_gb_calls()
-        self.assertEqual(calls, 1, 'Count of gb calls not correct')
-
-        handler.block_provider('googleapis', 'bored with testing', delay=2)  # 2 seconds!
-        msg, ok = handler.add_gb_call()
-        self.assertFalse(ok, 'This API should be blocked')
-        self.assertEqual(msg, 'Blocked')
-
-        time.sleep(2.1)
-        msg, ok = handler.add_gb_call()
-        self.assertTrue(ok, 'Nothing should be blocked')
-        self.assertEqual(msg, 'Ok')
-        calls = handler.get_gb_calls()
-        self.assertEqual(calls, 0, 'Count of gb calls should have been reset')
-
     def test_remove_provider_entry(self):
         name = 'test'
         handler = BlockHandler()

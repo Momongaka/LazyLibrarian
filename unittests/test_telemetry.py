@@ -5,7 +5,7 @@
 
 import json
 import pytest
-import pytest_order  # Needed to force unit test order
+# import pytest_order  # Needed to force unit test order
 import mock
 import logging
 
@@ -92,8 +92,8 @@ class TelemetryTest(LLTestCaseWithConfigandDIRS):
         # print(json_fromcfg)
         json_good = json.loads("""
             {"switches": "EBOOK_TAB COMIC_TAB SERIES_TAB API_ENABLED CALIBRE_USE_SERVER OPF_TAGS ",
-            "params": "IMP_CALIBREDB DOWNLOAD_DIR API_KEY ",
-            "BOOK_API": "OpenLibrary",
+            "params": "PRIMARY_OL IMP_CALIBREDB DOWNLOAD_DIR API_KEY ",
+            "BOOK_API": "",
             "NEWZNAB": 1, "TORZNAB": 0, "RSS": 0, "IRC": 0, "GEN": 0, "APPRISE": 1}
         """)
         self.assertEqual(cfg, json_good, "Config not as expected. Check that ini file has not changed")
@@ -113,7 +113,7 @@ class TelemetryTest(LLTestCaseWithConfigandDIRS):
     @pytest.mark.order(after="test_ensure_server_id_generation")
     @pytest.mark.order(after="test_ensure_server_id_persistence")
     @pytest.mark.order(after="test_set_config_data")
-    @pytest.mark.order(after="test_record_usage_data")
+    @pytest.mark.order(before="test_record_usage_data")
     def test_construct_data_string(self):
         t = telemetry.LazyTelemetry()
         t.set_install_data(self.cfg(), testing=True)
@@ -128,11 +128,14 @@ class TelemetryTest(LLTestCaseWithConfigandDIRS):
         s_got['usage'] = t.construct_data_string(send_config=False, send_usage=True, send_server=False)
         s_expect = [
             ['server',
-             'server={"id":"5f6300cc949542f0bcde1ea110ba46a8","uptime_seconds":0,"install_type":"","version":"","os":"nt","python_ver":"3.11.0 (main, Oct 24 2022, 18:26:48) [MSC v.1933 64 bit (AMD64)]"}'],
+             'server={"id":"5f6300cc949542f0bcde1ea110ba46a8","uptime_seconds":0,"install_type":"",'
+             '"version":"","os":"nt","python_ver":"3.11.0 (main, Oct 24 2022, 18:26:48) [MSC v.1933 64 bit (AMD64)]"}'],
             ['config',
-             'config={"switches":"EBOOK_TAB COMIC_TAB SERIES_TAB API_ENABLED CALIBRE_USE_SERVER OPF_TAGS ","params":"IMP_CALIBREDB DOWNLOAD_DIR API_KEY ","BOOK_API":"OpenLibrary","NEWZNAB":1,"TORZNAB":0,"RSS":0,"IRC":0,"GEN":0,"APPRISE":1}'],
+             'config={"switches":"EBOOK_TAB COMIC_TAB SERIES_TAB API_ENABLED CALIBRE_USE_SERVER OPF_TAGS "'
+             ',"params":"PRIMARY_OL IMP_CALIBREDB DOWNLOAD_DIR API_KEY ","BOOK_API":"","NEWZNAB":1,'
+             '"TORZNAB":0,"RSS":0,"IRC":0,"GEN":0,"APPRISE":1}'],
             ['usage',
-             'usage={"API/getHelp":2,"web/test":1,"Download/NZB":1}'],
+             'usage={"config2/save_config_and_backup_old":1,"API/getHelp":2,"web/test":1,"Download/NZB":1}'],
         ]
         # Test individual strings
         for expect in s_expect:
@@ -149,6 +152,9 @@ class TelemetryTest(LLTestCaseWithConfigandDIRS):
 
         # Test they are concatenated correctly, excluding server key
         s_usage = t.construct_data_string(send_usage=True, send_config=True, send_server=False)
+        print(1, s_usage)
+        print(2, s_expect[1][1])
+        print(3, s_expect[2][1])
         self.assertEqual(s_usage, f"{s_expect[1][1]}&{s_expect[2][1]}", 'Strings concatenated incorrectly')
 
     @pytest.mark.order(after="test_construct_data_string")

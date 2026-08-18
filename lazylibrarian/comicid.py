@@ -11,6 +11,7 @@
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
 
+import contextlib
 import logging
 import re
 import string
@@ -25,7 +26,15 @@ import lazylibrarian
 from lazylibrarian.cache import html_request, json_request
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.filesystem import path_isfile
-from lazylibrarian.formatter import check_int, check_year, make_unicode, make_utf8bytes, plural, strip_quotes
+from lazylibrarian.formatter import (
+    check_int,
+    check_year,
+    make_unicode,
+    make_utf8bytes,
+    plural,
+    strip_quotes,
+)
+from lazylibrarian.telemetry import TELEMETRY
 
 
 def get_issue_num(words, skipped):
@@ -58,9 +67,10 @@ def get_issue_num(words, skipped):
 def name_words(name):
     # sanitize for better matching
     # allow #num and word! or word? but strip other punctuation, allow '&' as a word
-    punct = re.compile(
-        f"[{re.escape(string.punctuation.replace('#', '').replace('!', '').replace('?', '').replace('&', '').replace(':', ''))}]")
-
+    punc_chars = string.punctuation
+    for c in '#!?&:':
+        punc_chars = punc_chars.replace(c, '')
+    punct = re.compile(f"[{re.escape(punc_chars)}]")
     name = punct.sub(' ', name)
     # strip all ascii and non-ascii quotes/apostrophes
     name = strip_quotes(name)
@@ -105,7 +115,8 @@ def title_words(words):
 
 def cv_identify(fname, best=True):
     logger = logging.getLogger(__name__)
-    loggermatching = logging.getLogger('special.matching')
+    matchinglogger = logging.getLogger('special.matching')
+    TELEMETRY.record_usage_data('CV/Identify')
     apikey = CONFIG['CV_APIKEY']
     if not apikey:
         # don't nag. Show warning message no more than every 20 mins
@@ -201,7 +212,7 @@ def cv_identify(fname, best=True):
         return choices
 
     if choices:
-        loggermatching.debug(f'Found {len(choices)} possible for {fname}')
+        matchinglogger.debug(f'Found {len(choices)} possible for {fname}')
         results = []
         year = 0
         # do we have a year to narrow it down
@@ -210,7 +221,7 @@ def cv_identify(fname, best=True):
                 year = w
                 break
 
-        loggermatching.debug(f"Checking {len(choices)} {plural(len(choices), 'result')}")
+        matchinglogger.debug(f"Checking {len(choices)} {plural(len(choices), 'result')}")
         for item in choices:
             present = 0
             noise = 0
@@ -223,12 +234,12 @@ def cv_identify(fname, best=True):
                     noise += 1
 
             if year and item['start'] and item["start"] > year:  # series not started yet
-                loggermatching.debug(f"Year {year} out of range (start={item['start']}) {item['title']}")
+                matchinglogger.debug(f"Year {year} out of range (start={item['start']}) {item['title']}")
                 rejected = True
 
             issue = get_issue_num(words, namewords)
             if issue and (issue < check_int(item["first"], 0) or issue > check_int(item["last"], 0)):
-                loggermatching.debug(f"Issue {issue} out of range ({item['first']} to {item['last']}) {item['title']}")
+                matchinglogger.debug(f"Issue {issue} out of range ({item['first']} to {item['last']}) {item['title']}")
                 rejected = True
 
             for w in titlewords:
@@ -240,30 +251,30 @@ def cv_identify(fname, best=True):
             if not rejected and present >= minmatch:
                 results.append([present, noise, missing, item, issue])
             else:
-                loggermatching.debug(f"Only matched {present} {plural(present, 'word')} in {item['title']}")
+                matchinglogger.debug(f"Only matched {present} {plural(present, 'word')} in {item['title']}")
 
         results = sorted(results, key=lambda x: (-x[0], x[1], -(check_int(x[3]["start"], 0))))
-        loggermatching.debug(str(results))
+        matchinglogger.debug(str(results))
 
         if results:
             return results[0]
 
     if not CONFIG.get_bool('CV_WEBSEARCH'):
-        loggermatching.debug(f'No match for {fname}')
+        matchinglogger.debug(f'No match for {fname}')
         return []
 
-    loggermatching.debug(f'No api match for {fname}, trying websearch')
+    matchinglogger.debug(f'No api match for {fname}, trying websearch')
     # fortunately comicvine sorts the resuts and gives us "best match first"
     # so we only scrape the first page (could add &page=2)
     url = '/'.join([CONFIG['CV_URL'], f'search/?i=volume&q={matchwords}'])
     data, in_cache = html_request(url)
     if not data:
-        loggermatching.debug(f'No match for {fname}')
+        matchinglogger.debug(f'No match for {fname}')
         return []
 
     choices = get_volumes_from_search(data)
     if choices:
-        loggermatching.debug(f'Found {len(choices)} possible for {fname}')
+        matchinglogger.debug(f'Found {len(choices)} possible for {fname}')
         results = []
         year = 0
         # do we have a year to narrow it down
@@ -302,7 +313,7 @@ def cv_identify(fname, best=True):
     if results:
         return results[0]
 
-    loggermatching.debug(f'No match for {fname}')
+    matchinglogger.debug(f'No match for {fname}')
     return []
 
 
@@ -388,14 +399,10 @@ def get_series_detail_from_search(page_content):
         series_detail['title'] = soup.find('h1', itemprop='name').text
     except AttributeError:
         series_detail['title'] = ''
-    try:
+    with contextlib.suppress(AttributeError):
         series_detail['publisher'] = soup.find('h3', class_="name").text.strip('\n').strip()
-    except AttributeError:
-        pass
-    try:
+    with contextlib.suppress(AttributeError):
         series_detail['description'] = soup.find('div', itemprop='description').text
-    except AttributeError:
-        pass
     issues = soup.find('div', class_="list Issues")
     if issues:
         series_detail['issues'] = issues.find_all('h6')
@@ -406,7 +413,8 @@ def get_series_detail_from_search(page_content):
 
 def cx_identify(fname, best=True):
     logger = logging.getLogger(__name__)
-    loggermatching = logging.getLogger('special.matching')
+    matchinglogger = logging.getLogger('special.matching')
+    TELEMETRY.record_usage_data('CX/Identify')
     res = []
     fname = make_unicode(fname)
     words = name_words(fname)
@@ -421,7 +429,7 @@ def cx_identify(fname, best=True):
     data, _ = html_request(url)
 
     if not data:
-        loggermatching.debug(f'No match for {fname}')
+        matchinglogger.debug(f'No match for {fname}')
         return []
 
     series_links = get_series_links_from_search(data)
@@ -446,7 +454,7 @@ def cx_identify(fname, best=True):
 
             if pager:
                 # eg '1 TO 18 OF 27'
-                loggermatching.debug(pager)
+                matchinglogger.debug(pager)
 
                 pager_words = pager.split()
                 if pager_words[2] == pager_words[4]:
@@ -475,10 +483,8 @@ def cx_identify(fname, best=True):
                         last = max(last, num)
                     except Exception:
                         pass
-                try:
+                with contextlib.suppress(IndexError):
                     start = series_detail['title'].rsplit('(', 1)[1].split('-')[0].rstrip(')')
-                except IndexError:
-                    pass
 
                 series_detail['seriesid'] = f"CX{link.rsplit('/', 1)[1]}"
                 series_detail['start'] = start
@@ -494,7 +500,7 @@ def cx_identify(fname, best=True):
 
     choices = []
     if res:
-        loggermatching.debug(f'Found {len(res)} possible for {fname}')
+        matchinglogger.debug(f'Found {len(res)} possible for {fname}')
         year = 0
         # do we have a year to narrow it down
         for w in words:
@@ -525,26 +531,24 @@ def cx_identify(fname, best=True):
             for w in name_words(item['title']):
                 if w in words:
                     if check_year(w):
-                        loggermatching.debug(f"Match {item['title']} year {year}")
+                        matchinglogger.debug(f"Match {item['title']} year {year}")
                     else:
                         wordcount += 1
                 else:
                     if check_year(w):
                         if y1 and y2 and int(y1) <= int(year) <= int(y2):
-                            loggermatching.debug(f"Match {item['title']} ({year} is between {y1}-{y2})")
+                            matchinglogger.debug(f"Match {item['title']} ({year} is between {y1}-{y2})")
                             rejected = False
                             break
-                        elif y1 and not y2 and int(year) >= int(y1):
-                            loggermatching.debug(f"Accept {item['title']} ({year} is in {y1}-)")
+                        if y1 and not y2 and int(year) >= int(y1):
+                            matchinglogger.debug(f"Accept {item['title']} ({year} is in {y1}-)")
                             rejected = False
                             break
-                        else:
-                            loggermatching.debug(f"Rejecting {item['title']}, need {year}")
-                            rejected = True
-                            noise += 1
-                            break
-                    else:
+                        matchinglogger.debug(f"Rejecting {item['title']}, need {year}")
+                        rejected = True
                         noise += 1
+                        break
+                    noise += 1
 
             for w in titlewords:
                 if w not in name_words(item['title']):
@@ -556,7 +560,7 @@ def cx_identify(fname, best=True):
 
             if not rejected and wordcount >= minmatch:
                 if (missing + noise) / 2 >= wordcount:
-                    loggermatching.debug(f"Rejecting {item['title']} (noise {missing + noise})")
+                    matchinglogger.debug(f"Rejecting {item['title']} (noise {missing + noise})")
                 else:
                     choices.append([wordcount, noise, missing, item, issue])
 
@@ -564,13 +568,13 @@ def cx_identify(fname, best=True):
             choices = sorted(choices, key=lambda x: (-x[0], x[1]))
             return choices[0]
 
-    loggermatching.debug(f'No match for {fname}')
+    matchinglogger.debug(f'No match for {fname}')
     return []
 
 
 def comic_metadata(archivename, xml=False):
     logger = logging.getLogger(__name__)
-    loggermatching = logging.getLogger('special.matching')
+    matchinglogger = logging.getLogger('special.matching')
     archivename = make_unicode(archivename)
     if not path_isfile(archivename):  # regular files only
         logger.debug(f"{archivename} is not a file")
@@ -591,7 +595,7 @@ def comic_metadata(archivename, xml=False):
                     logger.debug(f"{len(res)} bytes xml")
                     return res
                 return meta_dict(z.read(item))
-        loggermatching.debug(f'ComicInfo.xml not found in {archivename}')
+        matchinglogger.debug(f'ComicInfo.xml not found in {archivename}')
         return {}
 
     if lazylibrarian.UNRARLIB == 1 and lazylibrarian.RARFILE.is_rarfile(archivename):
@@ -609,7 +613,7 @@ def comic_metadata(archivename, xml=False):
                     logger.debug(f"{len(res)} bytes xml")
                     return res
                 return meta_dict(z.read(item))
-        loggermatching.debug(f'ComicInfo.xml not found in {archivename}')
+        matchinglogger.debug(f'ComicInfo.xml not found in {archivename}')
         return {}
 
     if lazylibrarian.UNRARLIB == 2:
@@ -626,7 +630,7 @@ def comic_metadata(archivename, xml=False):
                 logger.debug(f"{len(res)} bytes xml")
                 return res
             return meta_dict(data[0][1])
-        loggermatching.debug(f'ComicInfo.xml not found in {archivename}')
+        matchinglogger.debug(f'ComicInfo.xml not found in {archivename}')
         return {}
 
     logger.debug(f"{archivename} is not an archive we can unpack")

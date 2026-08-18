@@ -15,6 +15,7 @@
 # Purpose:
 #   Common, basic functions for LazyLibrary
 
+import contextlib
 import importlib
 import logging
 import os
@@ -46,7 +47,15 @@ import lazylibrarian
 from lazylibrarian import database
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.configdefs import CONFIG_GIT
-from lazylibrarian.filesystem import DIRS, path_exists, listdir, walk, setperm, remove_file, path_isfile
+from lazylibrarian.filesystem import (
+    DIRS,
+    listdir,
+    path_exists,
+    path_isfile,
+    remove_file,
+    setperm,
+    splitext,
+)
 from lazylibrarian.formatter import get_list, make_unicode
 from lazylibrarian.logconfig import LOGCONFIG
 
@@ -55,8 +64,7 @@ def get_user_agent() -> str:
     # Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.116 Safari/537.36
     if CONFIG['USER_AGENT']:
         return CONFIG['USER_AGENT']
-    else:
-        return f"LazyLibrarian ({platform.system()} {platform.release()})"
+    return f"LazyLibrarian ({platform.system()} {platform.release()})"
 
 
 def get_readinglist(table, user):
@@ -74,7 +82,7 @@ def get_readinglist(table, user):
         status = 5
     else:
         status = 4
-    cmd = f"SELECT bookid from readinglists WHERE userid=? and status=?"
+    cmd = "SELECT bookid from readinglists WHERE userid=? and status=?"
     res = db.select(cmd, (user, status))
     if res:
         for item in res:
@@ -111,8 +119,8 @@ def multibook(foldername, recurse=False):
     filetypes = get_list(CONFIG['EBOOK_TYPE'])
 
     if recurse:
-        for _, _, f in walk(foldername):
-            flist = [item for item in f]
+        for _, _, f in os.walk(foldername):
+            flist = list(f)
             for item in filetypes:
                 counter = 0
                 for fname in flist:
@@ -145,7 +153,7 @@ def proxy_list():
 def is_valid_email(emails):
     if not emails:
         return False
-    elif ',' in emails:
+    if ',' in emails:
         emails = get_list(emails)
     else:
         emails = [emails]
@@ -171,48 +179,45 @@ def pwd_check(password):
     #    return False
     # if not any(char.isalpha() for char in password):
     #    return False
-    if any(char.isspace() for char in password):
-        return False
-    return True
+    return not any(char.isspace() for char in password)
 
 
 def mime_type(filename):
     name = make_unicode(filename).lower()
     if name.endswith('.epub'):
         return 'application/epub+zip'
-    elif name.endswith('.mobi') or name.endswith('.azw'):
+    if name.endswith(('.mobi', '.azw')):
         return 'application/x-mobipocket-ebook'
-    elif name.endswith('.azw3'):
+    if name.endswith('.azw3'):
         return 'application/x-mobi8-ebook'
-    elif name.endswith('.pdf'):
+    if name.endswith('.pdf'):
         return 'application/pdf'
-    elif name.endswith('.mp3'):
+    if name.endswith('.mp3'):
         return 'audio/mpeg3'
-    elif name.endswith('.m4a'):
+    if name.endswith(('.m4a', '.m4b')):
         return 'audio/mp4'
-    elif name.endswith('.m4b'):
-        return 'audio/mp4'
-    elif name.endswith('.flac'):
+    if name.endswith('.flac'):
         return 'audio/flac'
-    elif name.endswith('.ogg'):
+    if name.endswith('.ogg'):
         return 'audio/ogg'
-    elif name.endswith('.zip'):
+    if name.endswith('.zip'):
         return 'application/x-zip-compressed'
-    elif name.endswith('.xml'):
+    if name.endswith('.xml'):
         return 'application/rss+xml'
-    elif name.endswith('.cbz'):
+    if name.endswith('.cbz'):
         return 'application/x-cbz'
-    elif name.endswith('.cbr'):
+    if name.endswith('.cbr'):
         return 'application/x-cbr'
     return "application/x-download"
 
 
 def module_available(module_name):
+    # noinspection PyUnresolvedReferences
     loader = importlib.util.find_spec(module_name)
     return loader is not None
 
 
-def create_support_zip() -> (str, str):
+def create_support_zip() -> tuple[str, str]:
     """ Create a zip file for support purposes.
     Returns a status message and the full name of the zip file """
     outfile = DIRS.get_tmpfilename('support.zip')
@@ -233,7 +238,7 @@ def create_support_zip() -> (str, str):
             count, configstr = CONFIG.save_config_to_string(save_all=False, redact=True)
             myzip.writestr('config-redacted.ini', configstr)
             msg += f'  Included systeminfo.txt and {count} items of redacted config.ini.'
-        except IOError as e:
+        except OSError as e:
             msg = f'Error creating support.zip file: {type(e).__name__}, {str(e)}'
         finally:
             myzip.close()
@@ -252,7 +257,7 @@ def docker():
     # this is from jaraco.docker library
     mountinfo = Path("/proc/self/mountinfo")
     if mountinfo.is_file():
-        with open(mountinfo, 'r') as f:
+        with open(mountinfo) as f:
             first_mount = f.readlines()[0]
         if 'docker' in first_mount or 'overlay' in first_mount:
             return True
@@ -263,9 +268,7 @@ def docker():
     if os.environ.get("DOCKER", "").lower() in ("yes", "y", "on", "true", "1"):
         return True
     # or value read from version.py during startup
-    if 'DOCKER' in CONFIG['INSTALL_TYPE'].upper():
-        return True
-    return False
+    return 'DOCKER' in CONFIG['INSTALL_TYPE'].upper()
 
 
 # noinspection PyUnresolvedReferences,PyPep8Naming
@@ -284,14 +287,10 @@ def log_header(online=True) -> str:
             header += f'{item.lower()}: {time.ctime(timestamp)}\n'
         else:
             header += f'{item.lower()}: {CONFIG[item]}\n'
-    try:
+    with contextlib.suppress(AttributeError):
         header += f'package version: {lazylibrarian.version.PACKAGE_VERSION}\n'
-    except AttributeError:
-        pass
-    try:
+    with contextlib.suppress(AttributeError):
         header += f'packaged by: {lazylibrarian.version.PACKAGED_BY}\n'
-    except AttributeError:
-        pass
 
     db_version = 0
     db = database.DBConnection()
@@ -305,7 +304,7 @@ def log_header(online=True) -> str:
             db_version = int(value)
     uname = platform.uname()
     header += f"db version: {db_version}\n"
-    header += "Python version: %s\n" % sys.version.split('\n')
+    header += "Python version: {}\n".format(sys.version.split('\n'))
     header += f"uname: {str(uname)}\n"
     header += f"Platform: {platform.platform(aliased=True)}\n"
     if uname[0] == 'Darwin':
@@ -327,7 +326,9 @@ def log_header(online=True) -> str:
                                            if CONFIG['SSL_CERTS'] else True).json()['tls_version']
             else:
                 logger.info('Checking TLS version')
+                # pylint: disable=no-member
                 requests.packages.urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                # pylint: enable=no-member
                 tls_version = requests.get('https://www.howsmyssl.com/a/check', timeout=30,
                                            verify=False).json()['tls_version']
             if '1.2' not in tls_version and '1.3' not in tls_version:
@@ -445,6 +446,22 @@ def log_header(online=True) -> str:
     except Exception:  # magic might fail for multiple reasons
         vers = 'not found'
     header += f"magic: {vers}\n"
+    try:
+        import lxml
+        vers = getattr(lxml, "__version__", None)
+        if not vers:
+            vers = "installed"
+    except Exception:
+        vers = "not found"
+    header += f"lxml: {vers}\n"
+    try:
+        import iso639
+        vers = getattr(iso639, "__version__", None)
+        if not vers:
+            vers = "iso639-lang installed"
+    except Exception:
+        vers = "not found"
+    header += f"iso639: {vers}\n"
 
     return header
 
@@ -465,11 +482,11 @@ def zip_audio(source, zipname, bookid):
 
         cnt = 0
         with zipfile.ZipFile(zip_file, 'w', zipfile.ZIP_DEFLATED) as myzip:
-            for rootdir, _, filenames in walk(source):
+            for rootdir, _, filenames in os.walk(source):
                 for filename in filenames:
                     # don't include self or our special index file
                     if not filename.endswith('.zip') and not filename.endswith('.ll'):
-                        bname, extn = os.path.splitext(filename)
+                        bname, extn = splitext(filename)
                         # don't include singlefile
                         if bname != singlefile:
                             cnt += 1
@@ -548,10 +565,7 @@ def calibre_prg(prgname):
 
 
 def only_punctuation(value):
-    for c in value:
-        if c not in string.punctuation and c not in string.whitespace:
-            return False
-    return True
+    return all(not (c not in string.punctuation and c not in string.whitespace) for c in value)
 
 
 def cron_dbbackup():
@@ -572,11 +586,44 @@ def dbbackup(source='lazylibrarian'):
     if fname:
         backup_file = f"{source}_{time.asctime().replace(' ', '_').replace(':', '_')}.tgz"
         backup_file = os.path.join(DIRS.DATADIR, backup_file)
-        zf = tarfile.open(backup_file, mode='w:gz')
-        zf.add(fname, arcname=DIRS.DBFILENAME)
-        remove_file(fname)
-        for f in ['config.ini', 'dicts.json', 'genres.json', 'filetemplate.text', 'logintemplate.text']:
-            target = os.path.join(DIRS.DATADIR, f)
-            if path_isfile(target):
-                zf.add(target, arcname=f)
+        with tarfile.open(backup_file, mode='w:gz') as zf:
+            zf.add(fname, arcname=DIRS.DBFILENAME)
+            remove_file(fname)
+            for f in ['config.ini', 'dicts.json', 'genres.json', 'filetemplate.text', 'logintemplate.text']:
+                target = os.path.join(DIRS.DATADIR, f)
+                if path_isfile(target):
+                    zf.add(target, arcname=f)
     return backup_file, err
+
+
+def delete_empty_folders(root):
+    logger = logging.getLogger(__name__)
+    deleted = []
+
+    for current_dir, subdirs, files in os.walk(root, topdown=False):
+        still_has_subdirs = False
+        for subdir in subdirs:
+            if os.path.join(current_dir, subdir) not in deleted:
+                still_has_subdirs = True
+                break
+
+        if (len(files) == 1 and '.ll_ignore' in files) or (not any(files) and not still_has_subdirs):
+            os.rmdir(current_dir)
+            deleted.append(current_dir)
+
+    logger.debug(f"Deleted {len(deleted)} empty folders: {deleted}")
+
+def validate_monthtable(table):
+    logger = logging.getLogger(__name__)
+    if len(table) != 13:
+        logger.error('monthnames.json does not have enough months')
+        return False
+    length = len(table[0]) if table else 0
+    if length % 2:
+        logger.error('monthnames.json should have an even number of entries per month')
+        return False
+    for item in table:
+        if len(item) != length:
+            logger.error('monthnames.json lengths are not consistent')
+            return False
+    return True

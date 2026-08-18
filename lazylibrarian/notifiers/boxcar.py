@@ -17,11 +17,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Sick Beard.  If not, see <http://www.gnu.org/licenses/>.
 import logging
+
 import requests
 
-from lazylibrarian.config2 import CONFIG
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
 from lazylibrarian.common import proxy_list
+from lazylibrarian.config2 import CONFIG
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 # API_URL = "https://boxcar.io/devices/providers/MH0S7xOFSwVLNvNhTpiC/notifications"
 # changed to boxcar2
@@ -73,7 +74,7 @@ class BoxcarNotifier:
             timeout = CONFIG.get_int('HTTP_TIMEOUT')
             r = requests.get(cur_url, params=data, timeout=timeout, proxies=proxies)
             status = str(r.status_code)
-            if status.startswith('2'):
+            if status == 200:
                 logger.debug("BOXCAR: Notification successful.")
                 return True
 
@@ -92,8 +93,7 @@ class BoxcarNotifier:
                     if subscribe_note:
                         logger.debug("BOXCAR: Subscription sent.")
                         return True
-                    else:
-                        logger.error("BOXCAR: Subscription could not be sent.")
+                    logger.error("BOXCAR: Subscription could not be sent.")
             # If you receive an HTTP status code of 400, it is because you failed to send the proper parameters
             elif status == '400':
                 logger.error("BOXCAR: Wrong data send to boxcar.")
@@ -138,13 +138,13 @@ class BoxcarNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG.get_bool('BOXCAR_NOTIFY_ONSNATCH'):
             if fail:
-                self._notify(notifyStrings[NOTIFY_FAIL], title)
+                self._notify(notify_strings[NOTIFY_FAIL], title)
             else:
-                self._notify(notifyStrings[NOTIFY_SNATCH], title)
+                self._notify(notify_strings[NOTIFY_SNATCH], title)
 
     def notify_download(self, title):
         if CONFIG.get_bool('BOXCAR_NOTIFY_ONDOWNLOAD'):
-            self._notify(notifyStrings[NOTIFY_DOWNLOAD], title)
+            self._notify(notify_strings[NOTIFY_DOWNLOAD], title)
 
     def test_notify(self, title="Test"):
         return self._notify("This is a test notification from LazyLibrarian", title, force=True)

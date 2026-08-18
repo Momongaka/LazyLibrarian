@@ -15,19 +15,18 @@ import os
 import re
 import string
 import time
+import traceback
 
 import cherrypy
 from rapidfuzz import fuzz
 
 from lazylibrarian import database
-from lazylibrarian.common import get_readinglist, set_readinglist
-from lazylibrarian.common import run_script
+from lazylibrarian.common import get_readinglist, run_script, set_readinglist
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.filesystem import get_directory
-from lazylibrarian.formatter import unaccented, get_list
-from lazylibrarian.importer import add_author_name_to_db, search_for, import_book
+from lazylibrarian.formatter import get_list, unaccented
+from lazylibrarian.importer import add_author_name_to_db, import_book, search_for
 from lazylibrarian.librarysync import find_book_in_db
-
 
 # calibredb custom_columns
 # calibredb add_custom_column label name bool
@@ -53,8 +52,9 @@ def calibre_list(col_read, col_toread):
         if res:
             return res
         return err
-    else:
-        return json.loads(res)
+    logger = logging.getLogger(__name__)
+    logger.debug(f"{res}")
+    return json.loads(res)
 
 
 def sync_calibre_list(col_read=None, col_toread=None, userid=None):
@@ -63,6 +63,7 @@ def sync_calibre_list(col_read=None, col_toread=None, userid=None):
         Return message giving totals """
     logger = logging.getLogger(__name__)
     db = database.DBConnection()
+    msg = ''
     try:
         username = ''
         readlist = []
@@ -139,7 +140,7 @@ def sync_calibre_list(col_read=None, col_toread=None, userid=None):
                         logger.warning(
                             f"Book {item['title']} by {authorname} is marked Ignored in database, importing anyway")
                     if not bookid:
-                        searchterm = f"{item['title']} <ll> {authorname}"
+                        searchterm = f"{item['title']}<ll>{authorname}"
                         results = search_for(unaccented(searchterm, only_ascii=False))
                         if results:
                             result = results[0]
@@ -365,8 +366,11 @@ def sync_calibre_list(col_read=None, col_toread=None, userid=None):
             db.upsert("sync", new_value_dict, control_value_dict)
 
             msg = f"{username} sync updated: {ll_changes} calibre, {calibre_changes} lazylibrarian"
-    finally:
-        db.close()
+
+    except Exception as e:
+        logger.error(f"{e}: {traceback.format_exc()}")
+
+    db.close()
     return msg
 
 
@@ -483,8 +487,7 @@ def calibredb(cmd=None, prelib=None, postlib=None):
 
     if rc:
         return res, err, rc
-    else:
-        return res, dest_url, 0
+    return res, dest_url, 0
 
 
 def delete_from_calibre(calibre_id):
@@ -493,9 +496,8 @@ def delete_from_calibre(calibre_id):
         res, err, rc = calibredb('remove', [calibre_id])
         logger.debug(f"Delete result: {res} [{err}] {rc}")
         return rc == 0
-    else:
-        logger.debug("Missing calibre ID")
-        return False
+    logger.debug("Missing calibre ID")
+    return False
 
 
 def get_calibre_id(data, try_filename=True):

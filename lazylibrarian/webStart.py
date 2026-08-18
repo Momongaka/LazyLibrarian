@@ -12,12 +12,14 @@
 
 import os
 import sys
+
 try:
     import psutil
 except ImportError:
     psutil = None
 
 import cherrypy
+
 try:
     import cherrypy_cors
 except ImportError:
@@ -25,18 +27,17 @@ except ImportError:
     import lib.cherrypy_cors as cherrypy_cors
 import logging
 from shutil import copyfile
+
 import lazylibrarian
 from lazylibrarian.config2 import CONFIG
+from lazylibrarian.filesystem import DIRS, path_exists, syspath
 from lazylibrarian.logconfig import LOGCONFIG
 from lazylibrarian.webServe import WebInterface
-from lazylibrarian.filesystem import DIRS, syspath, path_exists
 
-cp_ver = getattr(cherrypy, '__version__', None)
-if cp_ver and int(cp_ver.split('.')[0]) >= 10:
-    try:
-        import portend
-    except ImportError:
-        portend = None
+try:
+    import portend
+except ImportError:
+    portend = None
 
 
 def initialize(options=None):
@@ -49,10 +50,9 @@ def initialize(options=None):
     if options['http_root'] and not options['http_root'].startswith('/'):
         options['http_root'] = f"/{options['http_root']}"
 
-    if https_enabled:
-        if not (path_exists(https_cert) and path_exists(https_key)):
-            logger.warning("Disabled HTTPS because of missing certificate and key.")
-            https_enabled = False
+    if https_enabled and (not (path_exists(https_cert) and path_exists(https_key))):
+        logger.warning("Disabled HTTPS because of missing certificate and key.")
+        https_enabled = False
 
     options_dict = {
         'log.screen': False,
@@ -185,6 +185,7 @@ def initialize(options=None):
                 # using the @require_auth() decorator on the methods in webserve.py
             })
         elif options['authentication'] == 'BASIC':
+            # noinspection PyUnresolvedReferences
             conf['/'].update({
                 'tools.auth_basic.on': True,
                 'tools.auth_basic.realm': 'LazyLibrarian',
@@ -214,7 +215,7 @@ def initialize(options=None):
 
     opensearch = os.path.join(DIRS.PROG_DIR, 'data', 'opensearch.template')
     if path_exists(opensearch):
-        with open(syspath(opensearch), 'r') as s:
+        with open(syspath(opensearch)) as s:
             data = s.read().splitlines()
         # (title, function)
         for item in [('Authors', 'Authors'),
@@ -241,14 +242,8 @@ def initialize(options=None):
     cherrypy.engine.autoreload.subscribe()
 
     try:
-        if cp_ver and int(cp_ver.split('.')[0]) >= 10:
-            # noinspection PyUnresolvedReferences
+        if portend:
             portend.Checker().assert_free(str(options['http_host']), options['http_port'])
-        else:
-            cherrypy.process.servers.check_port(str(options['http_host']), options['http_port'])
-        # Prevent time-outs removed in cp v12
-        if cp_ver and int(cp_ver.split('.')[0]) < 12:
-            cherrypy.engine.timeout_monitor.unsubscribe()
         cherrypy.server.start()
         copyfile(os.path.join(DIRS.PROG_DIR, 'data', 'images', 'lazylibrarian.png'),
                  os.path.join(DIRS.CACHEDIR, 'alive.png'))
@@ -293,13 +288,13 @@ def error_page_401(status, message, traceback, version):
     if message:
         body += message
     title = "I'm not getting out of bed"
-    return r'''
+    return rf'''
 <html>
     <head>
     <STYLE type="text/css">
-      H1 { text-align: center}
-      H2 { text-align: center}
-      H3 { text-align: center}
+      H1 {{ text-align: center}}
+      H2 {{ text-align: center}}
+      H3 {{ text-align: center}}
     </STYLE>
     <h1>LazyLibrarian<br><br></h1>
     <h3><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAABGdBTUEAALGPC/xhBQAAACBjSFJN
@@ -379,11 +374,11 @@ pkxGmJtre3QNKZGDIFnyc64UBXNDFSh0v2h5PhLwfMRud7VX4wAEXwC+LMTtznoNBAHSS34gi2sC
 WA4nAJbDCYDlcAJgOf8DueEIKO0Dnw0AAAAldEVYdGRhdGU6Y3JlYXRlADIwMTYtMDgtMjhUMjA6
 MDU6MjgrMDI6MDB6gpk6AAAAJXRFWHRkYXRlOm1vZGlmeQAyMDE2LTA4LTI4VDIwOjA1OjI4KzAy
 OjAwC98hhgAAAABJRU5ErkJggg==" alt="embedded icon" align="middle"><br><br>
-    %s</h3>
+    {title}</h3>
     </head>
     <body>
     <br>
-    <h2><font color="#0000FF">%s</font></h2>
+    <h2><font color="#0000FF">{body}</font></h2>
     </body>
 </html>
-''' % (title, body)
+'''

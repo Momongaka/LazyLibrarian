@@ -20,25 +20,28 @@ import lazylibrarian
 from lazylibrarian import database
 from lazylibrarian.blockhandler import BLOCKHANDLER
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.formatter import plural, check_int, thread_name
-from lazylibrarian.providers import iterate_over_znab_sites, iterate_over_torrent_sites, iterate_over_rss_sites, \
-    iterate_over_direct_sites, iterate_over_irc_sites
-from lazylibrarian.resultlist import find_best_result, download_result
+from lazylibrarian.formatter import check_int, plural, thread_name
+from lazylibrarian.providers import (
+    iterate_over_direct_sites,
+    iterate_over_irc_sites,
+    iterate_over_rss_sites,
+    iterate_over_torrent_sites,
+    iterate_over_znab_sites,
+)
+from lazylibrarian.resultlist import download_result, find_best_result
 from lazylibrarian.telemetry import TELEMETRY
 
 
 def cron_search_book():
     logger = logging.getLogger(__name__)
-    if 'SEARCHALLBOOKS' not in [n.name for n in [t for t in threading.enumerate()]]:
+    if 'SEARCHALLBOOKS' not in [n.name for n in list(threading.enumerate())]:
         search_book()
     else:
         logger.debug("SEARCHALLBOOKS is already running")
 
 
 def good_enough(match):
-    if match and int(match[0]) >= CONFIG.get_int('MATCH_RATIO'):
-        return True
-    return False
+    return bool(match and int(match[0]) >= CONFIG.get_int('MATCH_RATIO'))
 
 
 def warn_mode(mode):
@@ -82,24 +85,25 @@ def search_book(books=None, library=None):
     """
     TELEMETRY.record_usage_data('Search/Book')
     logger = logging.getLogger(__name__)
-    loggersearching = logging.getLogger('special.searching')
-
+    searchinglogger = logging.getLogger('special.searching')
+    searchinglogger.debug(f"search_book: {books}")
     db = database.DBConnection()
     # noinspection PyBroadException
     try:
         threadname = thread_name()
-        if 'SEARCHALL' in threadname or 'API-SEARCH' in threadname or 'FORCE-SEARCH' in threadname:
-            force = True
-        else:
-            force = False
-
-        if "Thread" in threadname:
+        if "SEARCH" not in threadname:
             if not books:
                 thread_name("SEARCHALLBOOKS")
                 threadname = "SEARCHALLBOOKS"
             else:
                 thread_name("SEARCHBOOKS")
 
+        if 'SEARCHALL' in threadname or 'API-SEARCH' in threadname or 'FORCE-SEARCH' in threadname:
+            force = True
+        else:
+            force = False
+
+        logger.debug(f"Storing start time for {thread_name()}")
         db.upsert("jobs", {"Start": time.time()}, {"Name": thread_name()})
         searchlist = []
         searchbooks = []
@@ -116,9 +120,9 @@ def search_book(books=None, library=None):
             # The user has added new books
             if library:
                 logger.debug(f"Searching for {len(books)} {plural(len(books), library)}")
-                loggersearching.debug(f"{books}")
+                searchinglogger.debug(f"{books}")
             for book in books:
-                if not book['bookid'] in ['booklang', 'library', 'ignored']:
+                if book['bookid'] not in ['booklang', 'library', 'ignored']:
                     cmd = ("SELECT BookID, AuthorName, BookName, BookSub, books.Status, AudioStatus "
                            "from books,authors WHERE BookID=? AND books.AuthorID = authors.AuthorID")
                     results = db.select(cmd, (book['bookid'],))
@@ -168,8 +172,8 @@ def search_book(books=None, library=None):
             f"{plural(BLOCKHANDLER.number_blocked(), 'entry')}")
 
         for searchbook in searchbooks:
-            if lazylibrarian.STOPTHREADS and threadname == "SEARCHALLBOOKS":
-                logger.debug(f"Aborting {threadname}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "SEARCHALLBOOKS":
+                logger.debug("STOPTHREADS Aborting SEARCHALLBOOKS")
                 break
 
             # searchterm is only used for display purposes
@@ -234,8 +238,8 @@ def search_book(books=None, library=None):
 
         book_count = 0
         for book in searchlist:
-            if lazylibrarian.STOPTHREADS and threadname == "SEARCHALLBOOKS":
-                logger.debug(f"Aborting {threadname}")
+            if lazylibrarian.STOPTHREADS and thread_name() == "SEARCHALLBOOKS":
+                logger.debug("STOPTHREADS Aborting SEARCHALLBOOKS")
                 break
             do_search = True
             if CONFIG.get_bool('DELAYSEARCH') and not force:
@@ -520,7 +524,7 @@ def search_book(books=None, library=None):
 
             if matches:
                 try:
-                    highest = max(matches, key=lambda s: (s[0], s[3]))  # sort on percentage and priority
+                    highest = max(matches, key=lambda s: (weighted_score(s), check_int(s[3], 0)))
                 except TypeError:
                     highest = max(matches, key=lambda s: (str(s[0]), str(s[3])))
 
@@ -550,6 +554,12 @@ def search_book(books=None, library=None):
     except Exception:
         logger.error(f'Unhandled exception in search_book: {traceback.format_exc()}')
     finally:
+        logger.debug(f"Storing finish time for {thread_name()}")
         db.upsert("jobs", {"Finish": time.time()}, {"Name": thread_name()})
         db.close()
         thread_name("WEBSERVER")
+
+def weighted_score(s):
+    # priority is already 0-100-ish per provider; normalize it down to a modest bonus
+    priority_bonus = (check_int(s[3], 0) / 100) * CONFIG.get_int('PRIORITY_WEIGHT')
+    return check_int(s[0], 0) + priority_bonus

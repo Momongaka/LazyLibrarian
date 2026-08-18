@@ -2,8 +2,8 @@ import logging
 import os
 
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.scheduling import notifyStrings, NOTIFY_SNATCH, NOTIFY_DOWNLOAD, NOTIFY_FAIL
 from lazylibrarian.filesystem import DIRS, syspath
+from lazylibrarian.scheduling import NOTIFY_DOWNLOAD, NOTIFY_FAIL, NOTIFY_SNATCH, notify_strings
 
 try:
     import gntp.notifier as gntp_notifier
@@ -63,11 +63,11 @@ class GrowlNotifier:
         try:
             growl.register()
         except gntp_notifier.errors.NetworkError:
-            logger.warning(u'Growl notification failed: network error')
+            logger.warning('Growl notification failed: network error')
             return False
 
         except gntp_notifier.errors.AuthError:
-            logger.warning(u'Growl notification failed: authentication error')
+            logger.warning('Growl notification failed: authentication error')
             return False
 
         # Send it, including an image if available
@@ -87,10 +87,10 @@ class GrowlNotifier:
                 icon=image
             )
         except gntp_notifier.errors.NetworkError:
-            logger.warning(u'Growl notification failed: network error')
+            logger.warning('Growl notification failed: network error')
             return False
 
-        logger.info(u"Growl notification sent.")
+        logger.info("Growl notification sent.")
         return True
 
     #
@@ -100,13 +100,13 @@ class GrowlNotifier:
     def notify_snatch(self, title, fail=False):
         if CONFIG.get_bool('GROWL_ONSNATCH'):
             if fail:
-                self._send_growl(growl_host='', growl_password=None, event=notifyStrings[NOTIFY_FAIL], message=title)
+                self._send_growl(growl_host='', growl_password=None, event=notify_strings[NOTIFY_FAIL], message=title)
             else:
-                self._send_growl(growl_host='', growl_password=None, event=notifyStrings[NOTIFY_SNATCH], message=title)
+                self._send_growl(growl_host='', growl_password=None, event=notify_strings[NOTIFY_SNATCH], message=title)
 
     def notify_download(self, title):
         if CONFIG.get_bool('GROWL_ONDOWNLOAD'):
-            self._send_growl(growl_host='', growl_password=None, event=notifyStrings[NOTIFY_DOWNLOAD], message=title)
+            self._send_growl(growl_host='', growl_password=None, event=notify_strings[NOTIFY_DOWNLOAD], message=title)
 
     # noinspection PyUnusedLocal
     def test_notify(self, title="Test"):

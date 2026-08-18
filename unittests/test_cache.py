@@ -97,9 +97,9 @@ class TestCache(LLTestCaseWithConfigandDIRS):
 
         if args[0] == 'https://someurl.com/test1':
             return MockResponse("Good stuff", 200)
-        elif args[0] == 'http://someourl.com/test403-1':
+        elif args[0] == 'http://someourl.com/googleapis/test403-1':
             return MockResponse("Error in request", 403)
-        elif args[0] == 'http://someourl.com/test403-2':
+        elif args[0] == 'http://someourl.com/googleapis/test403-2':
             return MockResponse("Limit Error", 403)
         elif args[0] == 'http://someourl.com/test99999':
             return MockResponse("Invalid error", 99999)
@@ -108,7 +108,7 @@ class TestCache(LLTestCaseWithConfigandDIRS):
         elif args[0] == 'http://someourl.com/test-timeout':
             raise requests.exceptions.Timeout('Test timeout error')
         elif str(args[0]).startswith('http://someourl.com/torznab/'):
-            return MockResponse(f"torznab {kwargs['params']['timeout']}", 200)
+            return MockResponse(f"torznab {kwargs.get('timeout', 'none')}", 200)
 
         return MockResponse('', 404)
 
@@ -139,19 +139,19 @@ class TestCache(LLTestCaseWithConfigandDIRS):
 
         # Test error code 403, normal, but blocks googleapis
         logger.setLevel(logging.DEBUG)
-        url = 'http://someourl.com/test403-1'
+        url = 'http://someourl.com/googleapis/test403-1'
         with self.assertLogs(logger, logging.DEBUG) as logmsg:
             msg, res = cache.fetch_url(url, agent, False, raw=True)
         self.assertFalse(res, 'Expected failure 403')
         self.assertEqual(msg, 'Response status 403: Forbidden')
         self.assertTrue(BLOCKHANDLER.is_blocked('googleapis'), 'Expected blockage')
         self.assertListEqual(logmsg.output, [
-            'DEBUG:lazylibrarian.cache:Request denied, blocking googleapis for 3600 seconds: Error 403: see debug log'
+            'DEBUG:lazylibrarian.cache:Request denied, 403, blocking googleapis for 3600 seconds: Error 403'
         ])
         BLOCKHANDLER.clear_all()
 
         # Test error code 403, 'Limit Exceeded'
-        url = 'http://someourl.com/test403-2'
+        url = 'http://someourl.com/googleapis/test403-2'
         with self.assertLogs(logger, logging.DEBUG):
             msg, res = cache.fetch_url(url, agent, False, raw=True)
         self.assertFalse(res, 'Expected failure 403')

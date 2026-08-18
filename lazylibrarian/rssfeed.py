@@ -13,18 +13,18 @@
 #  You should have received a copy of the GNU General Public License
 #  along with Lazylibrarian.  If not, see <http://www.gnu.org/licenses/>.
 
-import os
-import time
 import datetime
 import logging
+import time
 import traceback
-
-from lazylibrarian import database
-from lazylibrarian.config2 import CONFIG
-from lazylibrarian.common import mime_type, path_exists
 from urllib.parse import unquote_plus
 
-from lib.rfeed import Item, Guid, Feed, iTunes, iTunesItem, iTunesOwner, iTunesCategory, Enclosure
+from lazylibrarian import database
+from lazylibrarian.common import mime_type, path_exists
+from lazylibrarian.config2 import CONFIG
+from lazylibrarian.filesystem import splitext
+from lib.rfeed import Enclosure, Feed, Guid, Item, iTunes, iTunesCategory, iTunesItem, iTunesOwner
+
 try:
     from lib.tinytag import TinyTag
 except ImportError:
@@ -97,7 +97,7 @@ def gen_feed(ftype, limit=10, user=0, baseurl='', authorid=None, onetitle=None):
                 author = result['AuthorName']
                 description = result['BookDesc']
                 bookid = result['BookID']
-                extn = os.path.splitext(result['BookFile'])[1]
+                extn = splitext(result['BookFile'])[1]
                 if user:
                     link = f"{baseurl}/serve_book/{user}{result['BookID']}{extn}"
                     img = f"{baseurl}/serve_img/{user}{result['BookID']}"
@@ -108,7 +108,7 @@ def gen_feed(ftype, limit=10, user=0, baseurl='', authorid=None, onetitle=None):
                 author = result['AuthorName']
                 description = result['BookDesc']
                 bookid = result['BookID']
-                extn = os.path.splitext(result['AudioFile'])[1]
+                extn = splitext(result['AudioFile'])[1]
                 if user:
                     link = f"{baseurl}/serve_audio/{user}{result['BookID']}{extn}"
                     img = f"{baseurl}/serve_img/{user}{result['BookID']}"
@@ -134,7 +134,7 @@ def gen_feed(ftype, limit=10, user=0, baseurl='', authorid=None, onetitle=None):
                 author = result['Title']
                 description = title
                 bookid = result['IssueID']
-                extn = os.path.splitext(result['IssueFile'])[1]
+                extn = splitext(result['IssueFile'])[1]
                 if user:
                     link = f"{baseurl}/serve_issue/{user}{result['IssueID']}{extn}"
                     img = f"{baseurl}/serve_img/{user}{result['IssueID']}"
@@ -145,7 +145,7 @@ def gen_feed(ftype, limit=10, user=0, baseurl='', authorid=None, onetitle=None):
                 author = result['Publisher']
                 description = title
                 bookid = result['IssueID']
-                extn = os.path.splitext(result['IssueFile'])[1]
+                extn = splitext(result['IssueFile'])[1]
                 if user:
                     link = f"{baseurl}/serve_comic/{user}{result['ComicID']}_{result['IssueID']}{extn}"
                     img = f"{baseurl}/serve_img/{user}{result['ComicID']}_{result['IssueID']}"

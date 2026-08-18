@@ -1,5 +1,4 @@
 #  This file is part of Lazylibrarian.
-# coding: utf-8
 #  Lazylibrarian is free software, you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
 #  the Free Software Foundation, either version 3 of the License, or
@@ -14,17 +13,17 @@
 
 # import chardet
 import datetime
-from hashlib import md5
+import logging
 import os
 import re
-import unicodedata
 import threading
-import logging
-from typing import List, Optional, Union
+import unicodedata
+from functools import wraps
+from hashlib import md5
+from urllib.parse import quote, quote_plus, urlsplit, urlunsplit
 
 import lazylibrarian
 from lazylibrarian.configenums import OnChangeReason
-from urllib.parse import quote_plus, quote, urlsplit, urlunsplit
 
 
 class ImportPrefs:
@@ -43,14 +42,6 @@ class ImportPrefs:
                 cnt += 1
                 db.action('delete from authors where authorid=?', (item['authorid'], ))
             logger.debug(f"Disabled Contributing Authors: Removed {cnt} authors")
-            lazylibrarian.SCAN_BOOKS = 0
-        else:
-            # circular import issue, set a flag and run from webserver instead
-            logger.debug("Set webserver flag for scan_books")
-            lazylibrarian.SCAN_BOOKS = 1
-            # logger.debug(f"Started Contributing Authors background task")
-            # threading.Thread(target=lazylibrarian.multiauth.get_authors_from_book_files,
-            # name='MULTIAUTH_BOOKFILES').start()
 
     @classmethod
     def lang_changed(cls, languages: str, reason: OnChangeReason = OnChangeReason.SETTING):
@@ -67,8 +58,47 @@ def thread_name(name=None) -> str:
     if name:
         threading.current_thread().name = name
         return name
-    else:
-        return threading.current_thread().name
+    return threading.current_thread().name
+
+
+def restore_thread_name(thread_prefix, restore_to='WEBSERVER'):
+    """
+    Decorator to restore thread name on function exit.
+
+    Used for functions that run in spawned threads (IMPORTISSUES, IMPORTALT, etc.)
+    which need to reset their thread name before the thread terminates.
+
+    This decorator ensures the thread name is always restored, even if the
+    function returns early or raises an exception.
+
+    Args:
+        thread_prefix: Prefix to check for in thread name (e.g., 'IMPORTISSUES', 'IMPORTALT')
+        restore_to: Thread name to restore to (default: 'WEBSERVER')
+
+    Example:
+        @restore_thread_name('IMPORTISSUES')  # Restores to 'WEBSERVER' (default)
+        def process_issues(source_dir, title):
+            if not source_dir:
+                return False  # Thread name automatically restored to 'WEBSERVER'
+            # ... processing ...
+            return True
+
+        @restore_thread_name('CUSTOMTASK', restore_to='SCHEDULER')  # Restores to 'SCHEDULER'
+        def custom_task():
+            # ... processing ...
+            return  # Thread name automatically restored to 'SCHEDULER'
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            finally:
+                # Restore thread name if this is a spawned thread with our prefix
+                if thread_prefix in threading.current_thread().name:
+                    threading.current_thread().name = restore_to
+        return wrapper
+    return decorator
 
 
 def split_author_names(namelist, splitlist):
@@ -99,15 +129,14 @@ def split_author_names(namelist, splitlist):
                 # don't know whether to join to preceding or following part
                 # location = names.index(name)
                 continue
-            else:
+            if name not in authornames:
+                name, _ = lazylibrarian.importer.get_preferred_author(name)
                 if name not in authornames:
-                    name, _ = lazylibrarian.importer.get_preferred_author_name(name)
-                    if name not in authornames:
-                        authornames.append(name)
+                    authornames.append(name)
     return authornames
 
 
-def sanitize(name, is_folder=False):
+def sanitize(name, is_folder_or_file=False):
     """
     Sanitizes a string so it can be used as a file name or foldername, normalized as Unicode
     Returns a sanitized string
@@ -119,12 +148,15 @@ def sanitize(name, is_folder=False):
     filename = replace_all(filename, lazylibrarian.DICTS.get('apostrophe_dict', {}))
     # strip characters we don't want in a filename/foldername
     dic = lazylibrarian.DICTS.get('filename_dict', {}).copy()
-    if is_folder and os.path.__name__ == 'ntpath':
-        dic.pop(':')  # allow colon in windows foldernames, but not filenames
+    if is_folder_or_file and os.path.__name__ == 'ntpath':
+        dic.pop(':')
     filename = replace_all(filename, dic)
     # Remove all characters below code point 32
-    filename = u"".join(c for c in filename if 31 < ord(c))
+    filename = "".join(c for c in filename if ord(c) > 31)
     filename = unicodedata.normalize('NFC', filename)
+    # don't allow leading space or dot
+    while filename and filename[0] in '. ':
+        filename = filename[1:]
     # windows filenames can't end in space or dot
     while filename and filename[-1] in '. ':
         filename = filename[:-1]
@@ -172,6 +204,80 @@ def url_fix(s, charset='utf-8'):
     return urlunsplit((scheme, netloc, path, qs, anchor))
 
 
+# Query parameters that carry a credential of some sort. Private trackers and
+# indexers put passkeys and api keys straight in the download url, so a url
+# can't be logged as-is.
+_DEFAULT_CREDENTIAL_PARAMS = (
+    'apikey', 'api_key', 'auth', 'authkey', 'key', 'passkey', 'passwd',
+    'password', 'rss_key', 'rsskey', 'secret', 'session', 'sessionid',
+    'token', 'torrent_pass',
+)
+
+# A credential can turn up percent encoded inside another url, which is how a
+# private tracker's announce url reaches us in a magnet's tr= parameter, so
+# match an encoded separator as well as a literal one. Anything up to the next
+# separator goes, and over-redacting a log line is the safe way to be wrong.
+USERINFO_RE = re.compile(r'(?<=//)[^/@\s]+@')
+
+_credential_re_lock = threading.Lock()
+_credential_re_cache = {'params': None, 'regex': None}
+
+_DEFAULT_CREDENTIAL_RE = re.compile(
+    r'(?:(?<![A-Za-z0-9_])|(?<=%3F)|(?<=%26))('
+    + '|'.join(_DEFAULT_CREDENTIAL_PARAMS)
+    + r')(=|%3D)[^&;#\s]*',
+    re.IGNORECASE)
+
+
+def _credential_re():
+    try:
+        from lazylibrarian.config2 import CONFIG
+        extra = get_list(CONFIG['REDACT_PARAMS'], ',')
+    except Exception:
+        extra = []
+    all_params = sorted(set(_DEFAULT_CREDENTIAL_PARAMS) | {p.lower() for p in extra if p})
+    key = tuple(all_params)
+    with _credential_re_lock:
+        if _credential_re_cache['params'] == key:
+            return _credential_re_cache['regex']
+    try:
+        regex = re.compile(
+            r'(?:(?<![A-Za-z0-9_])|(?<=%3F)|(?<=%26))('
+            + '|'.join(re.escape(p) for p in all_params)
+            + r')(=|%3D)[^&;#\s]*',
+            re.IGNORECASE)
+    except re.error:
+        return _DEFAULT_CREDENTIAL_RE
+    with _credential_re_lock:
+        _credential_re_cache['regex'] = regex
+        _credential_re_cache['params'] = key
+    return regex
+
+
+def _redact_secrets_in_path(url):
+    try:
+        from lazylibrarian.config2 import CONFIG
+        secrets = CONFIG.REDACTLIST
+        for secret in secrets:
+            if isinstance(secret, str) and len(secret) > 3 and secret in url:
+                url = url.replace(secret, '[redacted]')
+    except Exception:
+        pass
+    return url
+
+
+def redact_url(url):
+    if not url:
+        return ''
+    url = make_unicode(url)
+    if not isinstance(url, str):
+        return '[unprintable url]'
+    url = USERINFO_RE.sub('[redacted]@', url, count=1)
+    url = _credential_re().sub(r'\1\2[redacted]', url)
+    url = _redact_secrets_in_path(url)
+    return url
+
+
 def book_series(bookname):
     """
     Try to get a book series/seriesnum from a bookname, or return empty string
@@ -195,12 +301,11 @@ def book_series(bookname):
     seriesnum = ""
 
     # First handle things like "(Book 3: series name)"
-    if ':' in bookname:
+    if ':' in bookname and bookname[0] == "(" and bookname[-1] == ")":
         # change to "(series name, Book 3)"
-        if bookname[0] == "(" and bookname[-1] == ")":
-            parts = bookname[1:-1].split(':', 1)
-            if parts[0][-1].isdigit():
-                bookname = f'({parts[1]}, {parts[0]})'
+        parts = bookname[1:-1].split(':', 1)
+        if parts[0][-1].isdigit():
+            bookname = f'({parts[1]}, {parts[0]})'
 
     # These are words that don't indicate a following series name/number eg "FIRST 3 chapters"
     non_series_words = ['series', 'unabridged', 'volume', 'phrase', 'from', 'chapters', 'season',
@@ -270,7 +375,7 @@ def age(histdate):
     return datecompare(today(), histdate)
 
 
-def check_year(num, past=1850, future=1):
+def check_year(num, past=1800, future=1):
     # See if num looks like a valid year
     # for a magazine allow forward dated by a year, eg Jan 2017 issues available in Dec 2016
     n = check_int(num, 0)
@@ -292,12 +397,16 @@ def nzbdate2format(nzbdate):
         if month == 0:
             month = 1  # hopefully won't hit this, but return a default value rather than error
         year = nzbdate.split()[3]
-        return "%s-%02d-%s" % (year, month, day)
+        return f"{year}-{month:02d}-{day}"
     except IndexError:
         return "1970-01-01"
 
 
 def date_format(datestr, formatstr="$Y-$m-$d", context='', datelang=''):
+
+    def date_format(datestr, datefmt=None):
+        if type(datestr) is str:
+            datestr = datestr.replace("??", "00")
     # return date formatted for display in requested style
     # $d	Day of the month as a zero-padded decimal number
     # $D    Day of month, zero padded, suppress if 01
@@ -321,7 +430,7 @@ def date_format(datestr, formatstr="$Y-$m-$d", context='', datelang=''):
     if not datestr:
         return ''
 
-    if datestr.isdigit():  # just issue number or year
+    if datestr.lstrip('-').isdigit():  # just issue number or year, could be negative like -412 BC
         return datestr
 
     logger = logging.getLogger(__name__)
@@ -332,9 +441,7 @@ def date_format(datestr, formatstr="$Y-$m-$d", context='', datelang=''):
         word = ''
         digits = True
         for c in datestr:
-            if digits and c.isdigit():
-                word += c
-            elif not digits and not c.isdigit():
+            if digits and c.isdigit() or not digits and not c.isdigit():
                 word += c
             elif word:
                 dateparts.append(word)
@@ -365,17 +472,23 @@ def date_format(datestr, formatstr="$Y-$m-$d", context='', datelang=''):
         m, d, hh, mm = dateparts
         y = now()[:4]
     elif len(dateparts) == 3:  # 2018-04-25 or June 20 2008 or 20 June 2008
-        if check_year(dateparts[0]):
+        y, m, d, = 0, 0, 0
+        if check_year(dateparts[0]) and dateparts[2].isdigit():
             y, m, d = dateparts
-        else:
+        elif check_year(dateparts[2]):
             if dateparts[0].isdigit():
                 d, m, y = dateparts
-            else:
+            elif dateparts[1].isdigit():
                 m, d, y = dateparts
         hh = '00'
         mm = '00'
-    elif len(dateparts) == 2:  # May 1995
+    elif len(dateparts) == 2 and check_year(dateparts[1]):  # May 1995
         m, y = dateparts
+        d = '01'
+        hh = '00'
+        mm = '00'
+    elif len(dateparts) == 2 and check_year(dateparts[0]):  # 1995-05
+        y, m = dateparts
         d = '01'
         hh = '00'
         mm = '00'
@@ -386,14 +499,14 @@ def date_format(datestr, formatstr="$Y-$m-$d", context='', datelang=''):
         _ = int(m)
     except ValueError:
         try:
-            m = "%02d" % month2num(m)
+            m = f"{month2num(m):02d}"
         except IndexError:
             m = 0
-    if not m:
-        msg = f"Unrecognised datestr {datestr}"
+    if not m or m == "00":
+        msg = f"Unrecognised datestr [{datestr[:40]}]"
         if context:
             msg = f'{msg} for {context}'
-        logger.error(msg)
+        logger.warning(msg)
         return datestr
 
     m = m.zfill(2)
@@ -430,6 +543,40 @@ def date_format(datestr, formatstr="$Y-$m-$d", context='', datelang=''):
     except (NameError, IndexError):
         logger.error(f"Invalid datestr [{datestr}] for {formatstr}")
         return datestr
+
+
+def two_months(word):
+    # compound months as a single word eg AprilMay
+    # found in some magazine titles
+    a = 0
+    b = 0
+    cleanword = unaccented(word).lower()
+    for f in range(1, 13):
+        for month in lazylibrarian.MONTHNAMES[0][f]:
+            if word.startswith(month):
+                a = f
+                break
+        if not a:
+            for month in lazylibrarian.MONTHNAMES[1][f]:
+                if cleanword.startswith(month):
+                    a = f
+        if a:
+            break
+    if a:
+        for f in range(1, 13):
+            for month in lazylibrarian.MONTHNAMES[0][f]:
+                if word.endswith(month):
+                    b = f
+                    break
+            if not b:
+                for month in lazylibrarian.MONTHNAMES[1][f]:
+                    if cleanword.endswith(month):
+                        b = f
+            if b:
+                break
+    if a == b:
+        return 0, 0
+    return a, b
 
 
 def month2num(month):
@@ -604,7 +751,7 @@ def make_utf8bytes(txt):
 _encodings = ['utf-8', 'iso-8859-15', 'cp850']
 
 
-def make_unicode(txt: Optional[Union[str, bytes]]) -> Optional[Union[str, bytes]]:
+def make_unicode(txt: str | bytes) -> str | bytes | None:
     # convert a bytestring to unicode, don't know what encoding it might be so try a few
     # it could be a file on a windows filesystem, unix...
     # return is unicode if possible, else bytestring
@@ -674,13 +821,13 @@ def is_valid_isbn(isbn):
     return False
 
 
-def is_valid_type(filename: str, extensions: List[str], extras='jpg, opf') -> bool:
+def is_valid_type(filename: str, extensions: list[str], extras='jpg, opf') -> bool:
     """
     Check if filename has an extension we can process.
     returns True or False
     """
     type_list = extensions + get_list(extras)
-    extn = os.path.splitext(filename)[1].lstrip('.')
+    extn = lazylibrarian.filesystem.splitext(filename)[1].lstrip('.')
     return extn and extn.lower() in type_list
 
 
@@ -719,8 +866,8 @@ def split_title(author, book):
     # Strip author from title, eg Tom Clancy: Ghost Protocol
     if book.startswith(f"{author}:"):
         book = book.split(f"{author}:")[1].strip()
-    brace = book.rfind('(') + 1
-    if brace and book.endswith(')'):
+
+    if '(' in book and book.endswith(')'):
         # if title ends with words in braces, split on last brace
         # as this always seems to be a subtitle or series info
         # If there is a digit before the closing brace assume it's series
@@ -736,6 +883,8 @@ def split_title(author, book):
             parts[1] = f"({parts[1]}"
             bookname = parts[0].strip()
             booksub = parts[1].rstrip(':').strip()
+            if ' ' not in booksub:
+                booksub = ''
             if booksub.find(')'):
                 for item in ImportPrefs.SPLIT_LIST:
                     if f"({item})" == booksub.lower():
@@ -744,12 +893,13 @@ def split_title(author, book):
             return bookname, booksub, bookseries
 
     # if not (words in braces at end of string)
-    # split subtitle on first ':'
-    colon = book.find(':') + 1
+    # split subtitle on last colon
+    # eg The Land: Awakening: The Saga Continues
+    # title = The Land: Awakening
     bookname = book
     booksub = ''
-    if colon:
-        parts = book.split(':', 1)
+    if ':' in book:
+        parts = book.rsplit(':', 1)
         bookname = parts[0].strip()
         booksub = parts[1].rstrip(':').strip()
         bookname_lower = bookname.lower()
@@ -765,10 +915,11 @@ def split_title(author, book):
     return bookname, booksub, bookseries
 
 
-def format_author_name(author: str, postfix: List[str]) -> str:
+def format_author_name(author: str, postfix: list[str]) -> str:
     """ get authorname in a consistent format """
     fuzzlogger = logging.getLogger('special.fuzz')
     author = make_unicode(author)
+    author = unicodedata.normalize('NFKD', author)
     # if multiple authors assume the first one is primary
     # except if only one word before '&', e.g. Robert & Gilles Néret Descharnes
     if '& ' in author:
@@ -794,6 +945,13 @@ def format_author_name(author: str, postfix: List[str]) -> str:
             if author != f"{forename} {surname}":
                 fuzzlogger.debug(f'Formatted authorname [{author}] to [{forename} {surname}]')
                 author = f"{forename} {surname}"
+    # ensure initials have a '.' on the end
+    words = author.replace('.', ' ').split()
+    author = ''
+    for word in words:
+        if len(word) == 1 and word.isalpha():
+            word = word + '.'
+        author = f"{author} {word}"
     # reformat any initials, we want to end up with L.E. Modesitt Jr, Charles H. Elliott PhD
     if '.' in author:
         forename, surname = author.rsplit('.', 1)
@@ -806,7 +964,7 @@ def format_author_name(author: str, postfix: List[str]) -> str:
     return res
 
 
-def sort_definite(title: str, articles=List[str]) -> str:
+def sort_definite(title: str, articles=list[str]) -> str:
     """
     Return the sort string for a title, moving prefixes
     we want to ignore to the end, like The or A
@@ -820,7 +978,7 @@ def sort_definite(title: str, articles=List[str]) -> str:
     return title
 
 
-def surname_first(authorname: str, postfixes: List[str]) -> str:
+def surname_first(authorname: str, postfixes: list[str]) -> str:
     """ Swap authorname round into surname, forenames for display and sorting"""
     words = get_list(authorname)
     if len(words) < 2:
@@ -834,13 +992,13 @@ def surname_first(authorname: str, postfixes: List[str]) -> str:
 
 def clean_name(name, extras=None):
     if not name:
-        return u''
+        return ''
 
     if extras and "'" in extras:
         name = replace_all(name, lazylibrarian.DICTS.get('apostrophe_dict', {}))
 
     valid_name_chars = f"-_.() {extras}"
-    cleaned = u''.join(c for c in name if c in valid_name_chars or c.isalnum())
+    cleaned = ''.join(c for c in name if c in valid_name_chars or c.isalnum())
     cleaned = cleaned.strip()
     if cleaned:
         return cleaned
@@ -849,7 +1007,7 @@ def clean_name(name, extras=None):
 
 def unaccented(str_or_unicode, only_ascii=True):
     if not str_or_unicode:
-        return u''
+        return ''
     return make_unicode(unaccented_bytes(str_or_unicode, only_ascii=only_ascii))
 
 
@@ -862,25 +1020,21 @@ def unaccented_bytes(str_or_unicode, only_ascii=True):
     except TypeError:
         cleaned = unicodedata.normalize('NFKD', str_or_unicode.decode('utf-8', 'replace'))
 
-    # turn accented chars into non-accented
-    stripped = u''.join([c for c in cleaned if not unicodedata.combining(c)])
     # replace all non-ascii quotes/apostrophes with ascii ones eg "Collector's"
-    stripped = replace_all(stripped, lazylibrarian.DICTS.get('apostrophe_dict', {}))
-    # Other characters not converted by unicodedata.combining
-    # c6 Ae, d0 Eth, d7 multiply, d8 Ostroke, de Thorn, df sharpS
-    dic = {u'\xc6': 'A', u'\xd0': 'D', u'\xd7': '*', u'\xd8': 'O', u'\xde': 'P', u'\xdf': 's'}
-    stripped = replace_all(stripped, dic)
-    # e6 ae, f0 eth, f7 divide, f8 ostroke, fe thorn
-    dic = {u'\xe6': 'a', u'\xf0': 'o', u'\xf7': '/', u'\xf8': 'o', u'\xfe': 'p'}
-    stripped = replace_all(stripped, dic)
-    if not only_ascii:
-        # now get rid of any other non-ascii
-        if only_ascii:  # just strip out
-            stripped = stripped.encode('ASCII', 'ignore')
-        else:  # replace with specified char (use '_' for goodreads author names)
-            stripped = stripped.encode('ASCII', 'replace')  # replaces with '?'
+    stripped = replace_all(cleaned, lazylibrarian.DICTS.get('apostrophe_dict', {}))
+    if only_ascii:
+        stripped = ''.join([c for c in stripped if not unicodedata.combining(c)])
+        # Other characters not converted by unicodedata.combining
+        # c6 Ae, d0 Eth, d7 multiply, d8 Ostroke, de Thorn, df sharpS
+        # e6 ae, f0 eth, f7 divide, f8 ostroke, fe thorn
+        dic = {'\xc6': 'A', '\xd0': 'D', '\xd7': '*', '\xd8': 'O', '\xde': 'P', '\xdf': 's',
+                '\xe6': 'a', '\xf0': 'o', '\xf7': '/', '\xf8': 'o', '\xfe': 'p'}
+        stripped = replace_all(stripped, dic)
+        stripped = stripped.encode('ASCII', 'ignore')
+    else:  # replace with specified char (use '_' for goodreads author names)
+        stripped = stripped.encode('ASCII', 'replace')  # replaces with '?'
+        if not isinstance(only_ascii, bool):
             stripped = stripped.replace(b'?', make_bytestr(str(only_ascii)[0]))
-
     stripped = stripped.strip()
     if not stripped:
         stripped = str_or_unicode
@@ -906,14 +1060,14 @@ def strip_quotes(text):
     return text
 
 
-def replacevars(base, mydict):
+def replacevars(base, mydict, is_folder=False):
     if not base:
         return ''
-    loggermatching = logging.getLogger('special.matching')
-    loggermatching.debug(base)
+    matchinglogger = logging.getLogger('special.matching')
+    matchinglogger.debug(base)
     vardict = ['$Author', '$SortAuthor', '$Title', '$SortTitle', '$Series', '$FmtName', '$FmtNum', '$Language',
                '$SerName', '$SerNum', '$PadNum', '$PubYear', '$SerYear', '$Part', '$Total', '$Abridged',
-               '$IssueDate', '$IssueNum', '$IssueVol', '$IssueMonth', '$IssueYear', '$IssueDay']
+               '$IssueDate', '$IssueNum', '$IssueVol', '$IssueMonth', '$IssueMNum', '$IssueYear', '$IssueDay']
 
     # first strip any braced expressions where any var in the expression is empty
     # eg {$SerName - $SerNum} becomes '' if either var is empty
@@ -937,9 +1091,7 @@ def replacevars(base, mydict):
 
     for item in vardict:
         if item[1:] in mydict:
-            base = base.replace(item, mydict[item[1:]])
+            base = base.replace(item, sanitize(mydict[item[1:]], is_folder_or_file=is_folder))
     base = base.replace('$$', ' ')
-    loggermatching.debug(base)
+    matchinglogger.debug(base)
     return base
-
-

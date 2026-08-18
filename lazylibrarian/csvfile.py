@@ -19,16 +19,24 @@ import traceback
 from lazylibrarian import database
 from lazylibrarian.config2 import CONFIG
 from lazylibrarian.configtypes import ConfigDict
-from lazylibrarian.filesystem import DIRS, path_isdir, syspath, remove_file, safe_move, csv_file
-from lazylibrarian.formatter import plural, is_valid_isbn, now, unaccented, format_author_name, \
-    make_unicode, split_title, get_list
-from lazylibrarian.importer import search_for, import_book, add_author_name_to_db, update_totals
+from lazylibrarian.filesystem import DIRS, csv_file, path_isdir, remove_file, safe_move, syspath
+from lazylibrarian.formatter import (
+    format_author_name,
+    get_list,
+    is_valid_isbn,
+    make_unicode,
+    now,
+    plural,
+    split_title,
+    unaccented,
+)
+from lazylibrarian.importer import add_author_name_to_db, import_book, search_for, update_totals
 from lazylibrarian.librarysync import find_book_in_db
 
 try:
-    from csv import writer, reader, QUOTE_MINIMAL
+    from csv import QUOTE_MINIMAL, reader, writer
 except ImportError:
-    from lib.csv import writer, reader, QUOTE_MINIMAL
+    from lib.csv import QUOTE_MINIMAL, reader, writer
 
 
 # noinspection PyArgumentList
@@ -105,13 +113,13 @@ def restore_table(table, savedir=None, status=None):
         csvfile = os.path.join(savedir, f"{label}.csv")
 
         logger.debug(f'Reading file {csvfile}')
-        csvreader = reader(open(csvfile, 'r', encoding='utf-8', newline=''))
+        csvreader = reader(open(csvfile, encoding='utf-8', newline=''))
         count = 0
         for row in csvreader:
             if csvreader.line_num == 1:
                 headers = row
             else:
-                item = dict(list(zip(headers, row)))
+                item = dict(list(zip(headers, row, strict=True)))
 
                 if table == 'magazines':
                     control_value_dict = {"Title": make_unicode(item['Title'])}
@@ -167,11 +175,11 @@ def export_csv(search_dir=None, status="Wanted", library=''):
             msg = "Alternate Directory not configured"
             logger.warning(msg)
             return msg
-        elif not path_isdir(search_dir):
+        if not path_isdir(search_dir):
             msg = f"Alternate Directory [{search_dir}] not found"
             logger.warning(msg)
             return msg
-        elif not os.access(syspath(search_dir), os.W_OK | os.X_OK):
+        if not os.access(syspath(search_dir), os.W_OK | os.X_OK):
             msg = f"Alternate Directory [{search_dir}] not writable"
             logger.warning(msg)
             return msg
@@ -220,11 +228,11 @@ def export_csv(search_dir=None, status="Wanted", library=''):
 def finditem(item, preferred_authorname, library='eBook', reason='csv.finditem'):
     """
     Try to find book matching the csv item in the database
-    Return database entry, or False if not found
+    Return database entry, or empty dict if not found
     """
     db = database.DBConnection()
+    bookmatch = {}
     try:
-        bookmatch = ""
         isbn10 = ""
         isbn13 = ""
         bookid = ""
@@ -244,22 +252,22 @@ def finditem(item, preferred_authorname, library='eBook', reason='csv.finditem')
         if bookid:
             fullcmd = f"{cmd}and BookID=?"
             bookmatch = db.match(fullcmd, (bookid,))
-        if not bookmatch:
-            if is_valid_isbn(isbn10):
-                fullcmd = f"{cmd}and BookIsbn=?"
-                bookmatch = db.match(fullcmd, (isbn10,))
-        if not bookmatch:
-            if is_valid_isbn(isbn13):
-                fullcmd = f"{cmd}and BookIsbn=?"
-                bookmatch = db.match(fullcmd, (isbn13,))
+        if not bookmatch and is_valid_isbn(isbn10):
+            fullcmd = f"{cmd}and BookIsbn=?"
+            bookmatch = db.match(fullcmd, (isbn10,))
+        if not bookmatch and is_valid_isbn(isbn13):
+            fullcmd = f"{cmd}and BookIsbn=?"
+            bookmatch = db.match(fullcmd, (isbn13,))
         if not bookmatch:
             bookid, _ = find_book_in_db(preferred_authorname, bookname, ignored=False, library=library,
                                         reason=reason)
             if bookid:
                 fullcmd = f"{cmd}and BookID=?"
                 bookmatch = db.match(fullcmd, (bookid,))
-    finally:
-        db.close()
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(str(e))
+    db.close()
     return bookmatch
 
 
@@ -276,7 +284,7 @@ def import_csv(search_dir: str, status: str = 'Wanted', library: str = '', confi
         msg = "Alternate Directory not configured"
         logger.warning(msg)
         return msg
-    elif not path_isdir(search_dir):
+    if not path_isdir(search_dir):
         msg = f"Alternate Directory [{search_dir}] not found"
         logger.warning(msg)
         return msg
@@ -300,7 +308,7 @@ def import_csv(search_dir: str, status: str = 'Wanted', library: str = '', confi
             return msg
 
         logger.debug(f'Reading file {csvfile}')
-        csvreader = reader(open(csvfile, 'r', encoding='utf-8', newline=''))
+        csvreader = reader(open(csvfile, encoding='utf-8', newline=''))
         for row in csvreader:
             if csvreader.line_num == 1:
                 # If we are on the first line, create the headers list from the first row
@@ -311,7 +319,7 @@ def import_csv(search_dir: str, status: str = 'Wanted', library: str = '', confi
                     return msg
             elif row:
                 total += 1
-                item = dict(list(zip(headers, row)))
+                item = dict(list(zip(headers, row, strict=True)))
                 authorname = format_author_name(item['Author'], postfix=get_list(config.get_csv('NAME_POSTFIX')))
                 title = make_unicode(item['Title'])
 
@@ -333,81 +341,81 @@ def import_csv(search_dir: str, status: str = 'Wanted', library: str = '', confi
                     if not authorid:
                         logger.warning(f"Authorname {authorname} not added to database")
 
-                if authorid:
-                    bookmatch = finditem(item, authorname, library=library, reason=f'import_csv: {csvfile}')
-                else:
-                    bookmatch = {}
-
-                imported = False
-                results = []
-                if bookmatch:
-                    authorname = bookmatch['AuthorName']
-                    bookname = bookmatch['BookName']
-                    bookid = bookmatch['BookID']
-                    bookstatus = bookmatch['Status'] if library == 'eBook' else bookmatch['AudioStatus']
-                    if bookstatus in ['Open', 'Wanted', 'Have']:
-                        existing += 1
-                        logger.info(f'Found {library} {bookname} by {authorname}, already marked as "{bookstatus}"')
-                        imported = True
-                    else:  # skipped/ignored
-                        logger.info(f'Found {library} {bookname} by {authorname}, marking as "{status}"')
-                        control_value_dict = {"BookID": bookid}
-                        new_value_dict = {"Status": status} if library == 'eBook' else {"AudioStatus": status}
-                        db.upsert("books", new_value_dict, control_value_dict)
-                        bookcount += 1
-                elif authorid:
-                    searchterm = f"{title} <ll> {authorname}"
-                    results = search_for(unaccented(searchterm, only_ascii=False))
-                    for result in results:
-                        if result['book_fuzz'] >= CONFIG.get_int('MATCH_RATIO') \
-                                and result['authorid'] == authorid:
-                            bookmatch = result
-                            break
-                    if not bookmatch:  # no match on full searchterm, try splitting out subtitle and series
-                        newtitle, _, _ = split_title(authorname, title)
-                        if newtitle != title:
-                            title = newtitle
-                            searchterm = f"{title} <ll> {authorname}"
-                            results = search_for(unaccented(searchterm, only_ascii=False))
-                            for result in results:
-                                if result['book_fuzz'] >= CONFIG.get_int('MATCH_RATIO') \
-                                        and result['authorid'] == authorid:
-                                    bookmatch = result
-                                    break
-                    if bookmatch:
-                        logger.info(
-                            f"Found ({round(bookmatch['book_fuzz'], 2)}%) {bookmatch['authorname']}: "
-                            f"{bookmatch['bookname']} for {authorname}: {title}")
-                        if library == 'eBook':
-                            import_book(bookmatch['bookid'], ebook=status, wait=True,
-                                        reason=f"Added by import_csv {csvfile}")
-                        else:
-                            import_book(bookmatch['bookid'], audio=status, wait=True,
-                                        reason=f"Added by import_csv {csvfile}")
-                        imported = db.match('select * from books where BookID=?', (bookmatch['bookid'],))
-                        if imported:
-                            bookcount += 1
-
-                if bookmatch and imported:
-                    update_totals(authorid)
-                else:
-                    msg = f"Skipping book {title} by {authorname}"
-                    if not results:
-                        msg += ', No results found'
-                        logger.warning(msg)
-                    elif bookmatch and not imported:
-                        msg += f", Failed to import {bookmatch['bookid']}"
-                        logger.warning(msg)
+                    if authorid:
+                        bookmatch = finditem(item, authorname, library=library, reason=f'import_csv: {csvfile}')
                     else:
-                        msg += ', No match found'
-                        logger.warning(msg)
-                        msg = (f"Closest match ({round(results[0]['author_fuzz'], 2)}% "
-                               f"{round(results[0]['book_fuzz'], 2)}%) "
-                               f"{results[0]['authorname']}: {results[0]['bookname']}")
-                        if results[0]['authorid'] != authorid:
-                            msg += ' wrong authorid'
-                        logger.warning(msg)
-                    skipcount += 1
+                        bookmatch = {}
+
+                    imported = False
+                    results = []
+                    if bookmatch:
+                        authorname = bookmatch['AuthorName']
+                        bookname = bookmatch['BookName']
+                        bookid = bookmatch['BookID']
+                        bookstatus = bookmatch['Status'] if library == 'eBook' else bookmatch['AudioStatus']
+                        if bookstatus in ['Open', 'Wanted', 'Have']:
+                            existing += 1
+                            logger.info(f'Found {library} {bookname} by {authorname}, already marked as "{bookstatus}"')
+                            imported = True
+                        else:  # skipped/ignored
+                            logger.info(f'Found {library} {bookname} by {authorname}, marking as "{status}"')
+                            control_value_dict = {"BookID": bookid}
+                            new_value_dict = {"Status": status} if library == 'eBook' else {"AudioStatus": status}
+                            db.upsert("books", new_value_dict, control_value_dict)
+                            bookcount += 1
+                    elif authorid:
+                        searchterm = f"{title}<ll>{authorname}"
+                        results = search_for(unaccented(searchterm, only_ascii=False))
+                        for result in results:
+                            if result['book_fuzz'] >= CONFIG.get_int('MATCH_RATIO') \
+                                    and result['authorid'] == authorid:
+                                bookmatch = result
+                                break
+                        if not bookmatch:  # no match on full searchterm, try splitting out subtitle and series
+                            newtitle, _, _ = split_title(authorname, title)
+                            if newtitle != title:
+                                title = newtitle
+                                searchterm = f"{title}<ll>{authorname}"
+                                results = search_for(unaccented(searchterm, only_ascii=False))
+                                for result in results:
+                                    if result['book_fuzz'] >= CONFIG.get_int('MATCH_RATIO') \
+                                            and result['authorid'] == authorid:
+                                        bookmatch = result
+                                        break
+                        if bookmatch:
+                            logger.info(
+                                f"Found ({round(bookmatch['book_fuzz'], 2)}%) {bookmatch['authorname']}: "
+                                f"{bookmatch['bookname']} for {authorname}: {title}")
+                            if library == 'eBook':
+                                import_book(bookmatch['bookid'], ebook=status, wait=True,
+                                            reason=f"Added by import_csv {csvfile}")
+                            else:
+                                import_book(bookmatch['bookid'], audio=status, wait=True,
+                                            reason=f"Added by import_csv {csvfile}")
+                            imported = db.match('select * from books where BookID=?', (bookmatch['bookid'],))
+                            if imported:
+                                bookcount += 1
+
+                    if bookmatch and imported:
+                        update_totals(authorid)
+                    else:
+                        msg = f"Skipping book {title} by {authorname}"
+                        if not results:
+                            msg += ', No results found'
+                            logger.warning(msg)
+                        elif bookmatch and not imported:
+                            msg += f", Failed to import {bookmatch['bookid']}"
+                            logger.warning(msg)
+                        else:
+                            msg += ', No match found'
+                            logger.warning(msg)
+                            msg = (f"Closest match ({round(results[0]['author_fuzz'], 2)}% "
+                                   f"{round(results[0]['book_fuzz'], 2)}%) "
+                                   f"{results[0]['authorname']}: {results[0]['bookname']}")
+                            if results[0]['authorid'] != authorid:
+                                msg += ' wrong authorid'
+                            logger.warning(msg)
+                        skipcount += 1
 
         msg = f"Found {total} {library}{plural(total)} in csv file, {existing} already existing or Wanted"
         logger.info(msg)
@@ -426,6 +434,7 @@ def import_csv(search_dir: str, status: str = 'Wanted', library: str = '', confi
                 if path_isdir(f"{csvfile}.fail"):
                     try:
                         shutil.rmtree(f"{csvfile}.fail")
+                        logger.debug(f"Removed folder {csvfile}.fail")
                     except Exception as why:
                         logger.warning(f"Unable to remove {csvfile}.fail, {type(why).__name__} {why}")
                 try:

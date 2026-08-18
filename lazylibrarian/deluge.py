@@ -20,19 +20,18 @@
 # URL: https://gitlab.com/philborman
 #
 
-from __future__ import unicode_literals
 
 import logging
 import re
 import time
 import traceback
-from base64 import b64encode, b64decode
+from base64 import b64decode, b64encode
 
 import requests
 
 import lazylibrarian
 from lazylibrarian.config2 import CONFIG
-from lazylibrarian.filesystem import path_isdir, syspath, make_dirs
+from lazylibrarian.filesystem import make_dirs, path_isdir, syspath
 from lazylibrarian.formatter import make_unicode
 
 delugeweb_authtime = 0
@@ -44,7 +43,8 @@ headers = {'Accept': 'application/json', 'Content-Type': 'application/json'}
 
 def add_torrent(link, data=None, provider_options=None):
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
+    provider_options = provider_options or {}
+    dlcommslogger = logging.getLogger('special.dlcomms')
     try:
         retid = False
         if link and link.startswith('magnet:'):
@@ -65,13 +65,13 @@ def add_torrent(link, data=None, provider_options=None):
                 if b'announce' in data[:40]:
                     torrentfile = data
                 else:
-                    loggerdlcomms.debug('Deluge: data doesn\'t look like a torrent, maybe b64encoded')
+                    dlcommslogger.debug('Deluge: data doesn\'t look like a torrent, maybe b64encoded')
                     data = b64decode(data)
                     if b'announce' in data[:40]:
-                        loggerdlcomms.debug('Deluge: data looks like a b64encoded torrent')
+                        dlcommslogger.debug('Deluge: data looks like a b64encoded torrent')
                         torrentfile = data
                     else:
-                        loggerdlcomms.debug('Deluge: data doesn\'t look like a b64encoded torrent either')
+                        dlcommslogger.debug('Deluge: data doesn\'t look like a b64encoded torrent either')
 
             if not torrentfile:
                 logger.debug(f'Deluge: Getting .torrent from file {link}')
@@ -79,13 +79,13 @@ def add_torrent(link, data=None, provider_options=None):
                     torrentfile = f.read()
             # Extract torrent name from .torrent
             try:
-                loggerdlcomms.debug('Deluge: Getting torrent name length')
+                dlcommslogger.debug('Deluge: Getting torrent name length')
                 name_length = int(re.findall(b'name([0-9]*):.*?:', torrentfile)[0])
                 if name_length:
-                    loggerdlcomms.debug('Deluge: Getting torrent name')
+                    dlcommslogger.debug('Deluge: Getting torrent name')
                 name = make_unicode(re.findall(b'name[0-9]*:(.*?):', torrentfile)[0][:name_length])
             except (re.error, IndexError, TypeError):
-                loggerdlcomms.debug('Deluge: Could not get torrent name, getting file name')
+                dlcommslogger.debug('Deluge: Could not get torrent name, getting file name')
                 # get last part of link/path (name only)
                 name = link.split('\\')[-1].split('/')[-1]
                 # remove '.torrent' suffix
@@ -120,15 +120,15 @@ def add_torrent(link, data=None, provider_options=None):
     except Exception as err:
         res = str(err)
         logger.error(res)
-        if loggerdlcomms.isEnabledFor(logging.DEBUG):
+        if dlcommslogger.isEnabledFor(logging.DEBUG):
             formatted_lines = traceback.format_exc().splitlines()
-            loggerdlcomms.debug('; '.join(formatted_lines))
+            dlcommslogger.debug('; '.join(formatted_lines))
         return False, res
 
 
 def get_torrent_name(torrentid):
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Get torrent name')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Get torrent name')
     res = get_torrent_status(torrentid, ["name", "state"])  # type: dict
     if res and res['result']:
         return res['result']['name']
@@ -136,8 +136,8 @@ def get_torrent_name(torrentid):
 
 
 def get_torrent_folder(torrentid):
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Get torrent folder')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Get torrent folder')
     res = get_torrent_status(torrentid, ["save_path", "state"])  # type: dict
     if res and res['result']:
         return res['result']['save_path']
@@ -145,8 +145,8 @@ def get_torrent_folder(torrentid):
 
 
 def get_torrent_files(torrentid):
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Get torrent files')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Get torrent files')
     res = get_torrent_status(torrentid, ["files", "state"])  # type: dict
     if res and res['result']:
         return res['result']['files']
@@ -154,8 +154,8 @@ def get_torrent_files(torrentid):
 
 
 def get_torrent_progress(torrentid):
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Get torrent progress')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Get torrent progress')
     res = get_torrent_status(torrentid, ["progress", "message", "state", "is_auto_managed",
                                          "stop_at_ratio", "ratio", "stop_ratio"])  # type: dict
     if res and res['result']:
@@ -171,7 +171,7 @@ def get_torrent_progress(torrentid):
 def get_torrent_status(torrentid, data):
     global delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
+    dlcommslogger = logging.getLogger('special.dlcomms')
     try:
         tries = 2
         while tries:
@@ -183,8 +183,8 @@ def get_torrent_status(torrentid, data):
                          "id": 22}
             response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                      verify=deluge_verify_cert, headers=headers, timeout=timeout)
-            loggerdlcomms.debug(f'Status code: {response.status_code}')
-            loggerdlcomms.debug(str(response.text))
+            dlcommslogger.debug(f'Status code: {response.status_code}')
+            dlcommslogger.debug(str(response.text))
 
             res = response.json()
             if res and res['error'] and res['error']['code'] == 1:  # not authenticated
@@ -200,18 +200,18 @@ def get_torrent_status(torrentid, data):
 def remove_torrent(torrentid, remove_data=False):
     global delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
+    dlcommslogger = logging.getLogger('special.dlcomms')
     cookies = _get_auth()
     timeout = CONFIG.get_int('HTTP_TIMEOUT')
 
     try:
-        loggerdlcomms.debug(f'Deluge: Removing torrent {str(torrentid)}')
+        dlcommslogger.debug(f'Deluge: Removing torrent {str(torrentid)}')
         post_json = {"method": "core.remove_torrent", "params": [torrentid, remove_data], "id": 25}
 
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         res = response.json()
         if res and res['error'] and res['error']['code'] == 1:  # not authenticated
@@ -226,14 +226,14 @@ def remove_torrent(torrentid, remove_data=False):
 def _get_auth():
     global delugeweb_auth, delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
+    dlcommslogger = logging.getLogger('special.dlcomms')
     if delugeweb_auth:
         timeout = CONFIG.get_int('DELUGE_TIMEOUT')
         if delugeweb_authtime > time.time() - timeout:
             delugeweb_authtime = time.time()
             return delugeweb_auth
 
-    loggerdlcomms.debug('Deluge: Authenticating...')
+    dlcommslogger.debug('Deluge: Authenticating...')
     delugeweb_authtime = 0
     timeout = CONFIG.get_int('HTTP_TIMEOUT')
 
@@ -256,11 +256,11 @@ def _get_auth():
 
     if delugeweb_cert is None or delugeweb_cert.strip() == '':
         deluge_verify_cert = False
-        loggerdlcomms.debug(f'Deluge: FYI no SSL certificate configured, host is {delugeweb_host}')
+        dlcommslogger.debug(f'Deluge: FYI no SSL certificate configured, host is {delugeweb_host}')
     else:
         deluge_verify_cert = delugeweb_cert
         delugeweb_host = delugeweb_host.replace('http:', 'https:')
-        loggerdlcomms.debug(f'Deluge: Using certificate {deluge_verify_cert}, host is now {delugeweb_host}')
+        dlcommslogger.debug(f'Deluge: Using certificate {deluge_verify_cert}, host is now {delugeweb_host}')
 
     delugeweb_url = f"{delugeweb_host}/json"
     post_json = {"method": "auth.login", "params": [delugeweb_password], "id": 1}
@@ -268,8 +268,8 @@ def _get_auth():
     try:
         response = requests.post(delugeweb_url, json=post_json, cookies={}, timeout=timeout,
                                  verify=deluge_verify_cert, headers=headers)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
         if response.status_code == 200:
             force_https = False
         else:
@@ -281,11 +281,11 @@ def _get_auth():
 
     if force_https and not delugeweb_url.startswith('https:'):
         try:
-            loggerdlcomms.debug('Deluge: Connection failed, let\'s try HTTPS just in case')
+            dlcommslogger.debug('Deluge: Connection failed, let\'s try HTTPS just in case')
             response = requests.post(delugeweb_url.replace('http:', 'https:'), json=post_json, timeout=timeout,
                                      cookies={}, verify=deluge_verify_cert, headers=headers)
-            loggerdlcomms.debug(f'Status code: {response.status_code}')
-            loggerdlcomms.debug(response.text)
+            dlcommslogger.debug(f'Status code: {response.status_code}')
+            dlcommslogger.debug(response.text)
             # If the response didn't fail, change delugeweb_url for the rest of this session
             if response.status_code == 200:
                 logger.error('Deluge: Switching to HTTPS, certificate won\'t be verified NO CERTIFICATE WAS CONFIGURED')
@@ -308,18 +308,18 @@ def _get_auth():
         logger.error(f"Response: {response.text}")
         return None
 
-    loggerdlcomms.debug(f'Deluge: Authentication result: {auth}, Error: {auth_error}')
+    dlcommslogger.debug(f'Deluge: Authentication result: {auth}, Error: {auth_error}')
     cookies = response.cookies
     if not cookies:
         return None
-    loggerdlcomms.debug(f'Deluge: Authentication cookies: {str(cookies.get_dict())}')
+    dlcommslogger.debug(f'Deluge: Authentication cookies: {str(cookies.get_dict())}')
     post_json = {"method": "web.connected", "params": [], "id": 10}
 
     try:
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
     except Exception as err:
         logger.debug(f'Deluge {type(err).__name__}: web.connected returned {str(err)}')
@@ -327,7 +327,7 @@ def _get_auth():
 
     connected = response.json()['result']
     connected_error = response.json()['error']
-    loggerdlcomms.debug(f'Deluge: Connection result: {connected}, Error: {connected_error}')
+    dlcommslogger.debug(f'Deluge: Connection result: {connected}, Error: {connected_error}')
 
     if not connected:
         post_json = {"method": "web.get_hosts", "params": [], "id": 11}
@@ -335,8 +335,8 @@ def _get_auth():
         try:
             response = requests.post(delugeweb_url, json=post_json, verify=deluge_verify_cert,
                                      cookies=cookies, headers=headers)
-            loggerdlcomms.debug(f'Status code: {response.status_code}')
-            loggerdlcomms.debug(response.text)
+            dlcommslogger.debug(f'Status code: {response.status_code}')
+            dlcommslogger.debug(response.text)
 
         except Exception as err:
             logger.debug(f'Deluge {type(err).__name__}: web.get_hosts returned {str(err)}')
@@ -354,8 +354,8 @@ def _get_auth():
         try:
             response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                      verify=deluge_verify_cert, headers=headers)
-            loggerdlcomms.debug(f'Status code: {response.status_code}')
-            loggerdlcomms.debug(response.text)
+            dlcommslogger.debug(f'Status code: {response.status_code}')
+            dlcommslogger.debug(response.text)
 
         except Exception as err:
             logger.debug(f'Deluge {type(err).__name__}: web.connect returned {str(err)}')
@@ -366,8 +366,8 @@ def _get_auth():
         try:
             response = requests.post(delugeweb_url, json=post_json, verify=deluge_verify_cert,
                                      cookies=cookies, headers=headers)
-            loggerdlcomms.debug(f'Status code: {response.status_code}')
-            loggerdlcomms.debug(response.text)
+            dlcommslogger.debug(f'Status code: {response.status_code}')
+            dlcommslogger.debug(response.text)
 
         except Exception as err:
             logger.debug(f'Deluge {type(err).__name__}: web.connected returned {str(err)}')
@@ -387,8 +387,8 @@ def _get_auth():
 def _add_torrent_magnet(result):
     global delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Adding magnet')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Adding magnet')
     cookies = _get_auth()
     timeout = CONFIG.get_int('HTTP_TIMEOUT')
 
@@ -396,8 +396,8 @@ def _add_torrent_magnet(result):
         post_json = {"method": "core.add_torrent_magnet", "params": [result['url'], {}], "id": 2}
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         res = response.json()
         if res and res['error'] and res['error']['code'] == 1:  # not authenticated
@@ -405,7 +405,7 @@ def _add_torrent_magnet(result):
             delugeweb_authtime = 0  # force retry auth
         result['hash'] = response.json()['result']
         msg = f"Deluge: Response was {result['hash']}"
-        loggerdlcomms.debug(msg)
+        dlcommslogger.debug(msg)
         if 'was None' in msg:
             logger.error('Deluge: Adding magnet failed: Is the WebUI running?')
         return response.json()['result']
@@ -417,8 +417,8 @@ def _add_torrent_magnet(result):
 def _add_torrent_url(result):
     global delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Adding URL')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Adding URL')
     cookies = _get_auth()
     timeout = CONFIG.get_int('HTTP_TIMEOUT')
 
@@ -427,8 +427,8 @@ def _add_torrent_url(result):
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
 
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         res = response.json()
         if res and res['error'] and res['error']['code'] == 1:  # not authenticated
@@ -437,7 +437,7 @@ def _add_torrent_url(result):
 
         result['hash'] = response.json()['result']
         msg = f"Deluge: Response was {result['hash']}"
-        loggerdlcomms.debug(msg)
+        dlcommslogger.debug(msg)
         if not result['hash']:
             logger.error('Deluge: Adding torrent URL failed')
         return response.json()['result']
@@ -450,8 +450,8 @@ def _add_torrent_file(result):
     global delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
 
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Adding file')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Adding file')
     cookies = _get_auth()
     timeout = CONFIG.get_int('HTTP_TIMEOUT')
 
@@ -467,8 +467,8 @@ def _add_torrent_file(result):
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
 
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         res = response.json()
         if res and res['error'] and res['error']['code'] == 1:  # not authenticated
@@ -477,15 +477,15 @@ def _add_torrent_file(result):
 
         result['hash'] = response.json()['result']
         msg = f"Deluge: Response was {result['hash']}"
-        loggerdlcomms.debug(msg)
+        dlcommslogger.debug(msg)
         if 'was None' in msg:
             logger.error('Deluge: Adding torrent file failed')
         return response.json()['result']
     except Exception as err:
         logger.error(f'Deluge {type(err).__name__}: Adding torrent file failed: {str(err)}')
-        if loggerdlcomms.isEnabledFor(logging.DEBUG):
+        if dlcommslogger.isEnabledFor(logging.DEBUG):
             formatted_lines = traceback.format_exc().splitlines()
-            loggerdlcomms.debug('; '.join(formatted_lines))
+            dlcommslogger.debug('; '.join(formatted_lines))
         return False
 
 
@@ -493,13 +493,13 @@ def set_torrent_label(retid, label):
     global delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
     cookies = _get_auth()
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
+    dlcommslogger = logging.getLogger('special.dlcomms')
 
     if not label:
-        loggerdlcomms.debug('Deluge: No Label set')
+        dlcommslogger.debug('Deluge: No Label set')
         return True
 
-    loggerdlcomms.debug('Deluge: Setting label')
+    dlcommslogger.debug('Deluge: Setting label')
     if ' ' in label:
         logger.error('Deluge: Invalid label. Label can\'t contain spaces - replacing with underscores')
         label = label.replace(' ', '_')
@@ -511,8 +511,8 @@ def set_torrent_label(retid, label):
 
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         res = response.json()
         if res and res['error'] and res['error']['code'] == 1:  # not authenticated
@@ -521,29 +521,29 @@ def set_torrent_label(retid, label):
 
         labels = response.json()['result']
 
-        loggerdlcomms.debug(f"Valid labels: {str(labels)}")
+        dlcommslogger.debug(f"Valid labels: {str(labels)}")
 
         if response.json()['error'] is None:
             label = label.lower()  # deluge lowercases labels
             if label not in labels:
                 try:
-                    loggerdlcomms.debug(f'Deluge: {label} label doesn\'t exist in Deluge, let\'s add it')
+                    dlcommslogger.debug(f'Deluge: {label} label doesn\'t exist in Deluge, let\'s add it')
                     post_json = {"method": 'label.add', "params": [label], "id": 4}
                     response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                              verify=deluge_verify_cert, headers=headers, timeout=timeout)
-                    loggerdlcomms.debug(f'Status code: {response.status_code}')
-                    loggerdlcomms.debug(response.text)
+                    dlcommslogger.debug(f'Status code: {response.status_code}')
+                    dlcommslogger.debug(response.text)
                     logger.debug(f'Deluge: {label} label added to Deluge')
 
                 except Exception as err:
                     logger.error(f'Deluge {type(err).__name__}: Setting label failed: {str(err)}')
-                    if loggerdlcomms.isEnabledFor(logging.DEBUG):
+                    if dlcommslogger.isEnabledFor(logging.DEBUG):
                         formatted_lines = traceback.format_exc().splitlines()
-                        loggerdlcomms.debug('; '.join(formatted_lines))
+                        dlcommslogger.debug('; '.join(formatted_lines))
                     if not retid:
                         return False
             else:
-                loggerdlcomms.debug(f"Label [{label}] is valid")
+                dlcommslogger.debug(f"Label [{label}] is valid")
 
             if not retid:
                 return True
@@ -553,13 +553,12 @@ def set_torrent_label(retid, label):
 
             response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                      verify=deluge_verify_cert, headers=headers, timeout=timeout)
-            loggerdlcomms.debug(f'Status code: {response.status_code}')
-            loggerdlcomms.debug(response.text)
+            dlcommslogger.debug(f'Status code: {response.status_code}')
+            dlcommslogger.debug(response.text)
             logger.debug(f'Deluge: {label} label added to torrent')
             return not response.json()['error']
-        else:
-            logger.debug('Deluge: Label plugin not detected')
-            return False
+        logger.debug('Deluge: Label plugin not detected')
+        return False
     except Exception as err:
         logger.error(f'Deluge {type(err).__name__}: Adding label failed: {str(err)}')
         return False
@@ -568,8 +567,8 @@ def set_torrent_label(retid, label):
 def set_seed_ratio(result):
     global delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Setting seed ratio')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Setting seed ratio')
     cookies = _get_auth()
     timeout = CONFIG.get_int('HTTP_TIMEOUT')
 
@@ -585,8 +584,8 @@ def set_seed_ratio(result):
 
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         res = response.json()
         if res and res['error'] and res['error']['code'] == 1:  # not authenticated
@@ -597,8 +596,8 @@ def set_seed_ratio(result):
 
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         return not response.json()['error']
     except Exception as err:
@@ -609,8 +608,8 @@ def set_seed_ratio(result):
 def set_torrent_path(result):
     global delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Setting download path')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Setting download path')
     cookies = _get_auth()
 
     dl_dir = CONFIG['DELUGE_DIR']
@@ -623,8 +622,8 @@ def set_torrent_path(result):
 
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         res = response.json()
         if res and res['error'] and res['error']['code'] == 1:  # not authenticated
@@ -632,15 +631,15 @@ def set_torrent_path(result):
             delugeweb_authtime = 0  # force retry auth
 
         if not path_isdir(dl_dir):
-            loggerdlcomms.debug(f'Deluge: {dl_dir} directory doesn\'t exist, let\'s create it')
+            dlcommslogger.debug(f'Deluge: {dl_dir} directory doesn\'t exist, let\'s create it')
             _ = make_dirs(dl_dir)
 
         post_json = {"method": "core.set_torrent_move_completed_path", "params": [result['hash'], dl_dir], "id": 8}
 
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         return not response.json()['error']
     except Exception as err:
@@ -651,8 +650,8 @@ def set_torrent_path(result):
 def torrent_pause(retid):
     global delugeweb_url, delugeweb_authtime, headers, deluge_verify_cert
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Pausing torrent')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Pausing torrent')
     cookies = _get_auth()
     timeout = CONFIG.get_int('HTTP_TIMEOUT')
 
@@ -661,8 +660,8 @@ def torrent_pause(retid):
 
         response = requests.post(delugeweb_url, json=post_json, cookies=cookies,
                                  verify=deluge_verify_cert, headers=headers, timeout=timeout)
-        loggerdlcomms.debug(f'Status code: {response.status_code}')
-        loggerdlcomms.debug(response.text)
+        dlcommslogger.debug(f'Status code: {response.status_code}')
+        dlcommslogger.debug(response.text)
 
         res = response.json()
         if res and res['error'] and res['error']['code'] == 1:  # not authenticated
@@ -677,8 +676,8 @@ def torrent_pause(retid):
 
 def check_link():
     logger = logging.getLogger(__name__)
-    loggerdlcomms = logging.getLogger('special.dlcomms')
-    loggerdlcomms.debug('Deluge: Checking connection')
+    dlcommslogger = logging.getLogger('special.dlcomms')
+    dlcommslogger.debug('Deluge: Checking connection')
     msg = "Deluge: Connection successful"
     if _get_auth():
         label = lazylibrarian.downloadmethods.use_label('DELUGEWEBUI', '')
